@@ -1,0 +1,22 @@
+# Build artifacts
+*.exe
+*.test
+*.out
+/bin/
+/dist/
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+/vendor/
+
+# peersh dev artifacts
+dev-cert.pem
+dev-key.pem

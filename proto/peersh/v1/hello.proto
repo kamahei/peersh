@@ -1,0 +1,29 @@
+// Hello messages exchanged on the peersh control stream (QUIC client-initiated
+// bidi stream 0) immediately after the QUIC handshake. Carry the protocol
+// version and capability advertisements that gate every subsequent
+// application stream on the same connection.
+syntax = "proto3";
+
+package peersh.v1;
+
+// ClientHello is sent by the client right after opening the control stream.
+message ClientHello {
+  // protocol_version is bumped only for breaking wire-format changes.
+  // Phase 1 ships protocol_version = 1 and that value is locked.
+  uint32 protocol_version = 1;
+
+  // capabilities advertise optional, additive features. Examples that may
+  // appear in later phases: "session_resume", "ipv6". Empty in Phase 1.
+  repeated string capabilities = 2;
+
+  // client_id is a free-form identifier string (e.g. "peersh-cli/0.1").
+  // Servers may log it but must not trust it for authorization.
+  string client_id = 3;
+}
+
+// ServerHello is the server's response on the control stream.
+message ServerHello {
+  uint32 protocol_version = 1;
+  repeated string capabilities = 2;
+  string server_id = 3;
+}

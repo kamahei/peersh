@@ -1,0 +1,35 @@
+// Exec messages flow on per-command bidi streams opened after the control
+// stream's Hello handshake completes. Each fresh stream begins with one
+// ExecRequest from the client; the server then streams ExecResponse messages
+// until done = true.
+syntax = "proto3";
+
+package peersh.v1;
+
+// ExecRequest is the first message on a fresh per-command stream.
+message ExecRequest {
+  // command is the PowerShell expression to execute. Treated as a single
+  // pipeline; the host may append a sentinel marker to detect completion.
+  string command = 1;
+
+  // working_dir, if non-empty, is set as the current working directory for
+  // this command only. Empty means "use the session's current directory".
+  // Phase 1 does not implement directory switching; this field is reserved.
+  string working_dir = 2;
+}
+
+// ExecResponse carries either a chunk of output or the end-of-command signal.
+// One ExecRequest produces a stream of ExecResponse messages, with the final
+// message having done = true.
+message ExecResponse {
+  // chunk holds streamed output bytes. Exactly one of stdout / stderr is set
+  // on any non-final message; both may be unset on the final done = true
+  // message.
+  oneof chunk {
+    bytes stdout = 1;
+    bytes stderr = 2;
+  }
+
+  // done signals end-of-command. The stream is closed after this message.
+  bool done = 3;
+}
