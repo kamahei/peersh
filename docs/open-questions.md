@@ -25,14 +25,13 @@ All Phase 3 open questions were resolved during Phase 3 planning.
 - **IPv6-first reliability → yes, IPv6 SRFLX → IPv4 SRFLX → IPv6 HOST → IPv4 HOST.** Implemented in `punching.SortCandidates`. Revisit if real-world testing shows it consistently slows connection setup.
 - **Birthday-paradox port scanning → deferred.** Phase 3 surfaces the actionable error for symmetric-NAT-on-both-sides; revisit only if there is real demand.
 
-### Phase 4 (Flutter App + gomobile)
+### Phase 4 (Flutter App + gomobile) — resolved
 
-- **Multi-server / multi-device UX.** How do we present multiple signaling servers and the devices under each?
-  - *Default assumption.* A two-level list: servers at the top level, devices nested under each server. Tapping a device opens its session screen.
-- **Terminal UI fidelity.** Full ANSI terminal emulation, or simple log view?
-  - *Default assumption.* Simple monospaced log view for the first iteration, with `xterm.js`-equivalent ANSI parsing only if early users find the simple view insufficient.
-- **Streaming output efficiency from Go to Dart.** Method Channel per chunk is too chatty.
-  - *Default assumption.* Use EventChannel with chunked binary frames; group small writes within a few-millisecond window into a single channel send.
+All Phase 4 open questions were resolved during Phase 4b planning:
+
+- **Multi-server / multi-device UX → two-level list.** ServersScreen → TerminalScreen on tap; Phase 4b ships single-target-per-server (the user pastes the host's device_id into the server entry). Richer multi-device-per-server discovery waits for Firestore (Phase 5).
+- **Terminal UI fidelity → simple monospaced log view.** Implemented as `LogView`; xterm-style ANSI rendering is reserved for Phase 7 polish if real-world feedback asks for it.
+- **Streaming Go → Dart → EventChannel + base64-encoded chunk events.** One `EventChannel` shared across sessions; events tagged with `sessionId`. The platform message codec carries `ByteArray` natively on Android (Uint8List on Dart side) so no further encoding is required.
 
 ### Phase 5 (Firebase Auth + FCM)
 

@@ -25,14 +25,17 @@ The signaling server is **only used for connection setup**. All actual data flow
 - Dart and Go communicate via Method Channel and EventChannel.
 - Owns: pairing UX, server list, device list, terminal UI, secure storage of credentials, FCM token registration (when Firebase mode is enabled), background persistence (Android Foreground Service / iOS Background Modes).
 
-#### Mobile architecture (Phase 4a)
+#### Mobile architecture (Phase 4)
 
 The mobile track is implemented as:
 
-- `mobile-core/` — a Go package with a deliberately tiny gomobile-friendly API surface (string in / string out, no errors, no slices). Phase 4a exposes `Version()` and `Echo(addr, command)`. It depends on `core/transport`, `core/transport/devtls`, `core/wire`, and `core/protocol/peersh/v1` — i.e. the same QUIC stack `peersh-cli` uses, just with a different shape on the outside.
+- `mobile-core/` — a Go package with a gomobile-friendly API surface. Phase 4a shipped `Version()` and `Echo()`. Phase 4b adds the `Session` lifecycle: `OpenDirectSession`, `OpenSignalingSession` (registration + STUN + Punch + sequential dial), `Exec(cmd, Output)` (streaming), `ReadFile(path)` (one-shot). `Output` is a gomobile callback interface (`OnStdout` / `OnStderr` / `OnDone`) implemented platform-side. Internally `mobile-core` reuses `core/transport`, `core/transport/devtls`, `core/wire`, `core/protocol/peersh/v1`, `core/punching`, and `core/signaling`.
 - `scripts/build-mobile-core.{sh,cmd}` — wraps `gomobile bind` to produce `app/android/app/libs/peersh.aar` (Android, Windows or macOS host) and `app/ios/Frameworks/peersh.xcframework` (iOS, macOS host only).
-- `app/` — Flutter project (`flutter create app --org dev.peersh`). Riverpod is in `pubspec.yaml` from day one.
-- Method-channel bridge — `dev.peersh/bridge`. `app/lib/bridge.dart` is the Dart client; `app/android/.../MainActivity.kt` and `app/ios/Runner/AppDelegate.swift` host the platform-side handlers, which forward calls to `peersh.Peersh` (Android) or `PeershPeersh` (iOS) static methods.
+- `app/` — Flutter project (`flutter create app --org dev.peersh`). Riverpod + flutter_secure_storage + http are pinned in `pubspec.yaml`.
+- **MethodChannel `dev.peersh/bridge`** carries control-plane calls (`version`, `echo`, `openDirectSession`, `openSignalingSession`, `exec`, `readFile`, `closeSession`).
+- **EventChannel `dev.peersh/session/events`** carries per-session output events as `{sessionId, type, data, error}`. Events from all sessions multiplex through the same channel; consumers filter by `sessionId`.
+- Native bridges: `app/android/.../MainActivity.kt` (Kotlin, full implementation) and `app/ios/Runner/AppDelegate.swift` (Swift, code-complete pending the macOS xcframework build) keep a session map keyed by an incrementing `sessionId` and run blocking Go calls on a worker thread.
+- Dart UI: `ServersScreen` → `ServerEditorScreen` (with discovery prefill via `/.well-known/peersh.json`) → `TerminalScreen` (with the wrap/scroll toggle, IME bottom sheet, and text viewer entry point) → `TextViewerScreen`. `SettingsScreen` carries the persisted line-wrap default + font size. Riverpod providers under `app/lib/state/` persist `ServerEntry` records and `AppSettings` via `flutter_secure_storage`.
 - The AAR / xcframework are not committed; each developer or CI rebuilds them via the build script.
 
 #### Discovery: `/.well-known/peersh.json`
