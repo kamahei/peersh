@@ -1,14 +1,22 @@
 // Command peersh-cli is a developer REPL client for peersh.
 //
-// Phase 1: same-LAN direct connection, dev-only TLS (InsecureSkipVerify), no
-// auth. Connects to a peershd host, completes the Hello handshake on stream
-// 0, then sends each typed line as an ExecRequest on a fresh stream and
-// prints the streamed stdout/stderr until done.
+// Two operating modes coexist:
+//
+//   - Direct (Phase 1). Pass -addr <host:port> and the CLI dials QUIC
+//     straight at that endpoint. No auth, no signaling.
+//
+//   - Signaling-mediated (Phase 2). Pass -signaling, -user, -psk-file,
+//     and -target. The CLI registers with the signaling server, requests
+//     a Connect to the target device, learns the host's candidates, and
+//     dials QUIC at the first reachable one.
 package main
 
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,7 +28,10 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/peersh/peersh/core/devid"
 	v1 "github.com/peersh/peersh/core/protocol/peersh/v1"
+	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
+	"github.com/peersh/peersh/core/signaling"
 	"github.com/peersh/peersh/core/transport"
 	"github.com/peersh/peersh/core/transport/devtls"
 	"github.com/peersh/peersh/core/wire"
@@ -32,7 +43,13 @@ const (
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:7777", "peershd host (host:port)")
+	addr := flag.String("addr", "", "(direct mode) peershd host (host:port)")
+
+	signalingURL := flag.String("signaling", "", "(signaling mode) signaling server URL (ws:// or wss://)")
+	userID := flag.String("user", "", "(signaling mode) user_id under which to register")
+	pskFile := flag.String("psk-file", "", "(signaling mode) path to a file containing a hex-encoded PSK")
+	target := flag.String("target", "", "(signaling mode) target peershd device_id to connect to")
+
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
 
@@ -42,23 +59,21 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	if err := run(*addr); err != nil {
+	if (*addr == "") == (*signalingURL == "") {
+		fmt.Fprintln(os.Stderr, "exactly one of -addr or -signaling must be supplied")
+		os.Exit(2)
+	}
+
+	if err := run(*addr, *signalingURL, *userID, *pskFile, *target); err != nil {
 		slog.Error("peersh-cli exiting on error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr string) error {
+func run(addr, signalingURL, userID, pskFile, target string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	uaddr, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return fmt.Errorf("resolve %q: %w", addr, err)
-	}
-
-	// Caller-constructed UDP socket. Phase 3 will swap this for a punched
-	// socket; the transport package never creates its own PacketConn.
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		return fmt.Errorf("ListenUDP: %w", err)
@@ -68,18 +83,127 @@ func run(addr string) error {
 	tr := transport.New(pc, devtls.DevClientTLSConfig())
 	defer tr.Close()
 
-	conn, err := tr.Dial(ctx, uaddr)
+	var dialAddr *net.UDPAddr
+	if signalingURL != "" {
+		if userID == "" || pskFile == "" || target == "" {
+			return errors.New("-signaling requires -user, -psk-file, and -target")
+		}
+		secret, err := readPSKFile(pskFile)
+		if err != nil {
+			return fmt.Errorf("read psk: %w", err)
+		}
+		dialAddr, err = rendezvous(ctx, signalingURL, userID, secret, target, pc.LocalAddr().(*net.UDPAddr))
+		if err != nil {
+			return fmt.Errorf("rendezvous: %w", err)
+		}
+	} else {
+		dialAddr, err = net.ResolveUDPAddr("udp", addr)
+		if err != nil {
+			return fmt.Errorf("resolve %q: %w", addr, err)
+		}
+	}
+
+	conn, err := tr.Dial(ctx, dialAddr)
 	if err != nil {
-		return fmt.Errorf("Dial %s: %w", uaddr, err)
+		return fmt.Errorf("Dial %s: %w", dialAddr, err)
 	}
 	defer conn.CloseWithError(0, "")
-	slog.Info("connected", "remote", uaddr)
+	slog.Info("connected", "remote", dialAddr)
 
 	if err := doHandshake(ctx, conn); err != nil {
 		return fmt.Errorf("handshake: %w", err)
 	}
-
 	return repl(ctx, conn)
+}
+
+// rendezvous handles the Phase 2 signaling-mediated connection setup. It
+// returns the UDPAddr that should be QUIC-dialed.
+func rendezvous(ctx context.Context, url, userID string, secret []byte, targetDeviceID string, localAddr *net.UDPAddr) (*net.UDPAddr, error) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate device key: %w", err)
+	}
+	deviceID := devid.Derive(pub)
+
+	sc, err := signaling.Dial(ctx, signaling.DialOptions{
+		URL:         url,
+		UserID:      userID,
+		Secret:      secret,
+		DeviceID:    deviceID,
+		PublicKey:   pub,
+		Kind:        signalv1.DeviceKind_DEVICE_KIND_CLI,
+		DisplayName: "peersh-cli",
+		ClientID:    clientID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("signaling.Dial: %w", err)
+	}
+	defer sc.Close()
+	slog.Info("registered with signaling", "device", deviceID, "server_id", sc.ServerID())
+
+	cands := localCandidates(localAddr)
+	slog.Info("requesting connect", "target", targetDeviceID, "candidates", len(cands))
+	if err := sc.SendConnect(ctx, targetDeviceID, cands); err != nil {
+		return nil, fmt.Errorf("SendConnect: %w", err)
+	}
+
+	reply, err := sc.Recv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for target reply: %w", err)
+	}
+	if reply.GetFromDeviceId() != targetDeviceID {
+		return nil, fmt.Errorf("got Connect from %q, expected from %q",
+			reply.GetFromDeviceId(), targetDeviceID)
+	}
+	if len(reply.GetCandidates()) == 0 {
+		return nil, errors.New("target returned no candidates")
+	}
+	chosen := reply.GetCandidates()[0]
+	addr := &net.UDPAddr{IP: net.ParseIP(chosen.GetAddress()), Port: int(chosen.GetPort())}
+	if addr.IP == nil {
+		return nil, fmt.Errorf("invalid target address %q", chosen.GetAddress())
+	}
+	slog.Info("rendezvous complete", "dial", addr)
+	return addr, nil
+}
+
+func readPSKFile(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	out, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return nil, fmt.Errorf("psk file %q: %w", path, err)
+	}
+	return out, nil
+}
+
+// localCandidates enumerates this CLI's locally reachable IPs at the bound
+// port. With a wildcard bind (the default), every non-loopback / non-link-
+// local interface address is emitted.
+func localCandidates(local *net.UDPAddr) []*signalv1.EndpointCandidate {
+	port := uint32(local.Port)
+	if !local.IP.IsUnspecified() {
+		return []*signalv1.EndpointCandidate{
+			{Address: local.IP.String(), Port: port, Type: signalv1.CandidateType_CANDIDATE_TYPE_HOST},
+		}
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []*signalv1.EndpointCandidate
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() || ipnet.IP.IsLinkLocalUnicast() || ipnet.IP.IsLinkLocalMulticast() {
+			continue
+		}
+		out = append(out, &signalv1.EndpointCandidate{
+			Address: ipnet.IP.String(), Port: port, Type: signalv1.CandidateType_CANDIDATE_TYPE_HOST,
+		})
+	}
+	return out
 }
 
 func doHandshake(ctx context.Context, conn *transport.Conn) error {
@@ -95,7 +219,6 @@ func doHandshake(ctx context.Context, conn *transport.Conn) error {
 		return err
 	}
 	if err := ctrl.Close(); err != nil {
-		// Closing the write side signals end-of-Hello; the read continues.
 		slog.Warn("control stream half-close", "err", err)
 	}
 	r := wire.NewReader(ctrl)
