@@ -181,12 +181,23 @@ Original anchor points (now resolved or carried into the deferred follow-up):
 
 ## Phase 5 — Firebase Auth + FCM Wake-up
 
-Decompose at the start of Phase 5 planning. Anchor points:
+> **Status: server-side shipped; mobile FlutterFire deferred to Phase 5b.** Phase 5 added `core/auth/firebase` (Admin-SDK ID-token verification with stubbed-TokenVerifier tests), `core/store/firestore` (Cloud Firestore Store implementation; PSK methods are no-ops), a `firebase_id_token` field on the `Register` proto, server config switches `auth_provider = "psk" | "firebase"` and `store_backend = "sqlite" | "firestore"` with validation, the `firebase/` Firebase project artifacts (firebase.json, firestore.rules with per-user isolation, firestore.indexes.json, functions/ TypeScript Cloud Function `onSessionCreated` triggering FCM wake-up on session creation), and `docs/firebase-setup.md` for operators.
 
-- `core/auth/firebase/`, `core/store/firestore/`.
-- Firestore schema decision (currently open).
-- Cloud Function for FCM wake-up.
-- App Check setup.
+Phase 5 was decomposed into P5-T01 through P5-T05:
+
+- T01: `core/auth/firebase` — Provider, Credentials, NewFromServiceAccount; tests with a TokenVerifier stub.
+- T02: `core/store/firestore` — Firestore Store implementation; PSK methods return ErrNotFound.
+- T03: server config + main wiring — `[firebase]` block, `auth_provider` / `store_backend` switches, `peersh-signaling` builds the right provider + store at startup. Proto adds `firebase_id_token` to `Register`.
+- T04: `firebase/` project — `firestore.rules`, Cloud Function `onSessionCreated` triggering FCM wake-up.
+- T05: `docs/firebase-setup.md` + doc reconciliation.
+
+Phase 5b anchor points (next session, after on-LAN access and a real Firebase project):
+
+- FlutterFire integration in `app/`: `firebase_core`, `firebase_auth`, `cloud_firestore`, `firebase_messaging`, `firebase_app_check`. Add an opt-in build flavor so the default APK still builds without a `google-services.json`.
+- Mobile sign-in screen + Firestore-backed device discovery.
+- Host-side FCM token registration (`peershd` writes `fcm_token` on its `users/{uid}/devices/{deviceId}` doc).
+- App Check enforcement on the server (reject Register without a valid App Check token).
+- Cost guardrail Cloud Function (auto-disable `onSessionCreated` when budget alert fires).
 - Cost guardrails.
 
 ## Phase 6 — Background Persistence + Session Resumption

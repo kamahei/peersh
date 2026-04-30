@@ -17,7 +17,7 @@ The mobile app supports adding multiple signaling servers and switching between 
 
 ## Status
 
-**Phases 1–4 (Android side) are complete.** Phases 1–3 shipped same-LAN PoC, the signaling server with PSK + SQLite + Docker, and STUN-based NAT hole punching (no relay/TURN). Phase 4 adds the mobile foundation and the real UI: `mobile-core/` is a gomobile-friendly Go package now exposing the full Session lifecycle (open / exec / read-file / close), and the Flutter app at `app/` ships four real screens (Servers, Server editor with discovery prefill, Terminal, Text viewer) plus a Settings screen and a Spike developer screen, all backed by `flutter_secure_storage` for PSK secrets. The terminal screen carries the three peersh-parity features the user asked for: a wrap-vs-horizontal-scroll toggle, an IME-friendly bottom sheet for multi-line input, and a built-in text viewer with search and copy-all. iOS code is complete but the `.xcframework` build and real-device validation require macOS.
+**Phases 1–5 (server-side) are complete; mobile-app FlutterFire integration deferred to 5b.** Phases 1–3 shipped the data path (LAN PoC, signaling+PSK+SQLite, NAT hole punching). Phase 4 shipped the Android-side mobile UI plus the three peersh-parity features (wrap/scroll toggle, IME bottom sheet, built-in text viewer). Phase 5 adds the Firebase / official-hosted-server side: `core/auth/firebase` verifies Google-issued ID tokens, `core/store/firestore` stores users / devices / pairings / sessions in Cloud Firestore, the signaling server's `[auth_provider]` / `[store_backend]` config switches between `psk + sqlite` (self-host default) and `firebase + firestore` (official hosted), and `firebase/` ships the Cloud Function that triggers FCM wake-up when a session document is created. Mobile-side FlutterFire (Google sign-in, FCM token registration, App Check) and iOS-on-macOS device validation are the remaining items.
 
 The seven planned phases are:
 
@@ -25,7 +25,7 @@ The seven planned phases are:
 2. Signaling server with PSK auth (self-host path) — **done**
 3. NAT hole punching (P2P across home networks / mobile data) — **done**
 4. Flutter mobile app + `gomobile` integration — **Android done; iOS xcframework + real-device run deferred**
-5. Firebase Auth + FCM wake-up (official hosted path)
+5. Firebase Auth + FCM wake-up (official hosted path) — **server-side done; mobile FlutterFire deferred (5b)**
 6. Background persistence + session resumption
 7. Polish, public release, and beyond
 

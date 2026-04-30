@@ -33,14 +33,13 @@ All Phase 4 open questions were resolved during Phase 4b planning:
 - **Terminal UI fidelity → simple monospaced log view.** Implemented as `LogView`; xterm-style ANSI rendering is reserved for Phase 7 polish if real-world feedback asks for it.
 - **Streaming Go → Dart → EventChannel + base64-encoded chunk events.** One `EventChannel` shared across sessions; events tagged with `sessionId`. The platform message codec carries `ByteArray` natively on Android (Uint8List on Dart side) so no further encoding is required.
 
-### Phase 5 (Firebase Auth + FCM)
+### Phase 5 (Firebase Auth + FCM) — partially resolved
 
-- **Exact Firestore schema.** The schema is intentionally not pinned in `data-model.md`; Phase 5 planning decides it.
-  - *Default assumption.* Collections roughly: `users/{uid}`, `users/{uid}/devices/{deviceId}`, `users/{uid}/pairings/{pairingId}`, `users/{uid}/sessions/{sessionId}`. Designed for the read/write budget (≤ ~5 reads + ~2 writes per lifecycle). Revisit when Phase 5 plan is in.
-- **Behavior when the Windows device is unreachable even after FCM.** How long do we wait before giving up, and what does the user see?
-  - *Default assumption.* A bounded wait (e.g. 30 seconds), then a clear error: "Could not reach your Windows device. It may be offline."
-- **Device list sync across multiple mobile devices.** A user with two phones expects both to see the same registered Windows devices.
-  - *Default assumption.* Read from Firestore on app start with client-side caching. No real-time listener (cost discipline).
+Phase 5's server-side shipped (`core/auth/firebase`, `core/store/firestore`, Cloud Function, `firestore.rules`). The mobile-app FlutterFire integration and App Check enforcement are deferred to Phase 5b alongside the iOS device validation.
+
+- **Firestore schema → locked.** Collections: `users/{uid}`, `users/{uid}/devices/{deviceId}`, `users/{uid}/pairings/{pairingId}`, `users/{uid}/sessions/{sessionId}`. PSK records are NOT stored in Firebase mode. Documented in `core/store/firestore/doc.go` and `docs/data-model.md`.
+- **Behavior when the Windows device is unreachable even after FCM** — Phase 5b decision (mobile-side error UX). Default still applies: bounded wait (~30 s), then "Could not reach your Windows device. It may be offline."
+- **Device list sync across multiple mobile devices** — Phase 5b decision (FlutterFire-side). Default still applies: Firestore read on app start with client-side caching, no real-time listener.
 
 ### Phase 6 (Background Persistence + Session Resumption)
 
