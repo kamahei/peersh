@@ -139,6 +139,14 @@ func run(listen, certDir, signalingURL, userID, pskFile, displayName, stunServer
 	}
 	defer listener.Close()
 
+	// Phase 6: SessionManager keeps pwsh.Host instances alive across
+	// QUIC reconnects so a client presenting a known session_id resumes
+	// where it left off (cwd, variables intact). Idle sessions are
+	// reaped after pwsh.DefaultIdleTimeout.
+	mgr := pwsh.NewSessionManager()
+	defer mgr.Close()
+	go mgr.Run(ctx)
+
 	// Optional signaling-mode goroutine.
 	if signalingURL != "" {
 		if userID == "" || pskFile == "" {
@@ -164,7 +172,7 @@ func run(listen, certDir, signalingURL, userID, pskFile, displayName, stunServer
 			}
 			return fmt.Errorf("Accept: %w", err)
 		}
-		go serveConn(ctx, conn)
+		go serveConn(ctx, conn, mgr)
 	}
 }
 
@@ -295,9 +303,12 @@ func enumerateCandidates(listen *net.UDPAddr, srflx *net.UDPAddr) []*signalv1.En
 	return out
 }
 
-// serveConn handles one QUIC connection: Hello on the control stream, then a
-// fresh per-command stream for each ExecRequest.
-func serveConn(ctx context.Context, conn *transport.Conn) {
+// serveConn handles one QUIC connection: Hello (with optional reattach)
+// on the control stream, then a fresh per-command stream for each
+// ExecRequest. The host's pwsh process is owned by mgr, not by this
+// function — when the QUIC connection closes, the session is detached
+// (mgr's idle timer takes over) instead of killed.
+func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager) {
 	remote := conn.RemoteAddr().String()
 	log := slog.With("peer", remote)
 	log.Info("connection accepted")
@@ -311,23 +322,14 @@ func serveConn(ctx context.Context, conn *transport.Conn) {
 		log.Warn("AcceptStream(control): connection ending", "err", err)
 		return
 	}
-	if err := doHandshake(ctrl); err != nil {
+
+	sessionID, host, err := doHandshake(ctx, ctrl, mgr)
+	if err != nil {
 		log.Warn("handshake failed", "err", err)
 		return
 	}
-	log.Info("handshake complete")
-
-	host, err := pwsh.Start(ctx)
-	if err != nil {
-		log.Error("pwsh.Start failed", "err", err)
-		return
-	}
-	defer func() {
-		if err := host.Close(); err != nil {
-			log.Warn("pwsh.Close error", "err", err)
-		}
-	}()
-	log.Info("pwsh host started", "path", host.Path())
+	defer mgr.Detach(sessionID)
+	log.Info("handshake complete", "session", sessionID, "pwsh", host.Path())
 
 	for {
 		stream, err := conn.AcceptStream(ctx)
@@ -342,25 +344,31 @@ func serveConn(ctx context.Context, conn *transport.Conn) {
 	}
 }
 
-func doHandshake(ctrl *transport.Stream) error {
+func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionManager) (string, *pwsh.Host, error) {
 	r := wire.NewReader(ctrl)
 	hello := &v1.ClientHello{}
 	if err := wire.Read(r, hello); err != nil {
-		return fmt.Errorf("read ClientHello: %w", err)
+		return "", nil, fmt.Errorf("read ClientHello: %w", err)
 	}
 	if hello.GetProtocolVersion() != protocolVersion {
 		_ = wire.Write(ctrl, &v1.ServerHello{ProtocolVersion: protocolVersion, ServerId: "peershd/0.1"})
-		return fmt.Errorf("client protocol_version=%d, server expects %d",
+		return "", nil, fmt.Errorf("client protocol_version=%d, server expects %d",
 			hello.GetProtocolVersion(), protocolVersion)
+	}
+	id, host, reattached, err := mgr.AttachOrCreate(ctx, hello.GetSessionId())
+	if err != nil {
+		return "", nil, fmt.Errorf("AttachOrCreate: %w", err)
 	}
 	if err := wire.Write(ctrl, &v1.ServerHello{
 		ProtocolVersion: protocolVersion,
 		Capabilities:    nil,
 		ServerId:        "peershd/0.1",
+		SessionId:       id,
+		Reattached:      reattached,
 	}); err != nil {
-		return fmt.Errorf("write ServerHello: %w", err)
+		return "", nil, fmt.Errorf("write ServerHello: %w", err)
 	}
-	return nil
+	return id, host, nil
 }
 
 func serveExec(ctx context.Context, host *pwsh.Host, stream *transport.Stream, log *slog.Logger) {

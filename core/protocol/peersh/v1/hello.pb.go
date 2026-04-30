@@ -37,7 +37,12 @@ type ClientHello struct {
 	Capabilities []string `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	// client_id is a free-form identifier string (e.g. "peersh-cli/0.1").
 	// Servers may log it but must not trust it for authorization.
-	ClientId      string `protobuf:"bytes,3,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	ClientId string `protobuf:"bytes,3,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	// session_id requests reattach to a previously-assigned session.
+	// Empty for "give me a fresh session". Added in Phase 6. The host may
+	// refuse the reattach (session expired, unknown id, server restart);
+	// ServerHello.reattached reports the outcome.
+	SessionId     string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -93,14 +98,29 @@ func (x *ClientHello) GetClientId() string {
 	return ""
 }
 
+func (x *ClientHello) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
 // ServerHello is the server's response on the control stream.
 type ServerHello struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	Capabilities    []string               `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	ServerId        string                 `protobuf:"bytes,3,opt,name=server_id,json=serverId,proto3" json:"server_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// session_id is the host-assigned session identifier the client should
+	// present on subsequent reconnects via ClientHello.session_id. Phase 6.
+	SessionId string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// reattached is true when the host successfully attached to an
+	// existing session matching the client's requested session_id. False
+	// for fresh sessions (either no session_id was requested, or the
+	// requested one was unknown / expired).
+	Reattached    bool `protobuf:"varint,5,opt,name=reattached,proto3" json:"reattached,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ServerHello) Reset() {
@@ -154,19 +174,40 @@ func (x *ServerHello) GetServerId() string {
 	return ""
 }
 
+func (x *ServerHello) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ServerHello) GetReattached() bool {
+	if x != nil {
+		return x.Reattached
+	}
+	return false
+}
+
 var File_peersh_v1_hello_proto protoreflect.FileDescriptor
 
 const file_peersh_v1_hello_proto_rawDesc = "" +
 	"\n" +
-	"\x15peersh/v1/hello.proto\x12\tpeersh.v1\"y\n" +
+	"\x15peersh/v1/hello.proto\x12\tpeersh.v1\"\x98\x01\n" +
 	"\vClientHello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\"\n" +
 	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12\x1b\n" +
-	"\tclient_id\x18\x03 \x01(\tR\bclientId\"y\n" +
+	"\tclient_id\x18\x03 \x01(\tR\bclientId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\"\xb8\x01\n" +
 	"\vServerHello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\"\n" +
 	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12\x1b\n" +
-	"\tserver_id\x18\x03 \x01(\tR\bserverIdB\x9b\x01\n" +
+	"\tserver_id\x18\x03 \x01(\tR\bserverId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\x12\x1e\n" +
+	"\n" +
+	"reattached\x18\x05 \x01(\bR\n" +
+	"reattachedB\x9b\x01\n" +
 	"\rcom.peersh.v1B\n" +
 	"HelloProtoP\x01Z9github.com/peersh/peersh/core/protocol/peersh/v1;peershv1\xa2\x02\x03PXX\xaa\x02\tPeersh.V1\xca\x02\tPeersh\\V1\xe2\x02\x15Peersh\\V1\\GPBMetadata\xea\x02\n" +
 	"Peersh::V1b\x06proto3"

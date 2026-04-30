@@ -41,14 +41,13 @@ Phase 5's server-side shipped (`core/auth/firebase`, `core/store/firestore`, Clo
 - **Behavior when the Windows device is unreachable even after FCM** — Phase 5b decision (mobile-side error UX). Default still applies: bounded wait (~30 s), then "Could not reach your Windows device. It may be offline."
 - **Device list sync across multiple mobile devices** — Phase 5b decision (FlutterFire-side). Default still applies: Firestore read on app start with client-side caching, no real-time listener.
 
-### Phase 6 (Background Persistence + Session Resumption)
+### Phase 6 (Background Persistence + Session Resumption) — partially resolved
 
-- **Idle timeout policy.** Per-user? Per-server? Hardcoded default?
-  - *Default assumption.* Hardcoded ~30 min default initially; consider configurability after we see how users actually use sessions.
-- **Output buffer overflow during long disconnects.** What happens when the ring fills?
-  - *Default assumption.* Truncate oldest, keep newest. Mark in the replay that older output was dropped.
-- **iOS App Store review risks.** The likely-needed Background Mode is `voip`, which is not strictly the right semantic for a remote shell. App Store reviewers may push back.
-  - *Default assumption.* Ship to TestFlight first under `voip`. Document the App Store risk in `docs/firebase-setup.md` (or a Phase 6 doc TBD). Be ready to switch to a different mode or accept that public iOS distribution requires a different approach.
+Phase 6's server-side reattach shipped (`pwsh.SessionManager`, `session_id` on Hello, peershd reattach plumbing). The remaining items belong to Phase 6b (client-side and OS-specific work).
+
+- **Idle timeout policy → 30 min hardcoded** (`pwsh.DefaultIdleTimeout`). Per-user / per-server configurability is a Phase 6b polish item if real usage patterns demand it.
+- **Output buffer overflow during long disconnects** — Phase 6b decision (the ring buffer itself is Phase 6b). Default still applies: truncate oldest, mark replay as truncated.
+- **iOS App Store review risks** — Phase 6b decision. Default still applies: TestFlight first under `voip`, document the App Store risk, accept that public iOS distribution may need a different approach.
 
 ## Things that are likely to change
 

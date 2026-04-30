@@ -202,13 +202,24 @@ Phase 5b anchor points (next session, after on-LAN access and a real Firebase pr
 
 ## Phase 6 — Background Persistence + Session Resumption
 
-Decompose at the start of Phase 6 planning. Anchor points:
+> **Status: server-side reattach shipped; client-side persistence + ring-buffer replay deferred to Phase 6b.** Phase 6 added `pwsh.SessionManager` (a long-lived map of `session_id → pwsh.Host` with a 30-minute idle timeout and a periodic `Sweep`), extended `ClientHello` with an optional `session_id` and `ServerHello` with `session_id` + `reattached`, and rewired `peershd`'s `serveConn` so the QUIC connection's `pwsh.Host` is owned by the manager. A reconnecting client that presents the same `session_id` resumes the same shell process (cwd + variables intact); an unknown / expired session_id transparently produces a fresh session. QUIC keepalive remains at the Phase 1 default (15 s).
 
-- `SessionManager` on the Windows host with idle timeout and ring buffer.
-- Reattach protocol (client presents `session_id`).
-- Android Foreground Service.
-- iOS Background Modes.
-- QUIC keepalive and reconnect policy.
+The ring-buffer replay (output emitted while the client was disconnected), Android Foreground Service, iOS Background Modes, and app-side automatic reconnect with exponential backoff are all client-side and require either macOS (iOS BG Modes) or on-LAN testing on a real Android device (Foreground Service); they're parked under Phase 6b.
+
+Phase 6 was decomposed into P6-T01 through P6-T04:
+
+- T01: proto — `session_id` on ClientHello, `session_id` + `reattached` on ServerHello.
+- T02: `windows/pwsh.SessionManager` with `AttachOrCreate` / `Detach` / `Sweep` / `Run` / `Close`. Tests cover fresh-create, reattach, unknown id, expiry sweep.
+- T03: peershd `doHandshake` returns `(session_id, *pwsh.Host)`; `serveConn` keeps the manager-owned host and detaches on QUIC close instead of killing pwsh.
+- T04: doc reconciliation.
+
+Phase 6b anchor points:
+
+- Ring buffer per session capturing stdout/stderr emitted while the client is detached. Server opens a server-initiated stream on reattach to drain the buffer to the client.
+- Android Foreground Service plugin (or native) so the active session can survive app backgrounding within OS limits.
+- iOS Background Modes + the App-Store-review caveat work.
+- Mobile-side auto-reconnect with exponential backoff and `session_id` persistence.
+- App-side surfacing of `reattached = true` in the terminal screen ("resumed your previous session" banner).
 
 ## Phase 7 — Polish, Public Release, and Beyond
 

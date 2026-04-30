@@ -19,6 +19,12 @@ message ClientHello {
   // client_id is a free-form identifier string (e.g. "peersh-cli/0.1").
   // Servers may log it but must not trust it for authorization.
   string client_id = 3;
+
+  // session_id requests reattach to a previously-assigned session.
+  // Empty for "give me a fresh session". Added in Phase 6. The host may
+  // refuse the reattach (session expired, unknown id, server restart);
+  // ServerHello.reattached reports the outcome.
+  string session_id = 4;
 }
 
 // ServerHello is the server's response on the control stream.
@@ -26,4 +32,14 @@ message ServerHello {
   uint32 protocol_version = 1;
   repeated string capabilities = 2;
   string server_id = 3;
+
+  // session_id is the host-assigned session identifier the client should
+  // present on subsequent reconnects via ClientHello.session_id. Phase 6.
+  string session_id = 4;
+
+  // reattached is true when the host successfully attached to an
+  // existing session matching the client's requested session_id. False
+  // for fresh sessions (either no session_id was requested, or the
+  // requested one was unknown / expired).
+  bool reattached = 5;
 }
