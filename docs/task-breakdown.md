@@ -123,7 +123,32 @@ Phase 3 was decomposed into P3-T01 through P3-T06:
 
 ## Phase 4 — Flutter App + gomobile Integration
 
-Decompose at the start of Phase 4 planning. The phase begins with a **gomobile + quic-go feasibility spike** before substantial Flutter work begins.
+Phase 4 is split across two sessions. Phase 4a (the spike + foundation) is shipped; Phase 4b (real UI screens, multi-server, secure storage, iOS device validation) is the next session.
+
+### Phase 4a — Spike + Foundation
+
+> **Status: shipped (Android toolchain validated; real-device test pending).** Phase 4a landed `mobile-core/` with a gomobile-friendly bridge API (`Version` + `Echo`), `scripts/build-mobile-core.{sh,cmd}` wrapping `gomobile bind`, the `app/` Flutter project with Riverpod and a verification spike screen, the `dev.peersh/bridge` MethodChannel handlers on Android (Kotlin, working) and iOS (Swift, code-complete pending macOS build), and the `/.well-known/peersh.json` discovery endpoint on `peersh-signaling`. The Android `.aar` builds (4 ABIs, 28 MB) and `flutter build apk --debug` succeeds (116 MB debug APK). Real device run is the user's spike step.
+
+Decomposed into P4a-T01 through P4a-T08:
+
+- T01: gomobile install + Android NDK 26.x via sdkmanager + `gomobile init`.
+- T02: `mobile-core/` Go module — `Version`, `Echo` reusing core/transport.
+- T03: `gomobile bind -target=android` → `peersh.aar`. (Spike pass/fail signal: PASS.)
+- T04: `flutter create app --org dev.peersh`, Riverpod added, `flutter analyze` clean.
+- T05: bridge wiring — `bridge.dart`, `MainActivity.kt`, `AppDelegate.swift` (deferred), `build.gradle` flatDir AAR dep, spike screen.
+- T06: `flutter build apk --debug` — full toolchain compile.
+- T07: `/.well-known/peersh.json` discovery endpoint on `peersh-signaling` + tests + config wiring.
+- T08: doc reconciliation.
+
+### Phase 4b — Real UI + iOS Device
+
+To start the next session: real UI screens (pairing, server list, device list, terminal/session), `flutter_secure_storage` for credentials, multi-server / multi-device UX, EventChannel streaming, iOS .xcframework build on macOS, and real-device verification on both platforms. Anchor points:
+
+- `app/lib/screens/` per-screen Dart files.
+- `app/lib/state/` Riverpod providers for server list, device list, active session.
+- Discovery client that hits `/.well-known/peersh.json` from a hostname.
+- EventChannel for streaming ExecResponse chunks (replaces the synchronous Echo on the spike screen).
+- Pairing UX implementation (token / QR code, per `open-questions.md` — the Phase 4b plan resolves this).
 
 ## Phase 5 — Firebase Auth + FCM Wake-up
 

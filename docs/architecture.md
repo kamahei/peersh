@@ -25,6 +25,31 @@ The signaling server is **only used for connection setup**. All actual data flow
 - Dart and Go communicate via Method Channel and EventChannel.
 - Owns: pairing UX, server list, device list, terminal UI, secure storage of credentials, FCM token registration (when Firebase mode is enabled), background persistence (Android Foreground Service / iOS Background Modes).
 
+#### Mobile architecture (Phase 4a)
+
+The mobile track is implemented as:
+
+- `mobile-core/` — a Go package with a deliberately tiny gomobile-friendly API surface (string in / string out, no errors, no slices). Phase 4a exposes `Version()` and `Echo(addr, command)`. It depends on `core/transport`, `core/transport/devtls`, `core/wire`, and `core/protocol/peersh/v1` — i.e. the same QUIC stack `peersh-cli` uses, just with a different shape on the outside.
+- `scripts/build-mobile-core.{sh,cmd}` — wraps `gomobile bind` to produce `app/android/app/libs/peersh.aar` (Android, Windows or macOS host) and `app/ios/Frameworks/peersh.xcframework` (iOS, macOS host only).
+- `app/` — Flutter project (`flutter create app --org dev.peersh`). Riverpod is in `pubspec.yaml` from day one.
+- Method-channel bridge — `dev.peersh/bridge`. `app/lib/bridge.dart` is the Dart client; `app/android/.../MainActivity.kt` and `app/ios/Runner/AppDelegate.swift` host the platform-side handlers, which forward calls to `peersh.Peersh` (Android) or `PeershPeersh` (iOS) static methods.
+- The AAR / xcframework are not committed; each developer or CI rebuilds them via the build script.
+
+#### Discovery: `/.well-known/peersh.json`
+
+Served at the signaling server's HTTPS root. The mobile app fetches it when the user adds a server by hostname only:
+
+```json
+{
+  "version": 1,
+  "ws_url": "wss://signaling.example.com/ws",
+  "stun_servers": ["stun.l.google.com:19302"],
+  "auth_providers": ["psk"]
+}
+```
+
+Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signaling.example.toml`). The endpoint is GET / HEAD; everything else gets 405. Cache-Control: no-cache so configuration changes propagate quickly.
+
 ### Signaling server (`peersh-signaling`)
 
 - Single Go binary. Deployable as a binary or Docker container.

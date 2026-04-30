@@ -156,6 +156,18 @@ The defaults (10 connections/min/IP, 10 registrations/min/user, 30 connects/min/
 
 Phase 2 uses **implicit pairing**: any two devices that authenticate under the same PSK user_id can address each other. A separate explicit pairing token / QR code arrives in Phase 4 with the mobile app. Until then, give each user their own user_id (and PSK) and treat the PSK itself as the device-pair credential.
 
+### Mobile-app discovery (Phase 4a)
+
+The signaling server serves `/.well-known/peersh.json` at its HTTPS root so that the mobile app (Phase 4b) can find the WebSocket endpoint, recommended STUN servers, and supported auth providers from a hostname alone. Operators populate the `[discovery]` section of `signaling.toml`:
+
+```toml
+[discovery]
+ws_url = "wss://signaling.example.com/ws"
+stun_servers = ["stun.l.google.com:19302"]
+```
+
+The endpoint accepts GET and HEAD only.
+
 ### NAT traversal (Phase 3)
 
 `peershd` and `peersh-cli` discover their public address via STUN (`stun.l.google.com:19302` by default; override with the `-stun` flag) and include it as a SERVER_REFLEXIVE candidate alongside their LAN addresses. After exchanging candidates through signaling, both sides fire a brief burst of UDP punch packets at the peer's reflexive address to install NAT mappings, then `peersh-cli` QUIC-dials the candidates in preferred order (IPv6-srflx → IPv4-srflx → IPv6-host → IPv4-host). When NAT traversal cannot succeed (typically symmetric CGNAT on both ends), `peersh-cli` exits with "Direct connection not possible from this network." — peersh **never** falls back to a relay.
