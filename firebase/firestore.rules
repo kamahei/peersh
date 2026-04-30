@@ -1,0 +1,34 @@
+rules_version = '2';
+
+// Per-user isolation. A user can only read or write documents under
+// their own /users/{uid}/... subtree. The peersh-signaling server uses
+// the Firebase Admin SDK which bypasses these rules, so server-side
+// reads / writes still work.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // The user document itself.
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /devices/{deviceId} {
+        allow read, write: if isOwner(userId);
+      }
+      match /pairings/{pairingId} {
+        allow read, write: if isOwner(userId);
+      }
+      match /sessions/{sessionId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Catch-all: deny everything else.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

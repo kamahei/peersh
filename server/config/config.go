@@ -24,10 +24,28 @@ type Config struct {
 	ServerID   string `toml:"server_id"`
 	LogLevel   string `toml:"log_level"`
 
+	// AuthProvider selects the auth.Provider used at Register. Values:
+	// "psk" (default; Phase 2) or "firebase" (Phase 5; the official
+	// hosted server option).
+	AuthProvider string `toml:"auth_provider"`
+
+	// StoreBackend selects the store.Store implementation. Values:
+	// "sqlite" (default; Phase 2) or "firestore" (Phase 5).
+	StoreBackend string `toml:"store_backend"`
+
 	TLS       TLSConfig       `toml:"tls"`
 	Clock     ClockConfig     `toml:"clock"`
 	RateLimit RateLimitConfig `toml:"rate_limit"`
 	Discovery DiscoveryConfig `toml:"discovery"`
+	Firebase  FirebaseConfig  `toml:"firebase"`
+}
+
+// FirebaseConfig configures the firebase auth provider and the firestore
+// store. Both share the same Google Cloud project; specifying separate
+// credentials is supported but unusual.
+type FirebaseConfig struct {
+	ProjectID       string `toml:"project_id"`
+	CredentialsPath string `toml:"credentials_path"`
 }
 
 // DiscoveryConfig populates the /.well-known/peersh.json document the
@@ -88,10 +106,12 @@ func (d Duration) MarshalText() ([]byte, error) {
 // before applying file + env overrides.
 func Defaults() Config {
 	return Config{
-		ListenAddr: ":8443",
-		DBPath:     "peersh-signaling.db",
-		ServerID:   "peersh-signaling/0.1",
-		LogLevel:   "info",
+		ListenAddr:   ":8443",
+		DBPath:       "peersh-signaling.db",
+		ServerID:     "peersh-signaling/0.1",
+		LogLevel:     "info",
+		AuthProvider: "psk",
+		StoreBackend: "sqlite",
 		Clock: ClockConfig{
 			Skew:        Duration{60 * time.Second},
 			NonceWindow: Duration{5 * time.Minute},
@@ -178,8 +198,24 @@ func (c Config) validate() error {
 	if c.ListenAddr == "" {
 		return errors.New("config: listen_addr must not be empty")
 	}
-	if c.DBPath == "" {
-		return errors.New("config: db_path must not be empty")
+	switch c.AuthProvider {
+	case "psk", "firebase":
+	default:
+		return fmt.Errorf("config: auth_provider must be psk or firebase, got %q", c.AuthProvider)
+	}
+	switch c.StoreBackend {
+	case "sqlite", "firestore":
+	default:
+		return fmt.Errorf("config: store_backend must be sqlite or firestore, got %q", c.StoreBackend)
+	}
+	if c.StoreBackend == "sqlite" && c.DBPath == "" {
+		return errors.New("config: db_path must not be empty when store_backend = sqlite")
+	}
+	if c.StoreBackend == "firestore" && c.Firebase.ProjectID == "" {
+		return errors.New("config: firebase.project_id is required when store_backend = firestore")
+	}
+	if c.AuthProvider == "firebase" && c.Firebase.ProjectID == "" {
+		return errors.New("config: firebase.project_id is required when auth_provider = firebase")
 	}
 	if (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
 		return errors.New("config: tls.cert_file and tls.key_file must be both set or both empty")

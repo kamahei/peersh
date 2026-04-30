@@ -24,8 +24,13 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/peersh/peersh/core/auth"
+	fbauth "github.com/peersh/peersh/core/auth/firebase"
 	"github.com/peersh/peersh/core/auth/psk"
+	"github.com/peersh/peersh/core/store"
+	fsstore "github.com/peersh/peersh/core/store/firestore"
 	"github.com/peersh/peersh/core/store/sqlite"
+	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 	"github.com/peersh/peersh/server/admin"
 	"github.com/peersh/peersh/server/config"
 	"github.com/peersh/peersh/server/ratelimit"
@@ -89,22 +94,32 @@ func runServe(args []string) error {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.SlogLevel()}))
 	slog.SetDefault(logger)
-	logger.Info("loaded config", "listen", cfg.ListenAddr, "db", cfg.DBPath, "tls", !cfg.TLS.Insecure())
+	logger.Info("loaded config",
+		"listen", cfg.ListenAddr,
+		"auth", cfg.AuthProvider,
+		"store", cfg.StoreBackend,
+		"tls", !cfg.TLS.Insecure())
 
-	store, err := sqlite.Open(cfg.DBPath)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	st, err := openStore(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	defer store.Close()
+	defer st.Close()
 
-	provider := psk.New(store)
-	provider.ClockSkew = cfg.Clock.Skew.Duration
-	provider.Nonces = psk.NewMemoryNonceCache(cfg.Clock.NonceWindow.Duration)
+	authProvider, authBuilder, authKind, err := buildAuth(ctx, cfg, st)
+	if err != nil {
+		return fmt.Errorf("build auth: %w", err)
+	}
 
 	server := ws.New(&ws.Server{
 		ServerID:    cfg.ServerID,
-		Store:       store,
-		Auth:        provider,
+		Store:       st,
+		Auth:        authProvider,
+		AuthBuilder: authBuilder,
+		AuthKind:    authKind,
 		Registry:    room.New(),
 		IPLimit:     ratelimit.New(config.PerSecond(cfg.RateLimit.IPPerMinute), cfg.RateLimit.IPBurst),
 		UserLimit:   ratelimit.New(config.PerSecond(cfg.RateLimit.UserPerMinute), cfg.RateLimit.UserBurst),
@@ -122,7 +137,7 @@ func runServe(args []string) error {
 		Version:       1,
 		WSURL:         cfg.Discovery.WSURL,
 		STUNServers:   cfg.Discovery.STUNServers,
-		AuthProviders: []string{"psk"},
+		AuthProviders: []string{cfg.AuthProvider},
 	}))
 
 	httpSrv := &http.Server{
@@ -130,9 +145,6 @@ func runServe(args []string) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -162,6 +174,42 @@ func runServe(args []string) error {
 			return fmt.Errorf("http: %w", err)
 		}
 		return nil
+	}
+}
+
+// openStore returns the configured store.Store implementation.
+func openStore(ctx context.Context, cfg config.Config) (store.Store, error) {
+	switch cfg.StoreBackend {
+	case "sqlite":
+		return sqlite.Open(cfg.DBPath)
+	case "firestore":
+		return fsstore.OpenWithProject(ctx, cfg.Firebase.ProjectID, cfg.Firebase.CredentialsPath)
+	default:
+		return nil, fmt.Errorf("config: unknown store_backend %q", cfg.StoreBackend)
+	}
+}
+
+// buildAuth returns the configured auth.Provider plus the matching
+// CredentialsBuilder and the AuthProvider tag persisted alongside new
+// users.
+func buildAuth(ctx context.Context, cfg config.Config, st store.Store) (auth.Provider, ws.CredentialsBuilder, store.AuthProvider, error) {
+	switch cfg.AuthProvider {
+	case "psk":
+		p := psk.New(st)
+		p.ClockSkew = cfg.Clock.Skew.Duration
+		p.Nonces = psk.NewMemoryNonceCache(cfg.Clock.NonceWindow.Duration)
+		return p, ws.PSKCredentialsBuilder, store.AuthProviderPSK, nil
+	case "firebase":
+		p, err := fbauth.NewFromServiceAccount(ctx, cfg.Firebase.ProjectID, cfg.Firebase.CredentialsPath)
+		if err != nil {
+			return nil, nil, store.AuthProviderUnknown, err
+		}
+		builder := func(reg *signalv1.Register) (auth.Credentials, error) {
+			return fbauth.Credentials{IDToken: reg.GetFirebaseIdToken()}, nil
+		}
+		return p, builder, store.AuthProviderFirebase, nil
+	default:
+		return nil, nil, store.AuthProviderUnknown, fmt.Errorf("config: unknown auth_provider %q", cfg.AuthProvider)
 	}
 }
 

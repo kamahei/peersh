@@ -271,12 +271,17 @@ type Register struct {
 	Kind        DeviceKind             `protobuf:"varint,4,opt,name=kind,proto3,enum=peersh.signal.v1.DeviceKind" json:"kind,omitempty"`
 	DisplayName string                 `protobuf:"bytes,5,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	// Authenticator fields. signed_at_unix and nonce defend against replay;
-	// hmac_signature is the verifier.
+	// hmac_signature is the verifier for the PSK provider.
 	SignedAtUnix  int64  `protobuf:"varint,10,opt,name=signed_at_unix,json=signedAtUnix,proto3" json:"signed_at_unix,omitempty"`
 	Nonce         []byte `protobuf:"bytes,11,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	HmacSignature []byte `protobuf:"bytes,12,opt,name=hmac_signature,json=hmacSignature,proto3" json:"hmac_signature,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Firebase Auth ID token. Used by the `firebase` auth provider; PSK
+	// clients leave this empty. Added in Phase 5; older clients that omit
+	// this field are still compatible with PSK servers since proto3
+	// defaults to "".
+	FirebaseIdToken string `protobuf:"bytes,13,opt,name=firebase_id_token,json=firebaseIdToken,proto3" json:"firebase_id_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Register) Reset() {
@@ -363,6 +368,13 @@ func (x *Register) GetHmacSignature() []byte {
 		return x.HmacSignature
 	}
 	return nil
+}
+
+func (x *Register) GetFirebaseIdToken() string {
+	if x != nil {
+		return x.FirebaseIdToken
+	}
+	return ""
 }
 
 // RegisterAck is the server's response to Register.
@@ -624,7 +636,7 @@ const file_peersh_signal_v1_messages_proto_rawDesc = "" +
 	"\vServerHello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\"\n" +
 	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12\x1b\n" +
-	"\tserver_id\x18\x03 \x01(\tR\bserverId\"\x97\x02\n" +
+	"\tserver_id\x18\x03 \x01(\tR\bserverId\"\xc3\x02\n" +
 	"\bRegister\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x1d\n" +
@@ -635,7 +647,8 @@ const file_peersh_signal_v1_messages_proto_rawDesc = "" +
 	"\x0esigned_at_unix\x18\n" +
 	" \x01(\x03R\fsignedAtUnix\x12\x14\n" +
 	"\x05nonce\x18\v \x01(\fR\x05nonce\x12%\n" +
-	"\x0ehmac_signature\x18\f \x01(\fR\rhmacSignature\"^\n" +
+	"\x0ehmac_signature\x18\f \x01(\fR\rhmacSignature\x12*\n" +
+	"\x11firebase_id_token\x18\r \x01(\tR\x0ffirebaseIdToken\"^\n" +
 	"\vRegisterAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1b\n" +

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/peersh/peersh/core/auth"
 	"github.com/peersh/peersh/core/auth/psk"
 	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 	"github.com/peersh/peersh/core/store"
@@ -26,14 +27,40 @@ const ProtocolVersion = 1
 // Server is the dependency-injected handler for /ws. Construct via New and
 // register with a *http.ServeMux.
 type Server struct {
-	ServerID    string
-	Store       store.Store
-	Auth        *psk.Provider
+	ServerID string
+	Store    store.Store
+
+	// Auth is the auth.Provider used at Register. Phase 2 set it to a
+	// *psk.Provider directly; Phase 5 introduced firebase as a sibling
+	// option, so the field is now an interface and main.go constructs
+	// the right concrete provider per the [auth_provider] config.
+	Auth auth.Provider
+
+	// AuthBuilder turns a Register message into the auth.Credentials
+	// shape Auth.Authenticate expects. main.go selects the builder based
+	// on the configured auth_provider (PSK reads hmac_signature; Firebase
+	// reads firebase_id_token).
+	AuthBuilder CredentialsBuilder
+
+	// AuthKind is recorded with newly-created users so store.User.AuthProvider
+	// matches the runtime provider.
+	AuthKind store.AuthProvider
+
 	Registry    *room.Registry
 	IPLimit     *ratelimit.Bucket // upgrade-time per-IP
 	UserLimit   *ratelimit.Bucket // per user_id at Register
 	DeviceLimit *ratelimit.Bucket // per device_id at Connect
 	Logger      *slog.Logger
+}
+
+// CredentialsBuilder extracts auth.Credentials from a signaling Register
+// message. The shape varies by auth.Provider implementation.
+type CredentialsBuilder func(reg *signalv1.Register) (auth.Credentials, error)
+
+// PSKCredentialsBuilder is the default builder for PSK mode. main.go uses
+// it directly for configurations with auth_provider = "psk".
+func PSKCredentialsBuilder(reg *signalv1.Register) (auth.Credentials, error) {
+	return psk.CredentialsFromRegister(reg)
 }
 
 // New constructs a Server with sensible defaults filled in for any nil
@@ -225,7 +252,11 @@ func (c *Connection) handshake(ctx context.Context) error {
 		return fmt.Errorf("user rate limit")
 	}
 
-	creds, err := psk.CredentialsFromRegister(reg)
+	builder := c.server.AuthBuilder
+	if builder == nil {
+		builder = PSKCredentialsBuilder
+	}
+	creds, err := builder(reg)
 	if err != nil {
 		return fmt.Errorf("extract credentials: %w", err)
 	}
@@ -243,10 +274,14 @@ func (c *Connection) handshake(ctx context.Context) error {
 	// the request mid-write doesn't leave the registry inconsistent.)
 	storeCtx, sCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer sCancel()
+	authKind := c.server.AuthKind
+	if authKind == store.AuthProviderUnknown {
+		authKind = store.AuthProviderPSK
+	}
 	if _, err := c.server.Store.GetUser(storeCtx, identity.UserID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			_ = c.server.Store.PutUser(storeCtx, store.User{
-				ID: identity.UserID, AuthProvider: store.AuthProviderPSK, CreatedAt: time.Now().UTC(),
+				ID: identity.UserID, AuthProvider: authKind, CreatedAt: time.Now().UTC(),
 			})
 		}
 	}

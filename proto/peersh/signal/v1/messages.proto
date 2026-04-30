@@ -42,10 +42,16 @@ message Register {
   string display_name = 5;
 
   // Authenticator fields. signed_at_unix and nonce defend against replay;
-  // hmac_signature is the verifier.
+  // hmac_signature is the verifier for the PSK provider.
   int64  signed_at_unix = 10;
   bytes  nonce = 11;
   bytes  hmac_signature = 12;
+
+  // Firebase Auth ID token. Used by the `firebase` auth provider; PSK
+  // clients leave this empty. Added in Phase 5; older clients that omit
+  // this field are still compatible with PSK servers since proto3
+  // defaults to "".
+  string firebase_id_token = 13;
 }
 
 // RegisterAck is the server's response to Register.
