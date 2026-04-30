@@ -4,6 +4,8 @@ This file defines the durable domain entities used by peersh: their identifiers,
 
 The schema below is intentionally minimal for the early phases. Fields are added as they are needed, not preemptively. The Firestore schema in particular is **open** — see `open-questions.md` — and gets locked in during Phase 5 planning.
 
+**Phase 1 scope:** the `store.Store` interface ships with `Device` and `Session` only. `PSKRecord` and `Pairing` (described below) appear in the interface starting in Phase 2 as additive interface extensions; their entries below describe the full eventual shape so callers can see the trajectory.
+
 ## Entities
 
 ### Device

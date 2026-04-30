@@ -15,11 +15,13 @@ For phase definitions, scope, and validation, see `implementation-plan.md`.
 
 The goal is the smallest end-to-end thing that works: `peersh-cli` on one machine, `peershd` on another machine on the same LAN, executing PowerShell commands over QUIC. No auth, no signaling, no NAT, no Service registration.
 
+> **Status: shipped.** Phase 1 landed a 3-module Go workspace (`core/`, `windows/`, `cli/`), the protobuf wire types, the `auth.Provider` and `store.Store` interfaces with their `none` and `memory` implementations, the QUIC transport with the externally-supplied `net.PacketConn` contract, the PowerShell session host with sentinel-based completion detection, the `peershd` and `peersh-cli` binaries, and the README setup steps. The 3-module layout decision was confirmed with the user during Phase 1 planning; the brief's earlier "where peersh-cli lives — TBD" is resolved as `cli/cmd/peersh-cli/`.
+
 ### P1-T01: Repository skeleton and `go.work`
 
-- **Scope.** Create the directory structure under the proposed layout (`core/`, `windows/`, `server/`, `proto/`, `scripts/`), plus initial `go.mod` files for the modules touched in Phase 1, plus `go.work` tying them together. Add `LICENSE` and `README.md` (already present from kickoff). Stub package files where needed to make the workspace build.
+- **Scope.** Create three Go modules — `core/` (library), `windows/` (Windows-specific, holding `peershd` and the PowerShell host), `cli/` (cross-platform CLI). Add `proto/` for `.proto` source (not a Go module) and `scripts/` for codegen helpers. Tie the modules with `go.work`. Stub `doc.go` package files where needed to make the workspace build.
 - **Prerequisites.** None.
-- **Validation.** `go work sync` succeeds. `go build ./...` succeeds at this skeleton level (no real logic yet).
+- **Validation.** `go work sync` succeeds. `go build ./core/... ./windows/... ./cli/...` succeeds at the skeleton level.
 
 ### P1-T02: Protobuf definitions for Phase 1 messages
 
@@ -57,9 +59,9 @@ The goal is the smallest end-to-end thing that works: `peersh-cli` on one machin
 - **Prerequisites.** P1-T03, P1-T04, P1-T05, P1-T06.
 - **Validation.** Build the binary. Run it on a Windows machine. Confirm it logs that it's listening.
 
-### P1-T08: `cmd/peersh-cli` REPL client
+### P1-T08: `cli/cmd/peersh-cli` REPL client
 
-- **Scope.** A simple REPL CLI binary at a path TBD (likely under `cmd/` of the relevant module — the exact module placement is part of P1-T01). Connects to a `peershd` host given an address. Performs the Hello exchange. Reads lines from stdin, sends as `ExecRequest`, prints streamed `ExecResponse` output until the command finishes, then prompts again. Handles disconnect with a clean error message.
+- **Scope.** A simple REPL CLI binary at `cli/cmd/peersh-cli/`, in the cross-platform `cli/` module. Connects to a `peershd` host given an address. Performs the Hello exchange on QUIC stream 0. Reads lines from stdin, sends as `ExecRequest` on a fresh stream per command, prints streamed `ExecResponse` output until `done = true`, then prompts again. Handles disconnect with a clean error message.
 - **Prerequisites.** P1-T05, P1-T07.
 - **Validation.** Run `peershd` and `peersh-cli`, execute several commands interactively, confirm `Get-Process` style output streams correctly.
 

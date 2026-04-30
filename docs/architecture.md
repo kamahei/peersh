@@ -98,7 +98,7 @@ Implications:
 
 ## Protocol versioning
 
-The wire protocol carries a version from day one. The first messages exchanged on any QUIC stream are `ClientHello` and `ServerHello`, both containing:
+The wire protocol carries a version from day one. Immediately after the QUIC handshake completes, the client opens a dedicated **control stream** (the first client-initiated bidirectional stream) and exchanges `ClientHello` / `ServerHello` once per connection. Subsequent application streams (e.g. per-command exec streams) skip the Hello; the negotiated capabilities apply to the whole connection. Both Hello messages contain:
 
 - `protocol_version` (`uint32`, currently `1`)
 - `capabilities` (`repeated string`, e.g. `["session_resume", "ipv6"]`)
