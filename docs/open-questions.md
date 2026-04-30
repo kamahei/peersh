@@ -16,16 +16,14 @@ All Phase 2 open questions were resolved during Phase 2 planning. Resolutions li
 - **WebSocket lifetime → kept open while a session-setup is active.** Closed when the client disconnects.
 - **PSK storage shape → raw bytes.** HMAC verification needs the secret; hash-only is structurally impossible. Trade-off (server-breach exposes PSKs) is documented in `docs/self-hosting.md` with disk-encryption recommendation.
 
-### Phase 3 (NAT Hole Punching)
+### Phase 3 (NAT Hole Punching) — resolved
 
-- **Retry aggressiveness.** How many punching attempts and at what intervals?
-  - *Default assumption.* A small fixed budget (e.g. 3 attempts over ~10 seconds total) with exponential spacing. Tune based on real-world testing.
-- **NAT diagnostics surfaced to the user.** Should the user see what kind of NAT they're behind?
-  - *Default assumption.* Internal logs only. Surface to users only when traversal fails, and only at the level of "Direct connection not possible from this network" (no NAT-typology jargon).
-- **IPv6-first reliability.** Is IPv6 reliable enough to attempt first by default in the wild?
-  - *Default assumption.* Yes, IPv6-first with a short fallback timeout. Revisit if real-world testing shows it consistently slows things down.
-- **Birthday-paradox port scanning for symmetric NAT.** Worth implementing or defer?
-  - *Default assumption.* Defer to a follow-up issue. Symmetric-NAT-on-both-sides is rare enough for the initial release that the actionable error is acceptable.
+All Phase 3 open questions were resolved during Phase 3 planning.
+
+- **Retry aggressiveness → 5 punch packets at 200 ms intervals; 1 dial attempt per candidate at 2 s timeout; 4 candidates max, ~10 s total budget.** See `core/punching` and `docs/architecture.md`.
+- **NAT diagnostics surfaced → internal logs only.** STUN-discovered srflx, candidates tried, and per-candidate dial outcomes log at INFO/DEBUG. Users see exactly one error line: "Direct connection not possible from this network." (`punching.ErrTraversalFailed`).
+- **IPv6-first reliability → yes, IPv6 SRFLX → IPv4 SRFLX → IPv6 HOST → IPv4 HOST.** Implemented in `punching.SortCandidates`. Revisit if real-world testing shows it consistently slows connection setup.
+- **Birthday-paradox port scanning → deferred.** Phase 3 surfaces the actionable error for symmetric-NAT-on-both-sides; revisit only if there is real demand.
 
 ### Phase 4 (Flutter App + gomobile)
 

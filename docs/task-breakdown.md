@@ -110,12 +110,16 @@ The bounded tasks Phase 2 was decomposed into were P2-T01 through P2-T18:
 
 ## Phase 3 — NAT Hole Punching
 
-Decompose at the start of Phase 3 planning. Anchor points:
+> **Status: shipped.** Phase 3 landed `core/punching` (STUN `Discover`, magic-byte `Punch`, IPv6-first `SortCandidates`, `ErrTraversalFailed` user-facing message), wired it into `peershd` (STUN once at startup, SRFLX in candidates, Punch on every incoming Connect) and `peersh-cli` (STUN once at startup, SRFLX in candidates, Punch + sequential preferred-order dial), and added an in-process loopback end-to-end test (`server/ws/phase3_e2e_test.go`) covering STUN → signaling → Punch → QUIC dial → Hello + Exec round-trip. The `core/transport` external-`PacketConn` contract is exercised here for the first time outside its test suite.
 
-- `core/punching/` using `pion/stun`.
-- IPv6-first / IPv4-fallback strategy.
-- Reuse of the punched UDP socket as the QUIC transport (validates P1-T05's external-`PacketConn` design).
-- Timeout/retry policy, error reporting on traversal failure.
+Phase 3 was decomposed into P3-T01 through P3-T06:
+
+- T01: `core/punching` package skeleton + `pion/stun/v2` dep + `Discover` + tests against an in-process STUN responder.
+- T02: `Punch` + `SortCandidates` + `CandidatesToUDPAddrs` + tests.
+- T03: `peershd` integration (`-stun` flag, Discover at startup, SRFLX in `enumerateCandidates`, Punch on incoming Connect).
+- T04: `peersh-cli` integration (`-stun` flag, Discover before signaling, SRFLX in `localCandidates`, Punch + sequential dial loop with `ErrTraversalFailed`).
+- T05: `server/ws/phase3_e2e_test.go` end-to-end loopback test.
+- T06: doc reconciliation (architecture NAT-traversal section, open-questions Phase 3 resolved, task-breakdown shipped, README status, self-hosting one-line note).
 
 ## Phase 4 — Flutter App + gomobile Integration
 

@@ -52,11 +52,13 @@ The signaling server is **only used for connection setup**. All actual data flow
 ## NAT traversal
 
 - **UDP hole punching** is the only traversal mechanism. There is no relay/TURN fallback.
-- **Endpoint discovery** uses `pion/stun` to learn reflexive addresses.
-- **IPv6-first, IPv4-fallback.** Try IPv6 first; fall back to IPv4 with hole punching when IPv6 is not reliably available. Whether the IPv6-first default holds in real-world conditions is an open question.
-- **Reuse of the punched UDP socket.** After the punch succeeds, the same UDP socket is used as the QUIC transport. This is what the external `net.PacketConn` requirement on Phase 1 transport exists to enable.
-- **Bounded retry policy.** Connection attempts have a clear timeout and retry budget. Failure surfaces a clear, actionable error to the caller (e.g. "Direct connection not possible from this network" when CGNAT is detected on both sides).
-- **Optional birthday-paradox port scan** for symmetric NAT cases. Research/defer.
+- **Endpoint discovery** uses `pion/stun` to learn reflexive addresses. Phase 3 ships this as `core/punching.Discover`. Default STUN server is `stun.l.google.com:19302`; both `peershd` and `peersh-cli` accept a `-stun` flag to override.
+- **IPv6-first, IPv4-fallback.** `core/punching.SortCandidates` orders candidates SRFLX→HOST and IPv6→IPv4. The sequential dialer in `peersh-cli` tries them in that order with a 2 s timeout per candidate.
+- **Reuse of the punched UDP socket.** STUN, punch packets, and QUIC all share one `*net.UDPConn`. STUN runs once at startup before `transport.New` takes over reads; subsequent `punching.Punch` calls write to the same socket while QUIC is alive (`net.PacketConn.WriteTo` is goroutine-safe). This is what the external `net.PacketConn` requirement on Phase 1 transport exists to enable.
+- **Punch packet shape.** A 4-byte ASCII sentinel `pesh` plus a 12-byte random nonce — 16 bytes total. The first byte does not have QUIC's long-header bit set, so the peer's `quic-go` Transport drops these as non-QUIC. Each punch burst is 5 packets at 200 ms intervals (~1 s total).
+- **Bounded retry policy.** Per-candidate dial timeout 2 s, single attempt each. With 4 candidates the worst-case budget is ~10 s including punch. On full failure the caller surfaces `punching.ErrTraversalFailed` ("Direct connection not possible from this network.").
+- **CGNAT-both-sides** is the documented fail mode: symmetric NATs allocate a different external port per destination, so the srflx learned from STUN is wrong for the peer. `peersh-cli` exits cleanly with the actionable error; no relay path exists.
+- **Optional birthday-paradox port scan** for symmetric NAT cases. Deferred per `docs/open-questions.md`.
 
 ## Pluggable authentication
 

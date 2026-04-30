@@ -17,13 +17,13 @@ The mobile app supports adding multiple signaling servers and switching between 
 
 ## Status
 
-**Phases 1 and 2 are complete.** The Phase 1 same-LAN PoC ships `peershd` and `peersh-cli` talking directly over QUIC. Phase 2 adds the signaling server (`peersh-signaling`) with HMAC-SHA256 PSK authentication, a SQLite store, per-IP / per-user / per-device rate limiting, and Docker / docker-compose deployment — see `docs/self-hosting.md`. Two machines on different networks (cooperative endpoints; real NAT traversal is Phase 3) can now find each other through the signaling server and run PowerShell sessions.
+**Phases 1, 2, and 3 are complete.** Phase 1 shipped same-LAN PoC. Phase 2 added the signaling server (`peersh-signaling`) with HMAC-SHA256 PSK authentication, a SQLite store, rate limiting, and Docker / docker-compose deployment. Phase 3 adds **STUN-based NAT hole punching**: `peershd` and `peersh-cli` discover their reflexive addresses, exchange both HOST and SRFLX candidates through signaling, fire short bursts of UDP punch packets to install NAT mappings, then QUIC-dial in IPv6-first preferred order. Two clients on genuinely separate home networks (or one on mobile data) can now reach each other end-to-end with no port forwarding and no relay. CGNAT-both-sides surfaces a clean "Direct connection not possible from this network." error.
 
 The seven planned phases are:
 
 1. Same-LAN PoC (Go service + CLI client over LAN) — **done**
 2. Signaling server with PSK auth (self-host path) — **done**
-3. NAT hole punching (P2P across home networks / mobile data)
+3. NAT hole punching (P2P across home networks / mobile data) — **done**
 4. Flutter mobile app + `gomobile` integration
 5. Firebase Auth + FCM wake-up (official hosted path)
 6. Background persistence + session resumption

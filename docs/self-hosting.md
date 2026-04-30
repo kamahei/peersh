@@ -156,6 +156,12 @@ The defaults (10 connections/min/IP, 10 registrations/min/user, 30 connects/min/
 
 Phase 2 uses **implicit pairing**: any two devices that authenticate under the same PSK user_id can address each other. A separate explicit pairing token / QR code arrives in Phase 4 with the mobile app. Until then, give each user their own user_id (and PSK) and treat the PSK itself as the device-pair credential.
 
+### NAT traversal (Phase 3)
+
+`peershd` and `peersh-cli` discover their public address via STUN (`stun.l.google.com:19302` by default; override with the `-stun` flag) and include it as a SERVER_REFLEXIVE candidate alongside their LAN addresses. After exchanging candidates through signaling, both sides fire a brief burst of UDP punch packets at the peer's reflexive address to install NAT mappings, then `peersh-cli` QUIC-dials the candidates in preferred order (IPv6-srflx → IPv4-srflx → IPv6-host → IPv4-host). When NAT traversal cannot succeed (typically symmetric CGNAT on both ends), `peersh-cli` exits with "Direct connection not possible from this network." — peersh **never** falls back to a relay.
+
+No additional setup is required: STUN is automatic and uses the same UDP socket QUIC speaks over.
+
 ## Verifying a working setup
 
 Once everything is running:
