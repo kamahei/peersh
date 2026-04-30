@@ -17,14 +17,14 @@ The mobile app supports adding multiple signaling servers and switching between 
 
 ## Status
 
-**Phases 1–3 are complete; Phase 4 is in progress (Android spike validated).** Phases 1–3 shipped same-LAN PoC, the signaling server with PSK + SQLite + Docker, and STUN-based NAT hole punching (no relay/TURN). Phase 4a adds the mobile foundation: `mobile-core/` is a gomobile-friendly Go package, the Flutter project lives at `app/`, the `gomobile bind -target=android` toolchain works (28 MB AAR with libgojni.so for 4 ABIs), `flutter build apk --debug` produces a working debug APK, and `peersh-signaling` now serves `/.well-known/peersh.json` for mobile-app discovery. Real Flutter UI screens, secure storage, and iOS-on-macOS device validation belong to Phase 4b.
+**Phases 1–4 (Android side) are complete.** Phases 1–3 shipped same-LAN PoC, the signaling server with PSK + SQLite + Docker, and STUN-based NAT hole punching (no relay/TURN). Phase 4 adds the mobile foundation and the real UI: `mobile-core/` is a gomobile-friendly Go package now exposing the full Session lifecycle (open / exec / read-file / close), and the Flutter app at `app/` ships four real screens (Servers, Server editor with discovery prefill, Terminal, Text viewer) plus a Settings screen and a Spike developer screen, all backed by `flutter_secure_storage` for PSK secrets. The terminal screen carries the three peersh-parity features the user asked for: a wrap-vs-horizontal-scroll toggle, an IME-friendly bottom sheet for multi-line input, and a built-in text viewer with search and copy-all. iOS code is complete but the `.xcframework` build and real-device validation require macOS.
 
 The seven planned phases are:
 
 1. Same-LAN PoC (Go service + CLI client over LAN) — **done**
 2. Signaling server with PSK auth (self-host path) — **done**
 3. NAT hole punching (P2P across home networks / mobile data) — **done**
-4. Flutter mobile app + `gomobile` integration — **in progress (4a done)**
+4. Flutter mobile app + `gomobile` integration — **Android done; iOS xcframework + real-device run deferred**
 5. Firebase Auth + FCM wake-up (official hosted path)
 6. Background persistence + session resumption
 7. Polish, public release, and beyond

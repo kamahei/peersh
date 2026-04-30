@@ -140,9 +140,34 @@ Decomposed into P4a-T01 through P4a-T08:
 - T07: `/.well-known/peersh.json` discovery endpoint on `peersh-signaling` + tests + config wiring.
 - T08: doc reconciliation.
 
-### Phase 4b — Real UI + iOS Device
+### Phase 4b — Real Mobile UI
 
-To start the next session: real UI screens (pairing, server list, device list, terminal/session), `flutter_secure_storage` for credentials, multi-server / multi-device UX, EventChannel streaming, iOS .xcframework build on macOS, and real-device verification on both platforms. Anchor points:
+> **Status: shipped on Android (toolchain green, real-device run pending).** Phase 4b extended `mobile-core` with `Session` + `Output` + `OpenDirectSession` / `OpenSignalingSession` / `Exec` / `ReadFile` / `Close`, rebuilt the AAR, added the streaming MethodChannel + EventChannel bridge in Kotlin (Swift stub on iOS), and built the Dart UI: `ServersScreen`, `ServerEditorScreen` (with `/.well-known/peersh.json` discovery prefill), `TerminalScreen` (with the three peersh-parity features below), `ImeInputSheet`, `TextViewerScreen`, `SettingsScreen`. State is persisted via `flutter_secure_storage` behind Riverpod providers. `flutter analyze` is clean, smoke widget test passes, and `flutter build apk --debug` produces a debug APK including the extended AAR.
+
+The three peersh-parity features the user asked for ship here:
+- Wrap-vs-horizontal-scroll toggle on the terminal screen (AppBar icon; per-screen override on top of the persisted default).
+- IME input bottom sheet (modal, multiline, Append-Enter switch, Send button).
+- Built-in text viewer (search + match navigation + copy-all + encoding/size meta), reachable from the terminal AppBar; backed by `mobile-core.Session.ReadFile`.
+
+iOS `.xcframework` build and real-device verification on either platform require hardware the user cannot reach remotely; both are deferred and picked up next time on-LAN.
+
+Phase 4b was decomposed into P4b-T01 through P4b-T13:
+
+- T01: mobile-core Session API (`Output`, `Session`, `OpenDirectSession`, `OpenSignalingSession`, `Exec`, `ReadFile`, `Close`).
+- T02: rebuild AAR (`gomobile bind -target=android` over the extended package).
+- T03: Kotlin + Swift native bridges (session map + `EventChannel` sink + Output adapter on Android; commented stub on iOS).
+- T04: Dart bridge + models (`ServerEntry`, `SessionEvent`) + secure store + Riverpod state.
+- T05: discovery client + server editor with hostname prefill.
+- T06: servers screen (list, add, edit, swipe-to-delete).
+- T07: terminal screen scaffold + active session lifecycle.
+- T08: `LogView` widget with wrap/scroll toggle.
+- T09: IME input bottom sheet.
+- T10: text viewer screen.
+- T11: settings screen + app shell wiring.
+- T12: tests + APK build verify.
+- T13: doc reconciliation.
+
+Original anchor points (now resolved or carried into the deferred follow-up):
 
 - `app/lib/screens/` per-screen Dart files.
 - `app/lib/state/` Riverpod providers for server list, device list, active session.
