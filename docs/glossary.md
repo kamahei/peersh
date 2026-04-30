@@ -1,0 +1,45 @@
+# Glossary
+
+Terms used across the peersh documentation and code. Stays alphabetical so it's easy to scan.
+
+- **App Check.** Firebase feature that attests a request actually comes from your legitimate mobile app build (Play Integrity on Android, App Attest on iOS). Used in Phase 5 to protect the official Firebase project from abuse.
+- **`auth.Provider`.** The pluggable authentication interface in `core/auth/`. Initial implementations: `none`, `psk`, `firebase`.
+- **Background Modes.** iOS app capability that lets an app keep running (within constraints) while the user has switched to another app. Used in Phase 6 for connection persistence.
+- **Capability string.** A short label inside a `ClientHello` / `ServerHello` capability list, advertising support for an optional protocol feature (e.g. `session_resume`, `ipv6`). Lets clients and servers negotiate optional behavior without bumping `protocol_version`.
+- **CGNAT.** Carrier-grade NAT. The network operator NATs many subscribers behind a shared public IP, often in a way that prevents UDP hole punching. CGNAT-on-both-sides is the canonical case where peersh's "no relay" policy means the connection cannot be made.
+- **`ClientHello` / `ServerHello`.** The first protobuf messages exchanged on any QUIC application stream. Carry `protocol_version`, `capabilities`, and a free-form identifier. Mismatched major versions fail cleanly.
+- **Cloud Function.** Firebase/GCP serverless compute. Phase 5 uses one to send FCM wake-up pushes when a session is created against a Windows device that may be sleeping.
+- **`cwd`.** Current working directory. Preserved across reattach in Phase 6.
+- **Device ID.** A 16-character ASCII string derived deterministically from a device's public key: `base32(sha256(publicKey)[:16])`. Same key serves as identity and as mTLS credential.
+- **EventChannel.** Flutter mechanism for streaming a sequence of events from native code (Go via `gomobile bind`) into Dart.
+- **`ExecRequest` / `ExecResponse`.** Phase 1 protobuf messages for sending a command to the host and receiving streamed output back.
+- **FCM.** Firebase Cloud Messaging. Used in Phase 5 to wake up a sleeping Windows host when a session is initiated.
+- **Firebase Auth.** Firebase's identity service. The `firebase` `auth.Provider` verifies Firebase ID tokens.
+- **Firestore.** Firebase's document database. The `firestore` `store.Store` backend used by the official hosted server.
+- **FlutterFire.** The official Flutter plugins for Firebase services. Used in Phase 5 for sign-in and FCM token registration.
+- **Foreground Service.** Android background-execution mechanism with a persistent notification. Used in Phase 6 for connection persistence; the appropriate type is `connectedDevice`.
+- **`gomobile bind`.** Tool that compiles a Go package into an Android `.aar` and an iOS `.xcframework` callable from native (and via plugins, from Flutter).
+- **Hole punching.** UDP technique where two peers behind NATs simultaneously send packets to each other's reflexive addresses, which causes their NATs to install symmetric mappings allowing two-way traffic. peersh's only NAT-traversal mechanism.
+- **`InsecureSkipVerify`.** Go TLS flag that disables peer certificate verification on the client. Used in Phase 1 for self-signed-cert development; clearly marked dev-only and replaced by real mTLS verification later.
+- **Method Channel.** Flutter mechanism for synchronous-style calls from Dart into native code (and back). Used alongside EventChannel for Dart ↔ Go interop.
+- **mTLS.** Mutual TLS. Both peers present certificates and authenticate each other. peersh uses keypair-derived device identities as the mTLS credential.
+- **`net.PacketConn`.** Go's interface for connectionless packet I/O (UDP). The QUIC wrapper in `core/transport/` accepts an externally-supplied `net.PacketConn` so that Phase 3's punched UDP socket can be reused as the QUIC transport.
+- **OOB.** Out of band. As in "the operator hands the PSK to the user out of band" — through some channel other than the system itself (e.g. a chat message, a printed slip).
+- **`peersh-cli`.** Go CLI client used in Phase 1 (and afterwards as a dev/operator tool) to test a `peershd` host without the mobile app.
+- **`peershd`.** The Go binary that runs on the Windows host and provides the PowerShell session backend.
+- **`peersh-signaling`.** The Go binary that runs the signaling server. Single binary, deployable as raw process or Docker container.
+- **`pion/stun`.** Go library used by `core/punching/` to discover reflexive addresses from STUN servers.
+- **`protocol_version`.** A `uint32` field on every `ClientHello` and `ServerHello`. Currently `1`. Bumping it is the only mechanism for breaking protocol changes.
+- **PSK.** Pre-shared key. The `psk` `auth.Provider` uses HMAC-SHA256 with operator-issued secrets to authenticate clients. Recommended for personal and small-group self-hosting.
+- **`pwsh`.** PowerShell 7 (and later) executable. Preferred PowerShell host. Falls back to `powershell.exe` (Windows PowerShell 5.1) when `pwsh` is not on PATH.
+- **QUIC.** UDP-based transport protocol with mandatory TLS 1.3. peersh uses `github.com/quic-go/quic-go` for both server and client.
+- **Reflexive address.** A peer's apparent address as seen from the public internet, after NAT translation. Discovered via STUN.
+- **Ring buffer.** A fixed-size circular buffer used by Phase 6's `SessionManager` to capture output emitted while the client is disconnected, for replay on reattach.
+- **`SessionManager`.** Windows-host component (Phase 6) that owns long-lived `pwsh` processes, the disconnect ring buffer, idle timeouts, and the reattach-by-`session_id` lookup.
+- **Signaling server.** The peersh component used **only for connection setup**: device registration, pairing, endpoint exchange, optional FCM wake-up. Never carries session data.
+- **`store.Store`.** The pluggable storage interface in `core/store/`. Initial implementations: `memory`, `sqlite`, `firestore`.
+- **STUN.** Session Traversal Utilities for NAT. Protocol used to learn a peer's reflexive address.
+- **Symmetric NAT.** A NAT type that picks a different external port for each (source, destination) pair. Hole punching against a symmetric NAT is hard; symmetric-on-both-sides is the canonical "cannot connect" case.
+- **TURN.** Traversal Using Relays around NAT. A TURN server relays UDP between peers when hole punching fails. **peersh does not use TURN, by design.**
+- **UDP hole punching.** See "Hole punching."
+- **`/.well-known/peersh.json`.** A discovery endpoint at the signaling server (Phase 4) that the mobile app fetches to learn connection parameters when given a hostname.
