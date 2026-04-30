@@ -1,0 +1,22 @@
+// The signaling channel between peersh clients and the signaling server runs
+// over WebSocket. Each WebSocket binary message carries exactly one
+// Frame protobuf, which is a oneof of all the message types the channel can
+// produce.
+syntax = "proto3";
+
+package peersh.signal.v1;
+
+import "peersh/signal/v1/messages.proto";
+
+// Frame is the single envelope for every signaling message. The receiver
+// dispatches on the populated oneof variant.
+message Frame {
+  oneof body {
+    ClientHello   client_hello = 1;
+    ServerHello   server_hello = 2;
+    Register      register = 3;
+    RegisterAck   register_ack = 4;
+    Connect       connect = 5;
+    ServerError   server_error = 6;
+  }
+}

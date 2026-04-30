@@ -1,0 +1,98 @@
+// Signaling channel messages. Carried inside Frame.body (see frame.proto).
+syntax = "proto3";
+
+package peersh.signal.v1;
+
+// ClientHello opens a WebSocket signaling connection. Sent once, immediately
+// after the WebSocket upgrade completes.
+message ClientHello {
+  uint32 protocol_version = 1;
+  repeated string capabilities = 2;
+  string client_id = 3;
+}
+
+// ServerHello is the server's reply on the same channel.
+message ServerHello {
+  uint32 protocol_version = 1;
+  repeated string capabilities = 2;
+  string server_id = 3;
+}
+
+// DeviceKind tags whether a registered device is a Windows host, a mobile
+// client, or a developer CLI. Mirrors core/store.DeviceKind plus a CLI value
+// used during Phase 2 / development.
+enum DeviceKind {
+  DEVICE_KIND_UNSPECIFIED = 0;
+  DEVICE_KIND_WINDOWS_HOST = 1;
+  DEVICE_KIND_MOBILE_CLIENT = 2;
+  DEVICE_KIND_CLI = 3;
+}
+
+// Register is the PSK-signed initial registration sent by the client right
+// after the Hello exchange.
+//
+// HMAC verification: marshal this message deterministically with
+// hmac_signature cleared, then HMAC-SHA256 with the user's PSK secret.
+// Server verifies by repeating the process and comparing with hmac.Equal.
+message Register {
+  string user_id = 1;
+  string device_id = 2;
+  bytes  public_key = 3;
+  DeviceKind kind = 4;
+  string display_name = 5;
+
+  // Authenticator fields. signed_at_unix and nonce defend against replay;
+  // hmac_signature is the verifier.
+  int64  signed_at_unix = 10;
+  bytes  nonce = 11;
+  bytes  hmac_signature = 12;
+}
+
+// RegisterAck is the server's response to Register.
+message RegisterAck {
+  bool   accepted = 1;
+  string reason = 2;
+  string server_id = 3;
+}
+
+// CandidateType tags how the candidate address was obtained.
+//
+// Phase 2 only emits HOST. SERVER_REFLEXIVE is reserved for Phase 3 (STUN);
+// PEER_REFLEXIVE may be added later.
+enum CandidateType {
+  CANDIDATE_TYPE_UNSPECIFIED = 0;
+  CANDIDATE_TYPE_HOST = 1;
+  CANDIDATE_TYPE_SERVER_REFLEXIVE = 2;
+  CANDIDATE_TYPE_PEER_REFLEXIVE = 3;
+}
+
+// EndpointCandidate is one address a peer can be reached at.
+message EndpointCandidate {
+  string address = 1;
+  uint32 port = 2;
+  CandidateType type = 3;
+}
+
+// Connect is the endpoint-exchange message. Used in both directions:
+//
+//   - Initiator → server: target_device_id is set. The server forwards to
+//     that target with from_device_id populated.
+//   - Server → target: target_device_id is the recipient (= self), and
+//     from_device_id is the initiator.
+//   - Target → initiator (via server): same shape with target_device_id =
+//     initiator, from_device_id = target. Server forwards.
+//
+// The server fills from_device_id from the authenticated session; clients
+// must leave it empty when sending.
+message Connect {
+  string target_device_id = 1;
+  string from_device_id = 2;
+  repeated EndpointCandidate candidates = 3;
+}
+
+// ServerError reports that something went wrong. The connection may or may
+// not stay open depending on code semantics.
+message ServerError {
+  string code = 1;
+  string message = 2;
+}
