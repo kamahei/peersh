@@ -118,6 +118,12 @@ func runServe(args []string) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.Handle("/.well-known/peersh.json", ws.DiscoveryHandler(ws.DiscoveryConfig{
+		Version:       1,
+		WSURL:         cfg.Discovery.WSURL,
+		STUNServers:   cfg.Discovery.STUNServers,
+		AuthProviders: []string{"psk"},
+	}))
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,

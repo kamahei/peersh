@@ -47,3 +47,11 @@ user_burst = 3
 # Per device_id at Connect.
 device_per_minute = 30
 device_burst = 5
+
+[discovery]
+# Served at /.well-known/peersh.json so the mobile app can find this
+# server's WebSocket endpoint and recommended STUN servers from just the
+# hostname. Set ws_url to the externally-reachable wss:// (or ws://) URL
+# of /ws — typically your reverse-proxy hostname plus "/ws".
+ws_url = ""
+stun_servers = ["stun.l.google.com:19302"]

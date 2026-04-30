@@ -27,6 +27,15 @@ type Config struct {
 	TLS       TLSConfig       `toml:"tls"`
 	Clock     ClockConfig     `toml:"clock"`
 	RateLimit RateLimitConfig `toml:"rate_limit"`
+	Discovery DiscoveryConfig `toml:"discovery"`
+}
+
+// DiscoveryConfig populates the /.well-known/peersh.json document the
+// mobile app fetches from the server's HTTPS root. WS_URL must be set if
+// discovery is exposed publicly; STUNServers may be empty.
+type DiscoveryConfig struct {
+	WSURL       string   `toml:"ws_url"`
+	STUNServers []string `toml:"stun_servers"`
 }
 
 // TLSConfig points to certificate material on disk. Empty values mean run
