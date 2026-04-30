@@ -32,10 +32,12 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/peersh/peersh/core/devid"
 	v1 "github.com/peersh/peersh/core/protocol/peersh/v1"
 	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
+	"github.com/peersh/peersh/core/punching"
 	"github.com/peersh/peersh/core/signaling"
 	"github.com/peersh/peersh/core/transport"
 	"github.com/peersh/peersh/core/transport/devtls"
@@ -54,6 +56,7 @@ func main() {
 	userID := flag.String("user", "", "user_id under which to register (signaling mode)")
 	pskFile := flag.String("psk-file", "", "path to a file containing a hex-encoded PSK (signaling mode)")
 	displayName := flag.String("display-name", "", "display name to register (defaults to hostname)")
+	stunServer := flag.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -66,7 +69,7 @@ func main() {
 		*certDir = defaultCertDir()
 	}
 
-	if err := run(*listen, *certDir, *signalingURL, *userID, *pskFile, *displayName); err != nil {
+	if err := run(*listen, *certDir, *signalingURL, *userID, *pskFile, *displayName, *stunServer); err != nil {
 		slog.Error("peershd exiting on error", "err", err)
 		os.Exit(1)
 	}
@@ -87,7 +90,7 @@ func defaultCertDir() string {
 	return filepath.Join(".", "peersh-dev")
 }
 
-func run(listen, certDir, signalingURL, userID, pskFile, displayName string) error {
+func run(listen, certDir, signalingURL, userID, pskFile, displayName, stunServer string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -114,6 +117,20 @@ func run(listen, certDir, signalingURL, userID, pskFile, displayName string) err
 	listenAddr := pc.LocalAddr().(*net.UDPAddr)
 	slog.Info("listening for QUIC", "addr", listenAddr)
 
+	// STUN runs BEFORE Transport.New takes over reads on pc. The discovered
+	// srflx is cached and emitted as a SERVER_REFLEXIVE candidate on every
+	// Connect reply. For cone NATs (the common case) one srflx port works
+	// for any peer destination; symmetric NATs are the documented fail case.
+	var srflx *net.UDPAddr
+	if signalingURL != "" && stunServer != "" {
+		stunCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		srflx, err = punching.Discover(stunCtx, pc, punching.Options{STUNServer: stunServer})
+		cancel()
+		if err != nil {
+			slog.Warn("stun discover failed; continuing without srflx candidate", "err", err)
+		}
+	}
+
 	tr := transport.New(pc, devtls.ServerTLSConfig(cert))
 	defer tr.Close()
 	listener, err := tr.Listen(ctx)
@@ -134,7 +151,7 @@ func run(listen, certDir, signalingURL, userID, pskFile, displayName string) err
 		if displayName == "" {
 			displayName, _ = os.Hostname()
 		}
-		go runSignaling(ctx, signalingURL, userID, secret, deviceID, pub, displayName, listenAddr)
+		go runSignaling(ctx, signalingURL, userID, secret, deviceID, pub, displayName, listenAddr, srflx, pc)
 	}
 
 	// Phase 1 QUIC accept loop.
@@ -154,8 +171,14 @@ func run(listen, certDir, signalingURL, userID, pskFile, displayName string) err
 // runSignaling dials the signaling server, registers, and replies to
 // incoming Connect messages with our local candidates. The actual data
 // connection arrives separately at the QUIC listener.
-func runSignaling(ctx context.Context, url, userID string, secret []byte, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr) {
+//
+// srflx, if non-nil, is included as a SERVER_REFLEXIVE candidate. pc is the
+// shared QUIC UDP socket; punching writes to it concurrently with QUIC reads.
+func runSignaling(ctx context.Context, url, userID string, secret []byte, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn) {
 	log := slog.With("signaling", url, "user", userID, "device", deviceID)
+	if srflx != nil {
+		log.Info("srflx ready for advertisement", "srflx", srflx)
+	}
 	sc, err := signaling.Dial(ctx, signaling.DialOptions{
 		URL:         url,
 		UserID:      userID,
@@ -185,8 +208,16 @@ func runSignaling(ctx context.Context, url, userID string, secret []byte, device
 		from := conn.GetFromDeviceId()
 		log.Info("connect request received", "from", from, "candidates", len(conn.GetCandidates()))
 
+		// Punch the peer's candidates first so our NAT installs the mapping
+		// for their address before they QUIC-dial us. Sorted by preferred
+		// order; we punch all of them cheaply (5 packets each).
+		peerCands := punching.SortCandidates(conn.GetCandidates())
+		if err := punching.Punch(ctx, pc, punching.CandidatesToUDPAddrs(peerCands), punching.Options{}); err != nil {
+			log.Warn("punch failed", "err", err)
+		}
+
 		// Reply with our local candidates so the peer can dial us.
-		cands := enumerateCandidates(listenAddr)
+		cands := enumerateCandidates(listenAddr, srflx)
 		if err := sc.SendConnect(ctx, from, cands); err != nil {
 			log.Warn("send Connect reply", "err", err)
 			continue
@@ -225,20 +256,33 @@ func readPSKFile(path string) ([]byte, error) {
 	return out, nil
 }
 
-// enumerateCandidates returns one HOST candidate per usable local IP. If the
-// listener is bound to a specific IP, only that IP is emitted.
-func enumerateCandidates(listen *net.UDPAddr) []*signalv1.EndpointCandidate {
+// enumerateCandidates returns the candidate list peershd advertises in its
+// Connect reply. Order:
+//   - SRFLX (if STUN succeeded), one entry.
+//   - HOST candidates: either the bound IP, or every non-loopback /
+//     non-link-local interface IP.
+//
+// SortCandidates on the receiver side reshuffles by IPv6/IPv4 within
+// SRFLX/HOST; ordering here is purely for log readability.
+func enumerateCandidates(listen *net.UDPAddr, srflx *net.UDPAddr) []*signalv1.EndpointCandidate {
 	port := uint32(listen.Port)
+	var out []*signalv1.EndpointCandidate
+	if srflx != nil {
+		out = append(out, &signalv1.EndpointCandidate{
+			Address: srflx.IP.String(), Port: uint32(srflx.Port),
+			Type: signalv1.CandidateType_CANDIDATE_TYPE_SERVER_REFLEXIVE,
+		})
+	}
 	if !listen.IP.IsUnspecified() {
-		return []*signalv1.EndpointCandidate{
-			{Address: listen.IP.String(), Port: port, Type: signalv1.CandidateType_CANDIDATE_TYPE_HOST},
-		}
+		out = append(out, &signalv1.EndpointCandidate{
+			Address: listen.IP.String(), Port: port, Type: signalv1.CandidateType_CANDIDATE_TYPE_HOST,
+		})
+		return out
 	}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return nil
+		return out
 	}
-	var out []*signalv1.EndpointCandidate
 	for _, a := range addrs {
 		ipnet, ok := a.(*net.IPNet)
 		if !ok || ipnet.IP.IsLoopback() || ipnet.IP.IsLinkLocalUnicast() || ipnet.IP.IsLinkLocalMulticast() {
