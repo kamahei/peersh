@@ -17,11 +17,11 @@ The mobile app supports adding multiple signaling servers and switching between 
 
 ## Status
 
-This repository is the **kickoff state** of a multi-phase project. No implementation code lands until Phase 1 begins (`docs/implementation-plan.md`).
+**Phase 1 (Same-LAN PoC) is complete.** A Windows host (`peershd`) and a CLI client (`peersh-cli`) can talk to each other over QUIC on the same LAN, exchanging Hello messages and running real PowerShell commands. No auth, no signaling, no NAT — direct IP only. See "Build and verify Phase 1" below.
 
 The seven planned phases are:
 
-1. Same-LAN PoC (Go service + CLI client over LAN)
+1. Same-LAN PoC (Go service + CLI client over LAN) — **done**
 2. Signaling server with PSK auth (self-host path)
 3. NAT hole punching (P2P across home networks / mobile data)
 4. Flutter mobile app + `gomobile` integration
@@ -30,6 +30,64 @@ The seven planned phases are:
 7. Polish, public release, and beyond
 
 Each phase is a separate work session. AI agents working in this repository default to Plan Mode at the start of each phase — see `AGENTS.md` and `docs/ai-implementation-guide.md`.
+
+## Build and verify Phase 1
+
+### Prerequisites
+
+- **Go 1.22+** on PATH.
+- **`buf` and `protoc-gen-go`** for regenerating protobuf code (only needed if you change `.proto` files):
+  ```sh
+  go install github.com/bufbuild/buf/cmd/buf@latest
+  go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+  ```
+- **Windows 10 / 11** with PowerShell 7 (`pwsh.exe`) preferred. Falls back to `powershell.exe` if `pwsh` is not on PATH.
+
+### Regenerate protobuf code (only if you edited `proto/`)
+
+```sh
+scripts/gen-proto.sh        # macOS / Linux / Git Bash
+scripts\gen-proto.cmd       # Windows cmd / PowerShell
+```
+
+Generated Go lands in `core/protocol/peersh/v1/` and is committed to the repository. You only need to regenerate after editing `.proto` files.
+
+### Build
+
+```sh
+go build -o bin/peershd.exe ./windows/cmd/peershd
+go build -o bin/peersh-cli.exe ./cli/cmd/peersh-cli
+```
+
+### Run the same-LAN demo
+
+In one terminal (Windows host):
+
+```sh
+./bin/peershd.exe -listen :7777
+```
+
+`peershd` generates a self-signed dev cert under `%LOCALAPPDATA%\peersh\dev\` on first run (override with `-cert-dir`). Subsequent runs reuse it.
+
+In another terminal (any machine that can reach the host on UDP 7777):
+
+```sh
+./bin/peersh-cli.exe -addr <host-ip>:7777
+peersh> Get-Process | Select-Object -First 5 | Out-String
+```
+
+You should see a real `Get-Process` table streamed back. Type `exit` or send EOF to quit.
+
+> The Phase 1 client uses `InsecureSkipVerify` against the self-signed cert. The grep-able constant `transport/devtls.DevSelfSignedOnly = true` makes that obvious in any audit. Real certificate verification arrives once signaling makes mutual auth meaningful (Phase 2+).
+
+### Run tests
+
+```sh
+go test ./core/...                # interfaces, framing, transport contract
+go test ./windows/...             # PowerShell session host (requires pwsh or powershell on PATH)
+```
+
+The load-bearing test for Phase 3 forward-compatibility is `TestExternalPacketConnContract` in `core/transport/`: it constructs `*net.UDPConn` for both server and client outside the transport package and runs a full QUIC stream through them. Phase 3's hole-punched socket will reuse this contract.
 
 ## Tech direction
 
