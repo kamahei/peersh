@@ -27,14 +27,16 @@ import (
 	"github.com/peersh/peersh/core/auth"
 	fbauth "github.com/peersh/peersh/core/auth/firebase"
 	"github.com/peersh/peersh/core/auth/psk"
+	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 	"github.com/peersh/peersh/core/store"
 	fsstore "github.com/peersh/peersh/core/store/firestore"
 	"github.com/peersh/peersh/core/store/sqlite"
-	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 	"github.com/peersh/peersh/server/admin"
 	"github.com/peersh/peersh/server/config"
 	"github.com/peersh/peersh/server/ratelimit"
 	"github.com/peersh/peersh/server/room"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/peersh/peersh/server/ws"
 )
 
@@ -114,6 +116,11 @@ func runServe(args []string) error {
 		return fmt.Errorf("build auth: %w", err)
 	}
 
+	metrics := ws.NewMetrics()
+	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
+
 	server := ws.New(&ws.Server{
 		ServerID:    cfg.ServerID,
 		Store:       st,
@@ -125,6 +132,7 @@ func runServe(args []string) error {
 		UserLimit:   ratelimit.New(config.PerSecond(cfg.RateLimit.UserPerMinute), cfg.RateLimit.UserBurst),
 		DeviceLimit: ratelimit.New(config.PerSecond(cfg.RateLimit.DevicePerMinute), cfg.RateLimit.DeviceBurst),
 		Logger:      logger,
+		Metrics:     metrics,
 	})
 
 	mux := http.NewServeMux()
@@ -133,6 +141,7 @@ func runServe(args []string) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/.well-known/peersh.json", ws.DiscoveryHandler(ws.DiscoveryConfig{
 		Version:       1,
 		WSURL:         cfg.Discovery.WSURL,

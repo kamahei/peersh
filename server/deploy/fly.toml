@@ -1,0 +1,58 @@
+# Fly.io app configuration for peersh-signaling.
+#
+# Usage:
+#   1. fly launch --copy-config --no-deploy
+#   2. fly volumes create peersh_data --region nrt --size 1
+#   3. fly secrets set PEERSH_SIGNALING_TLS_CERT_INLINE="$(cat fullchain.pem)"
+#      fly secrets set PEERSH_SIGNALING_TLS_KEY_INLINE="$(cat privkey.pem)"
+#      (or rely on Fly's TLS termination — see [[services]] below.)
+#   4. fly deploy
+
+app = "peersh-signaling"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "server/deploy/Dockerfile"
+
+[env]
+  PEERSH_SIGNALING_LISTEN = ":8443"
+  PEERSH_SIGNALING_DB = "/data/peersh-signaling.db"
+  PEERSH_SIGNALING_LOG_LEVEL = "info"
+
+[mounts]
+  source = "peersh_data"
+  destination = "/data"
+
+# Fly's edge terminates TLS for you when you bind 443 on the public
+# address. Internal traffic stays plaintext between the Fly proxy and
+# the app, which is fine because Fly's network is private.
+[[services]]
+  internal_port = 8443
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+
+[checks]
+  [checks.healthz]
+    type = "http"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "get"
+    path = "/healthz"
+    protocol = "http"
+    port = 8443

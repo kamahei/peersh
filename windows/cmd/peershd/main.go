@@ -48,16 +48,51 @@ import (
 const protocolVersion = 1
 
 func main() {
-	listen := flag.String("listen", ":7777", "UDP address to listen on for QUIC")
-	certDir := flag.String("cert-dir", "", "directory for self-signed dev cert (default: platform-specific app data dir)")
-	debug := flag.Bool("debug", false, "enable debug logging")
+	// Phase 7: detect Windows-Service install / uninstall / SCM-dispatch
+	// modes first. runService returns handled=true when the binary
+	// performed (or is performing) a service action, in which case main
+	// should exit here.
+	handled, err := runService(os.Args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if handled {
+		return
+	}
 
-	signalingURL := flag.String("signaling", "", "signaling server URL (ws:// or wss://); empty disables signaling")
-	userID := flag.String("user", "", "user_id under which to register (signaling mode)")
-	pskFile := flag.String("psk-file", "", "path to a file containing a hex-encoded PSK (signaling mode)")
-	displayName := flag.String("display-name", "", "display name to register (defaults to hostname)")
-	stunServer := flag.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
-	flag.Parse()
+	taskHandled, err := runLogonTask(os.Args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if taskHandled {
+		return
+	}
+
+	if err := runWithCtx(nil, os.Args[1:]); err != nil {
+		slog.Error("peershd exiting on error", "err", err)
+		os.Exit(1)
+	}
+}
+
+// runWithCtx is the body of the original main(). It is called both by
+// the interactive entry point (with ctx == nil; signal.NotifyContext
+// produces its own) and by the Windows Service program.Start handler
+// (with a context that the SCM cancels at Stop time).
+func runWithCtx(serviceCtx context.Context, args []string) error {
+	fs := flag.NewFlagSet("peershd", flag.ExitOnError)
+	listen := fs.String("listen", ":7777", "UDP address to listen on for QUIC")
+	certDir := fs.String("cert-dir", "", "directory for self-signed dev cert (default: platform-specific app data dir)")
+	debug := fs.Bool("debug", false, "enable debug logging")
+	signalingURL := fs.String("signaling", "", "signaling server URL (ws:// or wss://); empty disables signaling")
+	userID := fs.String("user", "", "user_id under which to register (signaling mode)")
+	pskFile := fs.String("psk-file", "", "path to a file containing a hex-encoded PSK (signaling mode)")
+	displayName := fs.String("display-name", "", "display name to register (defaults to hostname)")
+	stunServer := fs.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	level := slog.LevelInfo
 	if *debug {
@@ -69,10 +104,7 @@ func main() {
 		*certDir = defaultCertDir()
 	}
 
-	if err := run(*listen, *certDir, *signalingURL, *userID, *pskFile, *displayName, *stunServer); err != nil {
-		slog.Error("peershd exiting on error", "err", err)
-		os.Exit(1)
-	}
+	return run(serviceCtx, *listen, *certDir, *signalingURL, *userID, *pskFile, *displayName, *stunServer)
 }
 
 func defaultCertDir() string {
@@ -90,8 +122,18 @@ func defaultCertDir() string {
 	return filepath.Join(".", "peersh-dev")
 }
 
-func run(listen, certDir, signalingURL, userID, pskFile, displayName, stunServer string) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+func run(serviceCtx context.Context, listen, certDir, signalingURL, userID, pskFile, displayName, stunServer string) error {
+	var ctx context.Context
+	var stop func()
+	if serviceCtx != nil {
+		// Running under SCM: the parent owns the cancellation. Wrap it
+		// so we can still observe the OS signals interactively, but
+		// SCM Stop is the primary trigger.
+		ctx = serviceCtx
+		stop = func() {}
+	} else {
+		ctx, stop = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	}
 	defer stop()
 
 	cert, err := devtls.LoadOrGenerate(certDir)

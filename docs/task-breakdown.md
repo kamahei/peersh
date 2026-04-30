@@ -223,4 +223,21 @@ Phase 6b anchor points:
 
 ## Phase 7 — Polish, Public Release, and Beyond
 
-Phase 7 scope is deliberately loose. Plan it when we get there.
+> **Status: in progress.** Phase 7 ships incrementally; items land as they become tractable from the current dev environment. Done so far:
+>
+> - peershd Windows Service registration via `kardianos/service` (`-install`, `-uninstall`, `-start`, `-stop`, `-service-status`).
+> - peershd Windows Scheduled-Task (logon-time) registration via `schtasks.exe` (`-install-logon-task`, `-uninstall-logon-task`, `-logon-task-user <name>`). The two installation modes are independent: pick service for SYSTEM-context background operation, or logon-task to run as the user who logged in.
+> - Prometheus `/metrics` endpoint on `peersh-signaling` (counters for upgrade / register / connect; gauge for active connections).
+> - `SECURITY.md` (responsible disclosure path, in-scope / out-of-scope, trust-model snapshot).
+> - `CONTRIBUTING.md` (build commands, conventions, cross-phase invariants).
+> - `server/deploy/render.yaml` and `server/deploy/fly.toml` for one-click self-hosting deploys.
+>
+> Phase 7 work that remains and is not yet tractable from this remote-only Windows dev box:
+>
+> - MSI installer (WiX or similar) and per-user upgrade flow.
+> - Auto-update for the Windows binaries.
+> - Play Store / App Store / F-Droid metadata + signing pipelines.
+> - OIDC / Postgres backends if community demand emerges.
+> - Logo / website / docs site.
+> - xterm.dart full ANSI rendering on the Flutter terminal screen.
+> - Spawn-pwsh-as-active-user for service mode (WTSQueryUserToken + CreateProcessAsUser). Currently the logon-task path covers the same use case more simply.

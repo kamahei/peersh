@@ -1,0 +1,32 @@
+# Render.com Blueprint for peersh-signaling.
+#
+# Usage:
+#   1. Push this repo to GitHub.
+#   2. In Render: New → Blueprint → point at the repo root.
+#   3. Set the secret PEERSH_SIGNALING_TLS_CERT / TLS_KEY (or rely on
+#      Render's TLS termination — recommended for Render Web Services).
+#
+# This template runs the signaling server with an attached persistent
+# disk for the SQLite database.
+
+services:
+  - type: web
+    name: peersh-signaling
+    runtime: docker
+    region: oregon
+    plan: starter
+    autoDeploy: true
+    dockerfilePath: ./server/deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    disk:
+      name: peersh-signaling-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PEERSH_SIGNALING_LISTEN
+        value: ":10000"  # Render expects PORT-style listening
+      - key: PEERSH_SIGNALING_DB
+        value: "/data/peersh-signaling.db"
+      - key: PEERSH_SIGNALING_LOG_LEVEL
+        value: "info"

@@ -51,6 +51,10 @@ type Server struct {
 	UserLimit   *ratelimit.Bucket // per user_id at Register
 	DeviceLimit *ratelimit.Bucket // per device_id at Connect
 	Logger      *slog.Logger
+
+	// Metrics is optional. Nil disables collection (the helper methods
+	// on *Metrics are nil-safe).
+	Metrics *Metrics
 }
 
 // CredentialsBuilder extracts auth.Credentials from a signaling Register
@@ -183,14 +187,17 @@ func (c *Connection) run(ctx context.Context) {
 			c.log.Info("ws: connection closed", "user", c.userID, "device", c.deviceID)
 		}
 		_ = c.ws.Close(websocket.StatusNormalClosure, "")
+		c.server.Metrics.observeConnectionClosed()
 	}()
 
 	if err := c.handshake(ctx); err != nil {
 		c.log.Info("ws: handshake failed", "err", err)
 		_ = c.sendServerError(ctx, "handshake_failed", err.Error())
+		c.server.Metrics.observeRegisterRejected("handshake_failed")
 		return
 	}
 	c.registered = true
+	c.server.Metrics.observeRegisterAccepted()
 	if prev := c.server.Registry.Register(c); prev != nil {
 		c.log.Info("ws: replaced previous registration", "user", c.userID, "device", c.deviceID)
 		_ = prev.Send(ctx, &signalv1.Frame{Body: &signalv1.Frame_ServerError{
@@ -311,12 +318,16 @@ func (c *Connection) dispatch(ctx context.Context, f *signalv1.Frame) error {
 	switch body := f.GetBody().(type) {
 	case *signalv1.Frame_Connect:
 		if !c.server.DeviceLimit.Allow(c.deviceID) {
+			c.server.Metrics.observeConnectRejected("rate_limit")
 			return fmt.Errorf("device rate limit")
 		}
 		if err := c.server.Registry.Forward(ctx, c, body.Connect); err != nil {
-			_ = c.sendServerError(ctx, classifyForwardErr(err), err.Error())
+			reason := classifyForwardErr(err)
+			c.server.Metrics.observeConnectRejected(reason)
+			_ = c.sendServerError(ctx, reason, err.Error())
 			return nil // don't tear down on a forwarding miss
 		}
+		c.server.Metrics.observeConnectForwarded()
 		return nil
 	case *signalv1.Frame_ClientHello, *signalv1.Frame_Register:
 		return fmt.Errorf("unexpected re-handshake frame after registration")
