@@ -119,6 +119,37 @@ Environment-variable overrides (`PEERSH_SIGNALING_*`):
 | `PEERSH_SIGNALING_NONCE_WINDOW` | `clock.nonce_window` |
 | `PEERSH_SIGNALING_IP_PER_MINUTE` | `rate_limit.ip_per_minute` |
 
+## Metrics (Phase 7)
+
+`peersh-signaling` exposes Prometheus metrics at `/metrics`:
+
+- `peersh_ws_upgrade_accepted_total` — successful WebSocket upgrades.
+- `peersh_ws_upgrade_rejected_total{reason}` — pre-upgrade rejections.
+- `peersh_ws_register_accepted_total` — successful Register frames.
+- `peersh_ws_register_rejected_total{reason}` — Register failures.
+- `peersh_ws_connect_forwarded_total` — Connect frames the registry routed.
+- `peersh_ws_connect_rejected_total{reason}` — Connect routing rejections.
+- `peersh_ws_active_connections` — gauge of currently-registered WebSocket connections.
+
+Plus the standard Go runtime / process metrics from `prometheus/client_golang`. Scrape it like any Prometheus target.
+
+## Windows host service / logon task (Phase 7)
+
+`peershd` runs in three modes:
+
+```sh
+peershd                                  # interactive (default)
+peershd -install                          # register as a Windows Service (SYSTEM context)
+peershd -uninstall
+peershd -start | -stop | -service-status
+
+peershd -install-logon-task               # register as a Scheduled Task at user logon (current user)
+peershd -install-logon-task -logon-task-user "DOMAIN\\Alice"
+peershd -uninstall-logon-task
+```
+
+Service mode runs `peershd` as the Windows SYSTEM account; the spawned PowerShell session inherits that context. Logon-task mode runs `peershd` as the user who logged in, and the PowerShell session inherits that user — typically the right choice for personal desktops where `peershd` should "follow the user". Pick whichever matches your security model.
+
 ## PSK lifecycle commands
 
 ```sh

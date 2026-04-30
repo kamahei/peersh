@@ -27,7 +27,7 @@ The seven planned phases are:
 4. Flutter mobile app + `gomobile` integration — **Android done; iOS xcframework + real-device run deferred**
 5. Firebase Auth + FCM wake-up (official hosted path) — **server-side done; mobile FlutterFire deferred (5b)**
 6. Background persistence + session resumption — **server-side reattach done; ring-buffer replay + Foreground Service + iOS BG Modes deferred (6b)**
-7. Polish, public release, and beyond
+7. Polish, public release, and beyond — **incremental: Windows Service + Logon Task install, Prometheus /metrics, SECURITY/CONTRIBUTING, Render/Fly deploy templates done; MSI / store submission / OIDC / logo / xterm.dart deferred**
 
 Each phase is a separate work session. AI agents working in this repository default to Plan Mode at the start of each phase — see `AGENTS.md` and `docs/ai-implementation-guide.md`.
 
