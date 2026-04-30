@@ -1,0 +1,49 @@
+# peersh-signaling configuration. Copy to /etc/peersh/signaling.toml and edit.
+#
+# Precedence (lowest to highest):
+#   1. compiled-in defaults
+#   2. this file
+#   3. PEERSH_SIGNALING_* environment variables
+
+# UDP/TCP listen address. Plain :8443 means listen on all interfaces on
+# port 8443. Override with PEERSH_SIGNALING_LISTEN.
+listen_addr = ":8443"
+
+# SQLite database file. Created on first run. Inside the Docker image this
+# defaults to /data/peersh-signaling.db so the named volume retains state.
+db_path = "peersh-signaling.db"
+
+# Free-form server identifier reported in ServerHello.
+server_id = "peersh-signaling/0.1"
+
+# Logging. One of: debug, info, warn, error.
+log_level = "info"
+
+[tls]
+# Production: provide a real certificate pair. Operators using a reverse
+# proxy for TLS termination can leave both empty and pass -insecure-http
+# to the binary.
+cert_file = ""
+key_file = ""
+
+[clock]
+# How far signed_at_unix may be from server time before a request is
+# rejected. Compensates for client/server clock drift.
+skew = "60s"
+
+# How long a (user_id, nonce) pair must remain unique. Five minutes is
+# generous; lower if memory pressure becomes a concern.
+nonce_window = "5m"
+
+[rate_limit]
+# Per-source-IP at HTTP upgrade.
+ip_per_minute = 10
+ip_burst = 3
+
+# Per user_id at Register.
+user_per_minute = 10
+user_burst = 3
+
+# Per device_id at Connect.
+device_per_minute = 30
+device_burst = 5

@@ -1,0 +1,17 @@
+# Keep the build context small.
+.git
+.idea
+.vscode
+bin
+dist
+**/*.exe
+**/*.test
+**/*.out
+**/*.db
+**/*.db-shm
+**/*.db-wal
+docs
+proto
+scripts
+**/dev-cert/
+**/dev-cert-*/

@@ -1,0 +1,29 @@
+# peersh-signaling — single-service self-host stack.
+#
+# Quick start (development, plain HTTP):
+#   docker compose up -d
+#   docker compose exec signaling peersh-signaling psk add --user alice
+#
+# Production: terminate TLS at a reverse proxy (Caddy, Traefik, nginx) and
+# point the proxy at this service over the internal docker network.
+
+services:
+  signaling:
+    build:
+      context: ../..
+      dockerfile: server/deploy/Dockerfile
+    image: peersh/peersh-signaling:0.1
+    container_name: peersh-signaling
+    restart: unless-stopped
+    ports:
+      # Plain-HTTP signaling. Front this with TLS in production.
+      - "8443:8443"
+    volumes:
+      - signaling-data:/data
+      - ./signaling.example.toml:/etc/peersh/signaling.toml:ro
+    environment:
+      # Override or extend via env. The DB path is set by the Dockerfile.
+      PEERSH_SIGNALING_LOG_LEVEL: info
+
+volumes:
+  signaling-data:
