@@ -20,3 +20,13 @@ Thumbs.db
 # peersh dev artifacts
 dev-cert.pem
 dev-key.pem
+
+# Mobile build artifacts (rebuilt from mobile-core/ via scripts/build-mobile-core.sh)
+app/android/app/libs/peersh.aar
+app/ios/Frameworks/peersh.xcframework/
+
+# Flutter build outputs (auto-managed; the project keeps its own .gitignore as well)
+app/build/
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
