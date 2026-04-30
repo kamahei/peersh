@@ -115,6 +115,7 @@ Represents a `(user_id, secret_key)` pair for the `psk` auth provider.
   - Distributed out-of-band to the user.
   - Revoked by the operator when needed.
 - **Storage scope.** Lives only in stores that have a real backing for the `psk` provider — typically SQLite for self-hosting. Not present in `memory` (or only ephemerally for tests) and not used in Firebase mode.
+- **Storage shape (Phase 2 resolution).** The `secret` is stored as **raw bytes**, not as a hash. HMAC-SHA256 verification needs the secret server-side, so a hash-only scheme cannot work. Trade-off: a server breach exposes every PSK directly. Mitigation: host the SQLite file on disk-encrypted storage; see `docs/self-hosting.md`. Future SCRAM-SHA-256 derivation is possible if there is real demand.
 
 ## Per-backend mapping
 

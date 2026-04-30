@@ -6,19 +6,15 @@ The **default assumption** for each item — when one exists — is what impleme
 
 ## Per-phase open questions
 
-### Phase 2 (Signaling Server with PSK Auth)
+### Phase 2 (Signaling Server with PSK Auth) — resolved
 
-- **Pairing UX.** How does a mobile device get registered against a Windows device under the same `user_id`?
-  - *Default assumption.* QR code flow: the Windows host displays a QR encoding a short-lived pairing token; the mobile device scans it and exchanges the token via the signaling server.
-  - *Alternatives.* Plain text token (paste/type), OOB-shared code, account-based association in Firebase mode.
-- **`user_id` semantics in PSK mode.** What does a `user_id` actually look like? Server-assigned UUID? Operator-chosen string? Email-like?
-  - *Default assumption.* Operator-chosen string at PSK creation time, validated as a non-empty ASCII identifier. Stored as-is in `users` table.
-- **PSK generation and distribution.** How are PSKs generated and how does the operator hand the secret to the user safely?
-  - *Default assumption.* The signaling server CLI generates a high-entropy random PSK and prints it once to stdout. The operator copies it out of band. The server stores only a hash. (The brief implies storing the secret directly; whether to store the secret or its hash is itself open — see security implications.)
-- **WebSocket lifetime.** Does the signaling server keep the WebSocket open after handshake, or close it once endpoints are exchanged?
-  - *Default assumption.* Keep it open for the duration of an active session-setup, close after a short idle window. This avoids reconnect overhead on quick re-attempts but doesn't park idle connections forever. Revisit when Phase 5's FCM wake-up adds new constraints.
-- **Whether to store the PSK secret directly or only its hash.** Trades off recoverability (operator forgot, can re-display) against compromise blast radius (server breach exposes all secrets).
-  - *Default assumption.* Store only the hash; if the operator loses the PSK, regenerate.
+All Phase 2 open questions were resolved during Phase 2 planning. Resolutions live in:
+
+- **Pairing UX → implicit (Phase 2)** — devices that share a PSK `user_id` are automatically paired; explicit token / QR comes with the mobile app in Phase 4. See `docs/product-spec.md` and `docs/self-hosting.md`.
+- **`user_id` semantics → operator-chosen string** at PSK creation time. See `docs/data-model.md` (User entity) and `docs/self-hosting.md`.
+- **PSK generation / distribution → server CLI generates 32-byte random PSK, prints once, raw secret stored.** See `docs/self-hosting.md` and `server/admin`.
+- **WebSocket lifetime → kept open while a session-setup is active.** Closed when the client disconnects.
+- **PSK storage shape → raw bytes.** HMAC verification needs the secret; hash-only is structurally impossible. Trade-off (server-breach exposes PSKs) is documented in `docs/self-hosting.md` with disk-encryption recommendation.
 
 ### Phase 3 (NAT Hole Punching)
 

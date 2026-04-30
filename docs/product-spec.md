@@ -10,7 +10,7 @@ The product, taken across all phases, delivers the following capabilities:
 2. **Direct peer-to-peer transport.** All command and output traffic flows directly between the mobile device and the Windows PC over a QUIC connection authenticated with mTLS. No third party can read it in transit.
 3. **Signaling-coordinated rendezvous.** A signaling server is used only for connection setup: registering devices, exchanging endpoint candidates, optionally waking the Windows host via push notification. Signaling never sees command content.
 4. **Dual deployment mode.** The user can either (a) use the official hosted signaling server backed by Firebase, or (b) run their own signaling server (single binary or Docker) and configure the mobile app to point at it.
-5. **Pluggable authentication.** The signaling server can be configured to use one of three auth providers: `none` (development / LAN), `psk` (HMAC-based pre-shared key, recommended for personal self-hosting), or `firebase` (Firebase Auth ID tokens, used by the official hosted option).
+5. **Pluggable authentication.** The signaling server can be configured to use one of three auth providers: `none` (development / LAN), `psk` (HMAC-based pre-shared key, recommended for personal self-hosting), or `firebase` (Firebase Auth ID tokens, used by the official hosted option). Phase 2 ships `none` and `psk`; `firebase` arrives in Phase 5.
 6. **Pluggable storage.** The signaling server can be configured to back its state with one of three stores: in-memory (dev / ephemeral), SQLite (recommended self-hosting default), or Firestore (official hosted option).
 7. **Multiple servers per app.** The mobile app supports adding multiple signaling servers and switching between them. A user can be on the official hosted server and on a self-hosted server simultaneously.
 8. **Session continuity.** When a client disconnects (network drop, app backgrounded, deliberate close), the Windows-side `pwsh` process is kept alive within an idle timeout. A reconnecting client presents a `session_id` and is reattached to the same shell, with cwd and variables intact, plus a ring buffer of output emitted while disconnected.
@@ -25,7 +25,7 @@ The product, taken across all phases, delivers the following capabilities:
 2. They `docker run` (or run the binary directly) `peersh-signaling` with a TOML/YAML config selecting the `psk` auth provider and `sqlite` store.
 3. They generate a pre-shared key on the server side and capture a `(user_id, secret)` pair.
 4. On their Windows PC, they install and run `peershd`, configured to point at their signaling server's URL with their PSK credentials.
-5. On their phone, they open the peersh app, add a server entry pointing at their signaling server, and pair via QR code or token (exact UX TBD; see `open-questions.md`).
+5. On their phone, they open the peersh app, add a server entry pointing at their signaling server, and pair via QR code or token (mobile UX arrives in Phase 4; in the meantime the CLI is the only client and uses **implicit pairing** — any two devices that authenticate under the same PSK `user_id` are automatically paired).
 6. The app shows their Windows device in the device list. Tapping it opens a session screen. They run a command. Output streams back.
 
 ### Casual user setup (official hosted)

@@ -17,12 +17,12 @@ The mobile app supports adding multiple signaling servers and switching between 
 
 ## Status
 
-**Phase 1 (Same-LAN PoC) is complete.** A Windows host (`peershd`) and a CLI client (`peersh-cli`) can talk to each other over QUIC on the same LAN, exchanging Hello messages and running real PowerShell commands. No auth, no signaling, no NAT — direct IP only. See "Build and verify Phase 1" below.
+**Phases 1 and 2 are complete.** The Phase 1 same-LAN PoC ships `peershd` and `peersh-cli` talking directly over QUIC. Phase 2 adds the signaling server (`peersh-signaling`) with HMAC-SHA256 PSK authentication, a SQLite store, per-IP / per-user / per-device rate limiting, and Docker / docker-compose deployment — see `docs/self-hosting.md`. Two machines on different networks (cooperative endpoints; real NAT traversal is Phase 3) can now find each other through the signaling server and run PowerShell sessions.
 
 The seven planned phases are:
 
 1. Same-LAN PoC (Go service + CLI client over LAN) — **done**
-2. Signaling server with PSK auth (self-host path)
+2. Signaling server with PSK auth (self-host path) — **done**
 3. NAT hole punching (P2P across home networks / mobile data)
 4. Flutter mobile app + `gomobile` integration
 5. Firebase Auth + FCM wake-up (official hosted path)
@@ -106,12 +106,13 @@ Project documentation lives under `docs/`:
 
 - `docs/project-overview.md` — vision, users, goals, non-goals, design principles, environment.
 - `docs/product-spec.md` — capabilities, user journeys, NFRs, explicit out-of-scope.
-- `docs/architecture.md` — components, transport, NAT strategy, pluggable interfaces, protocol versioning, repository layout.
+- `docs/architecture.md` — components, transport, NAT strategy, signaling protocol, pluggable interfaces, protocol versioning, repository layout.
 - `docs/data-model.md` — durable entities (Device, User, Pairing, Session, PSKRecord) and per-backend mappings.
 - `docs/implementation-plan.md` — the seven-phase roadmap.
-- `docs/task-breakdown.md` — Phase 1 broken down into bounded tasks; later phases referenced.
+- `docs/task-breakdown.md` — Phase 1 / 2 task decompositions (shipped); later phases referenced.
 - `docs/acceptance-criteria.md` — cross-phase invariants and per-phase done criteria.
 - `docs/open-questions.md` — what is not yet decided, with current default assumptions.
+- `docs/self-hosting.md` — running your own `peersh-signaling` (Phase 2).
 - `docs/ai-implementation-guide.md` — operating manual for AI agents working in this repo.
 - `docs/glossary.md` — terms used across the docs and code.
 

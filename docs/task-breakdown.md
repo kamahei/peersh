@@ -85,16 +85,28 @@ The goal is the smallest end-to-end thing that works: `peersh-cli` on one machin
 
 ## Phase 2 — Signaling Server with PSK Auth
 
-Decompose into bounded tasks at the start of Phase 2 planning. Anchor points (subject to Phase 2 plan):
+> **Status: shipped.** Phase 2 landed the `server/` Go module (`peersh-signaling` binary with `serve` + `psk {add,list,revoke}` subcommands), the `core/auth/psk` HMAC-SHA256 provider with replay protection, the `core/store/sqlite` modernc-backed store with embedded migrations, the `core/signaling` WebSocket client, the protobuf-binary signaling channel under `proto/peersh/signal/v1/`, per-IP / per-user / per-device rate limiting, TOML + env-var configuration, and Dockerfile + docker-compose.yml + `docs/self-hosting.md` for self-hosting. Pairing is **implicit under shared PSK user_id**; explicit token / QR pairing arrives with the mobile app in Phase 4.
 
-- WebSocket signaling server skeleton (`server/cmd/peersh-signaling/`, `server/ws/`).
-- `core/auth/psk/`: HMAC-SHA256 provider and request signing helpers.
-- `core/store/sqlite/`: SQLite store with embedded migrations.
-- `core/signaling/`: client-side signaling library used by both `peershd` and `peersh-cli`.
-- Pairing flow (UX choice TBD; see `open-questions.md`).
-- Endpoint exchange protocol on the signaling channel.
-- Rate limiting basics.
-- Dockerfile, `docker-compose.yml`, `docs/self-hosting.md`.
+The bounded tasks Phase 2 was decomposed into were P2-T01 through P2-T18:
+
+- T01: server/ module skeleton.
+- T02: signaling protobuf (`peersh.signal.v1`).
+- T03: core/store interface extensions (User, PSKRecord, Pairing).
+- T04: core/store/sqlite (modernc.org/sqlite).
+- T05: core/auth/psk + nonce cache + Sign/Verify helpers.
+- T06: core/signaling client library.
+- T07: server/ws upgrade + Hello/Register state machine.
+- T08: server/room registry + Connect routing.
+- T09: server/ratelimit token bucket.
+- T10: server/config TOML loader + env overrides.
+- T11: server/admin PSK CRUD + `psk` subcommands.
+- T12: server/cmd/peersh-signaling main binary with `serve`.
+- T13: peershd signaling integration.
+- T14: peersh-cli signaling integration.
+- T15: end-to-end integration test.
+- T16: Dockerfile + docker-compose.yml + signaling.example.toml.
+- T17: docs/self-hosting.md.
+- T18: doc reconciliation.
 
 ## Phase 3 — NAT Hole Punching
 

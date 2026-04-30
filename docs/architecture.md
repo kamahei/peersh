@@ -111,8 +111,21 @@ This contract goes public the moment Phase 1 ships. Plan changes carefully.
 ## Wire formats
 
 - **Protobuf** for all messages on the wire (`google.golang.org/protobuf`). The `proto/` directory is the single source of truth for message definitions; generated Go lives under `core/protocol/`.
-- **WebSocket** carries protobuf-encoded signaling messages between clients and the signaling server.
-- **QUIC streams** carry protobuf-encoded application messages (`ClientHello`, `ServerHello`, `ExecRequest`, `ExecResponse`, more in later phases) between clients and `peershd`.
+- **WebSocket** carries protobuf-encoded signaling messages between clients and the signaling server. Each WebSocket binary frame is exactly one marshaled `peersh.signal.v1.Frame` (no length prefix; the WebSocket framing is the message boundary).
+- **QUIC streams** carry length-prefixed protobuf application messages (`ClientHello`, `ServerHello`, `ExecRequest`, `ExecResponse`, more in later phases) between clients and `peershd`. Length prefix is a varint (see `core/wire`).
+
+## Signaling protocol
+
+The signaling channel runs on WebSocket and is connection-setup-only — it never carries command bytes. The server forwards `Connect` messages between paired devices and otherwise stays out of the data path.
+
+Per-connection state machine:
+
+1. **`ClientHello` → `ServerHello`** — version + capabilities negotiation. `protocol_version = 1` is locked.
+2. **`Register` → `RegisterAck`** — PSK-signed identity assertion. The server verifies the HMAC-SHA256 signature against `core/auth/psk` and records (or refreshes) the device under the authenticated user_id.
+3. **`Connect` (in either direction)** — the initiator sends `Connect{target_device_id, candidates}`; the server fills `from_device_id` (clients cannot spoof it) and forwards to the target if and only if the target is registered under the same user_id. Cross-user routing is rejected with a `ServerError` carrying `target_unknown` (the target is invisible to the sender's lookup) or `cross_user_forbidden`.
+4. **`ServerError`** — anything that went wrong; close semantics depend on the code.
+
+The full schema is in `proto/peersh/signal/v1/`. Implementation lives in `server/ws` (server side) and `core/signaling` (client library used by both `peershd` and `peersh-cli`).
 
 ## Threat model summary
 
