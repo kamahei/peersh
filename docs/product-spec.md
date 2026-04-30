@@ -16,6 +16,7 @@ The product, taken across all phases, delivers the following capabilities:
 8. **Session continuity.** When a client disconnects (network drop, app backgrounded, deliberate close), the Windows-side `pwsh` process is kept alive within an idle timeout. A reconnecting client presents a `session_id` and is reattached to the same shell, with cwd and variables intact, plus a ring buffer of output emitted while disconnected.
 9. **Best-effort background persistence on mobile.** When backgrounded by the user, the mobile app holds the connection open within OS constraints (Foreground Service on Android; Background Modes on iOS).
 10. **Graceful failure when traversal is impossible.** If both peers are behind NATs that cannot be punched (e.g. symmetric CGNAT on both ends), the user sees a clear error indicating the network is incompatible, not a silent retry loop or a fallback to relayed traffic.
+11. **Mobile terminal ergonomics for IME-heavy languages.** The terminal screen offers a user-toggleable wrap-vs-horizontal-scroll mode, an IME input bottom sheet (multiline TextField + Append Enter toggle + Send button) for languages whose IMEs do not behave well in the terminal cell grid, and a built-in simple text viewer (search + match navigation + optional syntax highlighting + copy-all + encoding/size meta) for inspecting files on the remote host without leaving the app. These ship in Phase 4b alongside the real terminal/session UI.
 
 ## User journeys
 

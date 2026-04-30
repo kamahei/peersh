@@ -149,6 +149,10 @@ To start the next session: real UI screens (pairing, server list, device list, t
 - Discovery client that hits `/.well-known/peersh.json` from a hostname.
 - EventChannel for streaming ExecResponse chunks (replaces the synchronous Echo on the spike screen).
 - Pairing UX implementation (token / QR code, per `open-questions.md` — the Phase 4b plan resolves this).
+- **peersh-parity terminal ergonomics** (required, not stretch). Reference `peersh/mobile/lib/terminal/` and `peersh/mobile/lib/screens/terminal_workspace.dart` for known-good shapes:
+  - Wrap-vs-scroll toggle on the terminal screen. Wrap mode lets xterm autoresize to viewport; scroll mode pins the terminal at 120 columns inside a horizontal `SingleChildScrollView`. PowerShell remote PTY is widened to ≥ 120 columns when wrap is active so output formatting stays sane (`remoteColsFor` pattern).
+  - IME input bottom sheet. A floating button on the terminal screen opens a modal bottom sheet with a multiline `TextField` (`TextInputType.multiline`, `TextInputAction.newline`), an "append Enter" toggle, and a Send button. On send, normalize line endings (`\r\n`/`\n` → `\r`) and forward to the terminal as input.
+  - Built-in simple text viewer screen. Takes a remote-host file path, fetches content via `Get-Content -Raw -Encoding UTF8 <path>` over the existing exec stream (no protocol change), and renders it with: search field with next/previous navigation and match counter, optional syntax highlighting toggle, copy-all action, encoding + size meta in the header.
 
 ## Phase 5 — Firebase Auth + FCM Wake-up
 
