@@ -1,8 +1,12 @@
-# Self-Hosting peersh
+# Self-Hosting peersh — Operations Guide
 
-This guide walks you through running your own peersh signaling server. Self-hosting requires nothing beyond a small Linux VPS (or any host that can run Docker), a `peersh-signaling` binary, and out-of-band delivery of a pre-shared key (PSK) to the user accounts you create.
+This guide covers the **target-agnostic operational knowledge**: TLS, PSK lifecycle, configuration reference, metrics, security notes, and troubleshooting. For platform-specific deploy walkthroughs see:
 
-The signaling server is **only used for connection setup** — pairing devices and exchanging endpoint candidates. Actual PowerShell sessions flow peer-to-peer over QUIC and never touch the server. See `architecture.md` for the full data-flow.
+- [`cloud-run.md`](cloud-run.md) — GCP Cloud Run (pay-per-use, free tier covers personal use)
+- [`render-com.md`](render-com.md) — Render.com Blueprint (zero config, $7/mo Starter for persistence)
+- [`firebase.md`](firebase.md) — Phase 5 Firestore + Cloud Functions backend
+
+The signaling server is **only used for connection setup** — pairing devices and exchanging endpoint candidates. Actual PowerShell sessions flow peer-to-peer over QUIC and never touch the server. See `../design/architecture.md` for the full data-flow.
 
 ## Prerequisites
 
@@ -11,119 +15,6 @@ The signaling server is **only used for connection setup** — pairing devices a
   - **Docker / Docker Compose** — the recommended path; uses the published image.
   - **Go 1.22+** — if you prefer to build the binary directly.
 - A reverse proxy if you want browser-friendly TLS termination (Caddy / Traefik / nginx). Optional in development; recommended in production.
-
-## Quick start (Google Cloud Run — recommended for no-fixed-fee hosting)
-
-Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 360 000 GiB-seconds memory, 180 000 vCPU-seconds) covers personal use; cold-start spin-down means you pay $0 when nobody is connecting.
-
-**Trade-off**: Cloud Run's filesystem is `tmpfs`, so the SQLite DB is wiped on every cold start. `peersh-signaling` works around this with **bootstrap PSKs** — you set the PSK as an env var, and the container re-creates the record on every startup.
-
-### Steps
-
-1. **Install gcloud CLI** if you haven't: <https://cloud.google.com/sdk/docs/install>
-2. **Authenticate**: `gcloud auth login`
-3. **Create or pick a GCP project** with billing enabled:
-
-   ```sh
-   gcloud projects create peersh-signaling-<your-suffix>      # or skip if you have one
-   gcloud config set project peersh-signaling-<your-suffix>
-   ```
-4. **Run the deploy script** (from the repo root):
-
-   ```sh
-   PROJECT_ID=$(gcloud config get-value project) REGION=asia-northeast1 \
-     server/deploy/cloud-run/deploy.sh
-   ```
-
-   The script enables required APIs, creates an Artifact Registry repo, builds the Docker image, and deploys to Cloud Run. Output ends with the assigned `https://...run.app` URL plus the next-step commands.
-
-5. **Generate a PSK locally** (any 32-byte hex value works):
-
-   ```sh
-   # On Windows PowerShell
-   [Convert]::ToHexString((1..32 | %{[byte](Get-Random -Max 256)}))
-   # Or via openssl on any Unix
-   openssl rand -hex 32
-   ```
-
-6. **Wire the PSK + discovery URL into the running service**:
-
-   ```sh
-   gcloud run services update peersh-signaling \
-     --region=asia-northeast1 \
-     --update-env-vars=PEERSH_SIGNALING_DISCOVERY_WS_URL=wss://<host>/ws,\
-   PEERSH_SIGNALING_BOOTSTRAP_PSK=alice:<hex>:alice-laptop
-   ```
-
-   Replace `<host>` with the `*.run.app` host name from step 4 and `<hex>` with the secret from step 5.
-
-7. **Verify**:
-
-   ```sh
-   curl https://<host>/healthz                       # → ok
-   curl https://<host>/.well-known/peersh.json       # → JSON with the WS URL
-   ```
-
-8. **Connect from peershd** on your Windows host:
-
-   ```sh
-   echo <hex> > alice.psk
-   peershd -signaling wss://<host>/ws -user alice -psk-file alice.psk
-   ```
-
-   `peershd` logs its `device_id` at startup. Use that as `-target` from `peersh-cli` or the mobile app's server entry.
-
-### Migrating to Phase 5 (Firestore + Firebase Auth) later
-
-The same Cloud Run service can be flipped to Firebase mode by updating env vars (no rebuild required):
-
-```sh
-gcloud run services update peersh-signaling \
-  --region=asia-northeast1 \
-  --update-env-vars=PEERSH_SIGNALING_AUTH_PROVIDER=firebase,\
-PEERSH_SIGNALING_STORE_BACKEND=firestore,\
-PEERSH_SIGNALING_FIREBASE_PROJECT_ID=<your-firebase-project-id>
-```
-
-The bootstrap-PSK env var becomes a no-op in Firebase mode. See `docs/firebase-setup.md` for the full Phase 5 walkthrough.
-
-## Quick start (Render.com — recommended for first-time personal hosting)
-
-Render reads `server/deploy/render.yaml` as a Blueprint. The same Docker image is used everywhere; Render just drives the build.
-
-1. **Push the repo to GitHub** (or your own fork).
-2. **In Render**: New → Blueprint → connect your GitHub account → pick the peersh repo. Render reads `server/deploy/render.yaml` and creates a Web Service plus a 1 GB persistent disk. Wait for the build to finish (5–10 min on first run).
-3. After the first deploy, copy the assigned hostname (e.g. `peersh-signaling-xxxx.onrender.com`) and set:
-
-   - `PEERSH_SIGNALING_DISCOVERY_WS_URL` = `wss://peersh-signaling-xxxx.onrender.com/ws`
-
-   Save → Render redeploys.
-
-4. **Open the Render Shell** for the service and create a PSK:
-
-   ```sh
-   peersh-signaling psk add --user alice --label alice-laptop
-   ```
-
-   The shell prints the secret once. Copy it; it cannot be re-displayed.
-
-5. On your Windows host:
-
-   ```sh
-   echo <secret-hex> > alice.psk
-   peershd -signaling wss://peersh-signaling-xxxx.onrender.com/ws \
-           -user alice -psk-file alice.psk
-   ```
-
-   `peershd` logs its `device_id` at startup. Copy it.
-
-6. From the mobile app or `peersh-cli` connect with the same `-user` + `-psk-file` plus `-target <peershd-device-id>`.
-
-Notes:
-
-- Render's `*.onrender.com` hostname provides automatic HTTPS. The `-insecure-http` flag the container passes is fine — TLS is terminated at Render's edge.
-- The **Starter plan** ($7/mo) is required for the persistent disk that keeps PSKs across restarts. On Free, PSKs reset every redeploy and the service spins down after 15 minutes idle.
-- Render injects `$PORT`; the binary honours it via env-var fallback so `PEERSH_SIGNALING_LISTEN` does not need to be set on Render.
 
 ## Quick start (Docker, plain HTTP — development only)
 
@@ -146,7 +37,7 @@ docker compose exec signaling peersh-signaling psk add --user alice --label alic
 #   secret: 7a3f5e9c…
 ```
 
-Save the `secret` line — it is the only time the raw PSK is displayed. Distribute it out of band (an encrypted message, a printed slip, a password manager) to the user.
+Save the `secret` line — it is the only time the raw PSK is displayed. Distribute it out of band (an encrypted message, a printed slip, a password manager).
 
 Once the user has the PSK, point peershd and peersh-cli at the signaling server:
 
@@ -179,11 +70,9 @@ Set up a systemd unit to run it persistently. Use a reverse proxy in front for T
 
 ## Production setup with TLS
 
-Two options:
+### Option A — terminate TLS at a reverse proxy (recommended)
 
-### Option A — terminate TLS at a reverse proxy
-
-Recommended. Run `peersh-signaling` on plain HTTP behind Caddy / Traefik / nginx, which handles certificate provisioning (Let's Encrypt) and renewal. Set `tls.cert_file` and `tls.key_file` to empty strings in the config and pass `-insecure-http` to the binary; only the proxy needs internet exposure.
+Run `peersh-signaling` on plain HTTP behind Caddy / Traefik / nginx, which handles certificate provisioning (Let's Encrypt) and renewal. Set `tls.cert_file` and `tls.key_file` to empty strings in the config and pass `-insecure-http` to the binary; only the proxy needs internet exposure.
 
 Caddy snippet:
 
@@ -191,6 +80,8 @@ Caddy snippet:
 signaling.example.com {
   reverse_proxy /ws localhost:8443
   reverse_proxy /healthz localhost:8443
+  reverse_proxy /metrics localhost:8443
+  reverse_proxy /.well-known/peersh.json localhost:8443
 }
 ```
 
@@ -213,17 +104,26 @@ Run `peersh-signaling serve -config /etc/peersh/signaling.toml` (drop `-insecure
 The full annotated config lives at `server/deploy/signaling.example.toml`. Key fields:
 
 - `listen_addr` — `host:port` for the HTTP/HTTPS listener. Default `:8443`.
-- `db_path` — SQLite file path. The Docker image defaults to `/data/peersh-signaling.db` so the named volume retains state. Override with `PEERSH_SIGNALING_DB`.
+- `auth_provider` — `psk` (default) or `firebase`.
+- `store_backend` — `sqlite` (default) or `firestore`.
+- `db_path` — SQLite file path. Defaults to `/data/peersh-signaling.db` inside the Docker image.
 - `tls.cert_file` / `tls.key_file` — path to PEM cert and key. Both empty → plain HTTP.
 - `clock.skew` — how far `signed_at_unix` on a Register may be from server time before rejection (default `60s`).
 - `clock.nonce_window` — how long `(user_id, nonce)` pairs are remembered for replay protection (default `5m`).
 - `rate_limit.*` — per-IP, per-user, per-device token-bucket settings.
+- `discovery.ws_url` — value returned by `/.well-known/peersh.json`.
+- `firebase.project_id` — required when `auth_provider = "firebase"` or `store_backend = "firestore"`.
 
-Environment-variable overrides (`PEERSH_SIGNALING_*`):
+### Environment-variable overrides
+
+Every TOML field has a matching `PEERSH_SIGNALING_*` env var. Env vars override the TOML file:
 
 | Variable | Overrides |
 |---|---|
+| `PORT` | listen port (when `PEERSH_SIGNALING_LISTEN` is unset; the platform-of-record convention used by Cloud Run / Render / Heroku / Fly) |
 | `PEERSH_SIGNALING_LISTEN` | `listen_addr` |
+| `PEERSH_SIGNALING_AUTH_PROVIDER` | `auth_provider` |
+| `PEERSH_SIGNALING_STORE_BACKEND` | `store_backend` |
 | `PEERSH_SIGNALING_DB` | `db_path` |
 | `PEERSH_SIGNALING_TLS_CERT` | `tls.cert_file` |
 | `PEERSH_SIGNALING_TLS_KEY` | `tls.key_file` |
@@ -231,6 +131,11 @@ Environment-variable overrides (`PEERSH_SIGNALING_*`):
 | `PEERSH_SIGNALING_CLOCK_SKEW` | `clock.skew` |
 | `PEERSH_SIGNALING_NONCE_WINDOW` | `clock.nonce_window` |
 | `PEERSH_SIGNALING_IP_PER_MINUTE` | `rate_limit.ip_per_minute` |
+| `PEERSH_SIGNALING_DISCOVERY_WS_URL` | `discovery.ws_url` |
+| `PEERSH_SIGNALING_DISCOVERY_STUN_SERVERS` | `discovery.stun_servers` (comma-separated) |
+| `PEERSH_SIGNALING_FIREBASE_PROJECT_ID` | `firebase.project_id` |
+| `PEERSH_SIGNALING_FIREBASE_CREDENTIALS` | `firebase.credentials_path` |
+| `PEERSH_SIGNALING_BOOTSTRAP_PSK` | seed PSKs at startup (`user:hex[:label],...`) |
 
 ## Metrics (Phase 7)
 
@@ -273,6 +178,8 @@ peersh-signaling psk revoke --user alice
 
 `add` refuses to overwrite an existing record for the same user_id; revoke first if you need to rotate. `revoke` leaves the row in place (so existing in-flight signed requests don't suddenly start failing on a "user not found" error during the skew window) — once revoked, the auth provider returns `psk: psk revoked`.
 
+For ephemeral filesystems (Cloud Run / Render Free), use the `PEERSH_SIGNALING_BOOTSTRAP_PSK` env var instead — see `cloud-run.md`.
+
 ## Security notes
 
 ### PSK secret storage
@@ -302,7 +209,7 @@ Phase 2 uses **implicit pairing**: any two devices that authenticate under the s
 
 ### Mobile-app discovery (Phase 4a)
 
-The signaling server serves `/.well-known/peersh.json` at its HTTPS root so that the mobile app (Phase 4b) can find the WebSocket endpoint, recommended STUN servers, and supported auth providers from a hostname alone. Operators populate the `[discovery]` section of `signaling.toml`:
+The signaling server serves `/.well-known/peersh.json` at its HTTPS root so that the mobile app (Phase 4b) can find the WebSocket endpoint, recommended STUN servers, and supported auth providers from a hostname alone. Operators populate the `[discovery]` section of `signaling.toml` (or set `PEERSH_SIGNALING_DISCOVERY_WS_URL` via env var):
 
 ```toml
 [discovery]
@@ -335,9 +242,3 @@ Once everything is running:
 | `signaling: register rejected by server: auth: psk: signed_at outside acceptable skew` | The client's clock is skewed by more than 60 seconds. Sync NTP. |
 | `room: target device is not registered` (returned as a `ServerError`) | The target device id is wrong, or `peershd` isn't currently connected to the signaling server. Check the host's logs. |
 | `Dial QUIC: ... no route to host` | The host's advertised candidates aren't reachable from the client's network. Phase 2 assumes cooperative endpoints (same LAN, port forward, or VPN); real NAT traversal arrives in Phase 3. |
-
-## What's next
-
-- Phase 3 will add real NAT hole-punching so two clients on different home networks can reach each other without manual port forwarding or a VPN.
-- Phase 4 introduces the mobile app and explicit pairing UX.
-- Phase 5 adds an officially hosted Firebase-backed option as an alternative to self-hosting.

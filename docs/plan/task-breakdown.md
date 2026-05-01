@@ -85,7 +85,7 @@ The goal is the smallest end-to-end thing that works: `peersh-cli` on one machin
 
 ## Phase 2 — Signaling Server with PSK Auth
 
-> **Status: shipped.** Phase 2 landed the `server/` Go module (`peersh-signaling` binary with `serve` + `psk {add,list,revoke}` subcommands), the `core/auth/psk` HMAC-SHA256 provider with replay protection, the `core/store/sqlite` modernc-backed store with embedded migrations, the `core/signaling` WebSocket client, the protobuf-binary signaling channel under `proto/peersh/signal/v1/`, per-IP / per-user / per-device rate limiting, TOML + env-var configuration, and Dockerfile + docker-compose.yml + `docs/self-hosting.md` for self-hosting. Pairing is **implicit under shared PSK user_id**; explicit token / QR pairing arrives with the mobile app in Phase 4.
+> **Status: shipped.** Phase 2 landed the `server/` Go module (`peersh-signaling` binary with `serve` + `psk {add,list,revoke}` subcommands), the `core/auth/psk` HMAC-SHA256 provider with replay protection, the `core/store/sqlite` modernc-backed store with embedded migrations, the `core/signaling` WebSocket client, the protobuf-binary signaling channel under `proto/peersh/signal/v1/`, per-IP / per-user / per-device rate limiting, TOML + env-var configuration, and Dockerfile + docker-compose.yml + `docs/deploy/self-hosting.md` for self-hosting. Pairing is **implicit under shared PSK user_id**; explicit token / QR pairing arrives with the mobile app in Phase 4.
 
 The bounded tasks Phase 2 was decomposed into were P2-T01 through P2-T18:
 
@@ -105,7 +105,7 @@ The bounded tasks Phase 2 was decomposed into were P2-T01 through P2-T18:
 - T14: peersh-cli signaling integration.
 - T15: end-to-end integration test.
 - T16: Dockerfile + docker-compose.yml + signaling.example.toml.
-- T17: docs/self-hosting.md.
+- T17: docs/deploy/self-hosting.md.
 - T18: doc reconciliation.
 
 ## Phase 3 — NAT Hole Punching
@@ -181,7 +181,7 @@ Original anchor points (now resolved or carried into the deferred follow-up):
 
 ## Phase 5 — Firebase Auth + FCM Wake-up
 
-> **Status: server-side shipped; mobile FlutterFire deferred to Phase 5b.** Phase 5 added `core/auth/firebase` (Admin-SDK ID-token verification with stubbed-TokenVerifier tests), `core/store/firestore` (Cloud Firestore Store implementation; PSK methods are no-ops), a `firebase_id_token` field on the `Register` proto, server config switches `auth_provider = "psk" | "firebase"` and `store_backend = "sqlite" | "firestore"` with validation, the `firebase/` Firebase project artifacts (firebase.json, firestore.rules with per-user isolation, firestore.indexes.json, functions/ TypeScript Cloud Function `onSessionCreated` triggering FCM wake-up on session creation), and `docs/firebase-setup.md` for operators.
+> **Status: server-side shipped; mobile FlutterFire deferred to Phase 5b.** Phase 5 added `core/auth/firebase` (Admin-SDK ID-token verification with stubbed-TokenVerifier tests), `core/store/firestore` (Cloud Firestore Store implementation; PSK methods are no-ops), a `firebase_id_token` field on the `Register` proto, server config switches `auth_provider = "psk" | "firebase"` and `store_backend = "sqlite" | "firestore"` with validation, the `firebase/` Firebase project artifacts (firebase.json, firestore.rules with per-user isolation, firestore.indexes.json, functions/ TypeScript Cloud Function `onSessionCreated` triggering FCM wake-up on session creation), and `docs/deploy/firebase.md` for operators.
 
 Phase 5 was decomposed into P5-T01 through P5-T05:
 
@@ -189,7 +189,7 @@ Phase 5 was decomposed into P5-T01 through P5-T05:
 - T02: `core/store/firestore` — Firestore Store implementation; PSK methods return ErrNotFound.
 - T03: server config + main wiring — `[firebase]` block, `auth_provider` / `store_backend` switches, `peersh-signaling` builds the right provider + store at startup. Proto adds `firebase_id_token` to `Register`.
 - T04: `firebase/` project — `firestore.rules`, Cloud Function `onSessionCreated` triggering FCM wake-up.
-- T05: `docs/firebase-setup.md` + doc reconciliation.
+- T05: `docs/deploy/firebase.md` + doc reconciliation.
 
 Phase 5b anchor points (next session, after on-LAN access and a real Firebase project):
 

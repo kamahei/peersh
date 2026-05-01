@@ -3,7 +3,7 @@
 // Build status: this file is code-complete but the .xcframework needed to
 // resolve the `Peersh*` symbols requires running `gomobile bind -target=ios`
 // on macOS. On a Windows dev box the iOS build is skipped; see
-// scripts/build-mobile-core.sh and docs/architecture.md.
+// scripts/build-mobile-core.sh and docs/design/architecture.md.
 //
 // All session-lifecycle handlers below currently return
 // FlutterError("IOS_BIND_PENDING") so a misconfigured iOS run gets a clear

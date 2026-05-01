@@ -34,7 +34,7 @@ also qualify if they would let an attacker run up an operator's bill.
   peersh's threat model; the user's device is the trust anchor.
 - **Brute-force PSK guessing on a self-host operator's deployment.** The
   rate limiter discourages this but is not a substitute for choosing a
-  high-entropy PSK. We document this in `docs/self-hosting.md`.
+  high-entropy PSK. We document this in `docs/deploy/self-hosting.md`.
 - **Issues in third-party dependencies** unless peersh's usage of them
   is itself the bug. For example, a quic-go fingerprinting issue is
   upstream; peersh leaving its dev cert in production is ours.
@@ -52,7 +52,7 @@ also qualify if they would let an attacker run up an operator's bill.
   when (signaling metadata) but not the commands or their output.
 - PSK secrets are stored as raw bytes in the SQLite store. Operators
   must keep that file on disk-encrypted media. See
-  `docs/self-hosting.md`.
+  `docs/deploy/self-hosting.md`.
 
 ## Coordinated disclosure
 

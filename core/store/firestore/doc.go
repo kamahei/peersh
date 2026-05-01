@@ -1,7 +1,7 @@
 // Package firestore implements store.Store on top of Cloud Firestore for
 // the official hosted peersh server.
 //
-// Document layout (per docs/data-model.md, locked in during Phase 5
+// Document layout (per docs/design/data-model.md, locked in during Phase 5
 // planning):
 //
 //	users/{user_id}                         doc { auth_provider, created_at }
@@ -18,5 +18,5 @@
 // Cost discipline: every method touches at most one or two documents.
 // Connection-setup-related reads are bounded by the operator-visible
 // budget (≤ ~5 reads + ~2 writes per connection lifecycle); see
-// docs/architecture.md "Cost discipline".
+// docs/design/architecture.md "Cost discipline".
 package firestore

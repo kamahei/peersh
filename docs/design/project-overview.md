@@ -67,7 +67,7 @@ People who run powerful Windows machines at home — gaming rigs, workstations, 
 
 ## Where to read next
 
-- `docs/product-spec.md` — capabilities, user journeys, NFRs, and explicit out-of-scope items.
-- `docs/architecture.md` — system shape, components, transport, NAT strategy, auth and storage interfaces, protocol versioning, repository layout.
-- `docs/implementation-plan.md` — the seven-phase roadmap.
-- `docs/ai-implementation-guide.md` — how AI agents should approach this codebase phase by phase.
+- `docs/design/product-spec.md` — capabilities, user journeys, NFRs, and explicit out-of-scope items.
+- `docs/design/architecture.md` — system shape, components, transport, NAT strategy, auth and storage interfaces, protocol versioning, repository layout.
+- `docs/plan/implementation-plan.md` — the seven-phase roadmap.
+- `docs/plan/ai-implementation-guide.md` — how AI agents should approach this codebase phase by phase.

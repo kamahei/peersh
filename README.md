@@ -29,7 +29,7 @@ The seven planned phases are:
 6. Background persistence + session resumption — **server-side reattach done; ring-buffer replay + Foreground Service + iOS BG Modes deferred (6b)**
 7. Polish, public release, and beyond — **incremental: Windows Service + Logon Task install, Prometheus /metrics, SECURITY/CONTRIBUTING, Render/Fly deploy templates done; MSI / store submission / OIDC / logo / xterm.dart deferred**
 
-Each phase is a separate work session. AI agents working in this repository default to Plan Mode at the start of each phase — see `AGENTS.md` and `docs/ai-implementation-guide.md`.
+Each phase is a separate work session. AI agents working in this repository default to Plan Mode at the start of each phase — see `AGENTS.md` and `docs/plan/ai-implementation-guide.md`.
 
 ## Build and verify Phase 1
 
@@ -102,21 +102,13 @@ The load-bearing test for Phase 3 forward-compatibility is `TestExternalPacketCo
 
 ## Documentation map
 
-Project documentation lives under `docs/`:
+Project documentation lives under `docs/`. The top-level entry is [`docs/README.md`](docs/README.md), which lists read order for new contributors. Quick map:
 
-- `docs/project-overview.md` — vision, users, goals, non-goals, design principles, environment.
-- `docs/product-spec.md` — capabilities, user journeys, NFRs, explicit out-of-scope.
-- `docs/architecture.md` — components, transport, NAT strategy, signaling protocol, pluggable interfaces, protocol versioning, repository layout.
-- `docs/data-model.md` — durable entities (Device, User, Pairing, Session, PSKRecord) and per-backend mappings.
-- `docs/implementation-plan.md` — the seven-phase roadmap.
-- `docs/task-breakdown.md` — Phase 1 / 2 task decompositions (shipped); later phases referenced.
-- `docs/acceptance-criteria.md` — cross-phase invariants and per-phase done criteria.
-- `docs/open-questions.md` — what is not yet decided, with current default assumptions.
-- `docs/self-hosting.md` — running your own `peersh-signaling` (Phase 2).
-- `docs/ai-implementation-guide.md` — operating manual for AI agents working in this repo.
-- `docs/glossary.md` — terms used across the docs and code.
+- **Design** — `docs/design/`: project overview, product spec, architecture, data model, glossary.
+- **Plan** — `docs/plan/`: implementation plan (7-phase roadmap), task breakdown, acceptance criteria, open questions, AI-agent guide.
+- **Deploy** — `docs/deploy/`: hub + per-target walkthroughs (Cloud Run, Render.com, generic self-hosting, Phase 5 Firebase).
 
-For AI agents specifically, see `AGENTS.md` at the repository root for the short-form working instructions.
+For AI agents specifically, see `AGENTS.md` at the repository root for the short-form working instructions, and `docs/plan/ai-implementation-guide.md` for the full operating manual.
 
 ## Environment
 

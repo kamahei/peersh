@@ -25,7 +25,7 @@ firebase/
 - Node.js 20 (matches the `runtime` in `firebase.json`)
 - A Firebase project with Firestore (Native mode), Authentication,
   Cloud Messaging, and (optionally) App Check enabled. See
-  `docs/firebase-setup.md` for a step-by-step.
+  `docs/deploy/firebase.md` for a step-by-step.
 
 ## Quick reference
 
@@ -46,4 +46,4 @@ firebase deploy --only functions
 
 Phase 5 ships the FCM trigger only. Budget Alerts, App Engine Daily
 Spending Limit, and the auto-disable-on-breach Cloud Function are
-documented as Phase 5/7 follow-ups in `docs/firebase-setup.md`.
+documented as Phase 5/7 follow-ups in `docs/deploy/firebase.md`.

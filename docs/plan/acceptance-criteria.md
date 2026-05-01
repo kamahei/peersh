@@ -33,9 +33,9 @@ These are checked at every phase, not just the one that introduces them.
 - **Two-client signaling rendezvous works.** Two clients on different machines (LAN is acceptable for Phase 2) register against the signaling server, complete PSK auth, exchange endpoint candidates, and establish a direct QUIC connection. They run commands successfully.
 - **PSK auth is real.** HMAC-SHA256 over payload + timestamp + nonce. Replay protection against timestamp/nonce reuse within a window. Bad signatures are rejected.
 - **SQLite store works as the self-hosting default.** Persistent across server restarts. Schema migration runs cleanly on a fresh DB and on an existing DB.
-- **Self-host setup ≤ 5 minutes.** A fresh user with Docker can `docker run` the signaling server, generate a PSK, point `peershd` and `peersh-cli` at it, and reach a working session in under five minutes following `docs/self-hosting.md`.
+- **Self-host setup ≤ 5 minutes.** A fresh user with Docker can `docker run` the signaling server, generate a PSK, point `peershd` and `peersh-cli` at it, and reach a working session in under five minutes following `docs/deploy/self-hosting.md`.
 - **Rate limiting is in place.** A trivially abusive client cannot saturate the server.
-- **Pairing UX decision is made and documented.** Whatever choice is made (QR, token, OOB string), it appears in `docs/self-hosting.md` and `product-spec.md`.
+- **Pairing UX decision is made and documented.** Whatever choice is made (QR, token, OOB string), it appears in `docs/deploy/self-hosting.md` and `docs/design/product-spec.md`.
 - **No NAT or hole punching has been added.** Endpoint exchange uses cooperative addresses; punching is Phase 3.
 
 ## Phase 3 — NAT Hole Punching
@@ -62,7 +62,7 @@ These are checked at every phase, not just the one that introduces them.
 - **App Check is enforced on the official project.** Requests not bearing a valid App Check token (Play Integrity / App Attest) are rejected.
 - **Firestore schema is documented and security rules are in place.** A user cannot read or write another user's documents. The schema is documented in `data-model.md` (or a Phase-5-introduced extension thereof).
 - **Cost guardrails are wired up.** Budget Alerts, App Engine Daily Spending Limit, auto-disable of the FCM Cloud Function on budget breach.
-- **`docs/firebase-setup.md` exists.** A user hosting their own Firebase project can follow the doc and reach a working setup.
+- **`docs/deploy/firebase.md` exists.** A user hosting their own Firebase project can follow the doc and reach a working setup.
 - **Per-connection Firestore budget holds.** Instrumented dev test confirms ≤ ~5 reads + ~2 writes per connection lifecycle.
 
 ## Phase 6 — Background Persistence + Session Resumption

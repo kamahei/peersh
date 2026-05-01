@@ -86,7 +86,7 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 - **Punch packet shape.** A 4-byte ASCII sentinel `pesh` plus a 12-byte random nonce — 16 bytes total. The first byte does not have QUIC's long-header bit set, so the peer's `quic-go` Transport drops these as non-QUIC. Each punch burst is 5 packets at 200 ms intervals (~1 s total).
 - **Bounded retry policy.** Per-candidate dial timeout 2 s, single attempt each. With 4 candidates the worst-case budget is ~10 s including punch. On full failure the caller surfaces `punching.ErrTraversalFailed` ("Direct connection not possible from this network.").
 - **CGNAT-both-sides** is the documented fail mode: symmetric NATs allocate a different external port per destination, so the srflx learned from STUN is wrong for the peer. `peersh-cli` exits cleanly with the actionable error; no relay path exists.
-- **Optional birthday-paradox port scan** for symmetric NAT cases. Deferred per `docs/open-questions.md`.
+- **Optional birthday-paradox port scan** for symmetric NAT cases. Deferred per `docs/plan/open-questions.md`.
 
 ## Pluggable authentication
 
@@ -163,7 +163,7 @@ The full schema is in `proto/peersh/signal/v1/`. Implementation lives in `server
 - **Confidentiality.** The signaling server cannot read command contents. QUIC's TLS 1.3 protects in-flight traffic from any network observer.
 - **Authentication.** Connections use mTLS with keypair-derived device identities. The trusted directory (the configured store) maps device IDs to users; an attacker without the matching private key cannot impersonate a device, even if they control the signaling server.
 - **Out of model (initially).** Endpoint compromise (malware on a paired phone or PC). Side channels in QUIC implementations. Long-term key rotation strategy. These are tracked but not addressed in early phases.
-- **`docs/security.md`** is intentionally deferred per the project plan ("as the project grows"). When the project gains real users, that file is created and this section is consolidated into it.
+- **A dedicated `docs/security.md`** is intentionally deferred per the project plan ("as the project grows"). When the project gains real users, that file is created and this section is consolidated into it.
 
 ## Cost discipline (official hosted mode)
 

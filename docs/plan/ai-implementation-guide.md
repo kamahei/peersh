@@ -10,26 +10,26 @@ peersh is a tool for executing PowerShell on a home Windows PC from a mobile dev
 
 In order:
 
-1. `docs/project-overview.md` — vision, users, goals, non-goals, design principles, environment.
-2. The current phase section in `docs/implementation-plan.md` — what is in scope right now.
-3. `docs/architecture.md` — components, transport, NAT strategy, pluggable interfaces, protocol versioning, repository layout.
-4. `docs/data-model.md` — durable entities and their per-backend mappings.
-5. `docs/open-questions.md` — what is not yet decided (and the default assumptions to use until it is).
-6. `docs/task-breakdown.md` — when the current phase has been broken down to tasks.
-7. `docs/acceptance-criteria.md` — how you'll know the phase is done.
-8. `docs/glossary.md` — when you encounter an unfamiliar term.
+1. `docs/design/project-overview.md` — vision, users, goals, non-goals, design principles, environment.
+2. The current phase section in `docs/plan/implementation-plan.md` — what is in scope right now.
+3. `docs/design/architecture.md` — components, transport, NAT strategy, pluggable interfaces, protocol versioning, repository layout.
+4. `docs/design/data-model.md` — durable entities and their per-backend mappings.
+5. `docs/plan/open-questions.md` — what is not yet decided (and the default assumptions to use until it is).
+6. `docs/plan/task-breakdown.md` — when the current phase has been broken down to tasks.
+7. `docs/plan/acceptance-criteria.md` — how you'll know the phase is done.
+8. `docs/design/glossary.md` — when you encounter an unfamiliar term.
 
 ## Source of truth and precedence
 
 When two docs say different things, treat them in this order, highest first:
 
-1. **`docs/project-overview.md` and `docs/architecture.md`** for vision, principles, and structural decisions.
-2. **`docs/product-spec.md`** for what the product does and does not do.
-3. **`docs/implementation-plan.md`** for phase scope and ordering.
-4. **`docs/data-model.md`** for durable entities.
-5. **`docs/task-breakdown.md`** for the next concrete step.
-6. **`docs/acceptance-criteria.md`** for done-criteria.
-7. **`docs/open-questions.md`** for items that are explicitly unresolved.
+1. **`docs/design/project-overview.md` and `docs/design/architecture.md`** for vision, principles, and structural decisions.
+2. **`docs/design/product-spec.md`** for what the product does and does not do.
+3. **`docs/plan/implementation-plan.md`** for phase scope and ordering.
+4. **`docs/design/data-model.md`** for durable entities.
+5. **`docs/plan/task-breakdown.md`** for the next concrete step.
+6. **`docs/plan/acceptance-criteria.md`** for done-criteria.
+7. **`docs/plan/open-questions.md`** for items that are explicitly unresolved.
 
 If a conflict exists, **propose a doc update** as part of your plan rather than picking silently.
 
@@ -41,7 +41,7 @@ Even if the user just says "let's do Phase 2", you produce a plan covering scope
 
 ### Ask design questions liberally during planning
 
-Lines like "I see two reasonable approaches here, which do you prefer?" or "this conflicts with the Phase 4 description in `docs/implementation-plan.md` — should we revise the plan or change my approach?" are exactly what is wanted. Treat decisions in the docs as **current intent, not frozen specs** — they evolve as each phase teaches us something.
+Lines like "I see two reasonable approaches here, which do you prefer?" or "this conflicts with the Phase 4 description in `docs/plan/implementation-plan.md` — should we revise the plan or change my approach?" are exactly what is wanted. Treat decisions in the docs as **current intent, not frozen specs** — they evolve as each phase teaches us something.
 
 ### Keep changes scoped to the current phase
 
@@ -77,21 +77,21 @@ These are non-negotiable. Violating them is a regression, even if the current ph
 
 When the user says something like "let's start Phase N":
 
-1. **Re-read** `docs/project-overview.md`, the relevant phase section in `docs/implementation-plan.md`, and the cross-phase invariants.
+1. **Re-read** `docs/design/project-overview.md`, the relevant phase section in `docs/plan/implementation-plan.md`, and the cross-phase invariants.
 2. **Stay in Plan Mode.** Do not begin implementation work yet.
-3. **Produce a plan** covering: scope, design decisions, open questions, deviations from the docs (if any, with justification), and a validation procedure that maps to `docs/acceptance-criteria.md`.
-4. **List open questions.** Pull from `docs/open-questions.md` plus anything new you noticed.
+3. **Produce a plan** covering: scope, design decisions, open questions, deviations from the docs (if any, with justification), and a validation procedure that maps to `docs/plan/acceptance-criteria.md`.
+4. **List open questions.** Pull from `docs/plan/open-questions.md` plus anything new you noticed.
 5. **Wait for review.** Begin implementation only after the plan is approved.
-6. **After the phase**, propose updates to the relevant docs if assumptions changed. Move resolved items out of `docs/open-questions.md` into the doc that owns the answer.
+6. **After the phase**, propose updates to the relevant docs if assumptions changed. Move resolved items out of `docs/plan/open-questions.md` into the doc that owns the answer.
 
 ## Common pitfalls to avoid
 
 - Over-broadening Phase 1 by adding signaling, auth, or NAT code "since it's coming anyway." Don't. Phase 1 is the smallest thing that works on a same-LAN connection.
 - Adding `os.Exit` / `log.Fatal` / panic-as-control-flow in library packages. Library code returns errors; binaries decide what to do with them.
 - Adding goroutines without lifecycle ownership. Every goroutine has a documented owner that knows how to stop it.
-- Treating the proposed repository layout as frozen. The brief that produced `docs/architecture.md` framed the layout as a starting proposal; refining it during Phase 1 planning is expected.
+- Treating the proposed repository layout as frozen. The brief that produced `docs/design/architecture.md` framed the layout as a starting proposal; refining it during Phase 1 planning is expected.
 - Treating the protobuf schema as frozen post-Phase-1. It is fixed for `protocol_version=1`; new versions exist for new schemas. Capabilities, not silent edits, handle additive changes.
-- Treating `docs/open-questions.md` as a passive log. When a question is answered, move it.
+- Treating `docs/plan/open-questions.md` as a passive log. When a question is answered, move it.
 
 ## Recurring themes (read this before every phase)
 

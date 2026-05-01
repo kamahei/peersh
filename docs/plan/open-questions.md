@@ -10,17 +10,17 @@ The **default assumption** for each item — when one exists — is what impleme
 
 All Phase 2 open questions were resolved during Phase 2 planning. Resolutions live in:
 
-- **Pairing UX → implicit (Phase 2)** — devices that share a PSK `user_id` are automatically paired; explicit token / QR comes with the mobile app in Phase 4. See `docs/product-spec.md` and `docs/self-hosting.md`.
-- **`user_id` semantics → operator-chosen string** at PSK creation time. See `docs/data-model.md` (User entity) and `docs/self-hosting.md`.
-- **PSK generation / distribution → server CLI generates 32-byte random PSK, prints once, raw secret stored.** See `docs/self-hosting.md` and `server/admin`.
+- **Pairing UX → implicit (Phase 2)** — devices that share a PSK `user_id` are automatically paired; explicit token / QR comes with the mobile app in Phase 4. See `docs/design/product-spec.md` and `docs/deploy/self-hosting.md`.
+- **`user_id` semantics → operator-chosen string** at PSK creation time. See `docs/design/data-model.md` (User entity) and `docs/deploy/self-hosting.md`.
+- **PSK generation / distribution → server CLI generates 32-byte random PSK, prints once, raw secret stored.** See `docs/deploy/self-hosting.md` and `server/admin`.
 - **WebSocket lifetime → kept open while a session-setup is active.** Closed when the client disconnects.
-- **PSK storage shape → raw bytes.** HMAC verification needs the secret; hash-only is structurally impossible. Trade-off (server-breach exposes PSKs) is documented in `docs/self-hosting.md` with disk-encryption recommendation.
+- **PSK storage shape → raw bytes.** HMAC verification needs the secret; hash-only is structurally impossible. Trade-off (server-breach exposes PSKs) is documented in `docs/deploy/self-hosting.md` with disk-encryption recommendation.
 
 ### Phase 3 (NAT Hole Punching) — resolved
 
 All Phase 3 open questions were resolved during Phase 3 planning.
 
-- **Retry aggressiveness → 5 punch packets at 200 ms intervals; 1 dial attempt per candidate at 2 s timeout; 4 candidates max, ~10 s total budget.** See `core/punching` and `docs/architecture.md`.
+- **Retry aggressiveness → 5 punch packets at 200 ms intervals; 1 dial attempt per candidate at 2 s timeout; 4 candidates max, ~10 s total budget.** See `core/punching` and `docs/design/architecture.md`.
 - **NAT diagnostics surfaced → internal logs only.** STUN-discovered srflx, candidates tried, and per-candidate dial outcomes log at INFO/DEBUG. Users see exactly one error line: "Direct connection not possible from this network." (`punching.ErrTraversalFailed`).
 - **IPv6-first reliability → yes, IPv6 SRFLX → IPv4 SRFLX → IPv6 HOST → IPv4 HOST.** Implemented in `punching.SortCandidates`. Revisit if real-world testing shows it consistently slows connection setup.
 - **Birthday-paradox port scanning → deferred.** Phase 3 surfaces the actionable error for symmetric-NAT-on-both-sides; revisit only if there is real demand.
@@ -37,7 +37,7 @@ All Phase 4 open questions were resolved during Phase 4b planning:
 
 Phase 5's server-side shipped (`core/auth/firebase`, `core/store/firestore`, Cloud Function, `firestore.rules`). The mobile-app FlutterFire integration and App Check enforcement are deferred to Phase 5b alongside the iOS device validation.
 
-- **Firestore schema → locked.** Collections: `users/{uid}`, `users/{uid}/devices/{deviceId}`, `users/{uid}/pairings/{pairingId}`, `users/{uid}/sessions/{sessionId}`. PSK records are NOT stored in Firebase mode. Documented in `core/store/firestore/doc.go` and `docs/data-model.md`.
+- **Firestore schema → locked.** Collections: `users/{uid}`, `users/{uid}/devices/{deviceId}`, `users/{uid}/pairings/{pairingId}`, `users/{uid}/sessions/{sessionId}`. PSK records are NOT stored in Firebase mode. Documented in `core/store/firestore/doc.go` and `docs/design/data-model.md`.
 - **Behavior when the Windows device is unreachable even after FCM** — Phase 5b decision (mobile-side error UX). Default still applies: bounded wait (~30 s), then "Could not reach your Windows device. It may be offline."
 - **Device list sync across multiple mobile devices** — Phase 5b decision (FlutterFire-side). Default still applies: Firestore read on app start with client-side caching, no real-time listener.
 
@@ -65,5 +65,5 @@ When friction with any of these surfaces during a phase, raise it in that phase'
 ## How to use this file
 
 - When starting a phase: read the relevant section above and surface the open questions in your plan.
-- When the user makes a decision: move the resolved item from this file into the appropriate doc (`product-spec.md`, `architecture.md`, `data-model.md`, etc.) with the chosen answer. Remove it from here.
+- When the user makes a decision: move the resolved item from this file into the appropriate doc (`design/product-spec.md`, `design/architecture.md`, `design/data-model.md`, etc.) with the chosen answer. Remove it from here.
 - When a new question surfaces during planning or implementation: add it here with a default assumption, so future readers know how to proceed if a decision hasn't been made yet.

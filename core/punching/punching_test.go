@@ -181,7 +181,7 @@ func TestSortCandidatesOrder(t *testing.T) {
 
 func TestErrTraversalFailedMessage(t *testing.T) {
 	// The error string is the user-facing message; documented in
-	// docs/self-hosting.md. Don't change it without updating docs.
+	// docs/deploy/self-hosting.md. Don't change it without updating docs.
 	if got := punching.ErrTraversalFailed.Error(); got != "Direct connection not possible from this network." {
 		t.Fatalf("ErrTraversalFailed message changed: %q", got)
 	}

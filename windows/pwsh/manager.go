@@ -13,7 +13,7 @@ import (
 // DefaultIdleTimeout is the duration a Session may sit idle (no client
 // attached AND no Exec activity) before SessionManager evicts it.
 //
-// 30 minutes matches the default discussed in `docs/open-questions.md`.
+// 30 minutes matches the default discussed in `docs/plan/open-questions.md`.
 const DefaultIdleTimeout = 30 * time.Minute
 
 // SessionManager keeps long-lived pwsh.Host instances around so a client

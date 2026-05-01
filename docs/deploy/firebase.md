@@ -70,7 +70,7 @@ The server will load the Firebase Admin SDK at startup and refuse to boot if `pr
 
 ## Cost discipline
 
-Per `docs/architecture.md`'s cost section:
+Per `docs/design/architecture.md`'s cost section:
 
 - A connection lifecycle should consume **≤ 5 reads + 2 writes**. The default Firestore store implementation is shaped to fit; verify with the Firestore usage dashboard.
 - Use [Budget Alerts](https://console.cloud.google.com/billing/alerts) on the GCP billing account.

@@ -127,7 +127,7 @@ type Session struct {
 //
 // The secret is stored raw because HMAC-SHA256 verification needs it
 // server-side. Operators are advised to host the SQLite DB on a
-// disk-encrypted volume (see docs/self-hosting.md).
+// disk-encrypted volume (see docs/deploy/self-hosting.md).
 type PSKRecord struct {
 	UserID       string
 	Secret       []byte // high-entropy, ≥ 32 bytes recommended

@@ -30,7 +30,7 @@ const PunchPacketSize = 16
 
 // ErrTraversalFailed is returned by callers (peersh-cli's dial loop) when
 // every candidate dial attempt has failed. The Error() string is what users
-// see; do not change it without updating docs/self-hosting.md.
+// see; do not change it without updating docs/deploy/self-hosting.md.
 var ErrTraversalFailed = errors.New("Direct connection not possible from this network.")
 
 // Options tunes the punching helpers. Zero values fall back to documented

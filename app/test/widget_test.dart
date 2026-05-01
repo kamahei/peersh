@@ -2,7 +2,7 @@
 // renders without exceptions. Real verification of the gomobile bridge
 // and the screens that depend on persistent state happens via the
 // instrumented APK on a physical device, documented in
-// docs/architecture.md.
+// docs/design/architecture.md.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';

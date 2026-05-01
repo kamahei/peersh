@@ -50,7 +50,7 @@ These hold across all phases. Violating them is a regression even if the current
 - Endpoint exchange: clients report candidate addresses (LAN IPs are fine initially); server forwards
 - Rate limiting basics (per-IP connection rate)
 - Dockerfile and `docker-compose.yml` examples for self-hosting
-- Documentation: `docs/self-hosting.md`
+- Documentation: `docs/deploy/self-hosting.md`
 
 **Out of scope.** Firebase, NAT hole punching, Flutter, FCM, session resumption.
 
@@ -107,7 +107,7 @@ These hold across all phases. Violating them is a regression even if the current
 - App Check integration (Play Integrity / App Attest) to protect the official Firebase project
 - FlutterFire integration in the app
 - Cost guardrails: Budget Alerts, App Engine Daily Spending Limit, auto-disable Cloud Function on budget breach
-- Documentation: `docs/firebase-setup.md` for users hosting their own Firebase
+- Documentation: `docs/deploy/firebase.md` for users hosting their own Firebase
 
 **Out of scope.** Background persistence on mobile, session resumption (next phase).
 

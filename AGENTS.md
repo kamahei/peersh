@@ -1,6 +1,6 @@
 # AGENTS
 
-Durable instructions for AI agents working in the peersh repository. The companion file is `docs/ai-implementation-guide.md`, which goes deeper. This file is the short version that should fit in working memory.
+Durable instructions for AI agents working in the peersh repository. The companion file is `docs/plan/ai-implementation-guide.md`, which goes deeper. This file is the short version that should fit in working memory.
 
 ## Project in one sentence
 
@@ -10,17 +10,17 @@ peersh is an Apache 2.0 OSS tool for executing PowerShell on a home Windows PC f
 
 When you start any task in this repo, read in this order:
 
-1. `docs/project-overview.md`
-2. The current phase section of `docs/implementation-plan.md`
-3. `docs/architecture.md`
-4. `docs/data-model.md` (if your task touches entities)
-5. `docs/open-questions.md` (for anything not yet decided)
-6. `docs/task-breakdown.md` (for the next concrete steps)
-7. `docs/acceptance-criteria.md` (to know when you're done)
-8. `docs/ai-implementation-guide.md` (operating manual; longer-form version of this file)
-9. `docs/glossary.md` (when a term is unfamiliar)
+1. `docs/design/project-overview.md`
+2. The current phase section of `docs/plan/implementation-plan.md`
+3. `docs/design/architecture.md`
+4. `docs/design/data-model.md` (if your task touches entities)
+5. `docs/plan/open-questions.md` (for anything not yet decided)
+6. `docs/plan/task-breakdown.md` (for the next concrete steps)
+7. `docs/plan/acceptance-criteria.md` (to know when you're done)
+8. `docs/plan/ai-implementation-guide.md` (operating manual; longer-form version of this file)
+9. `docs/design/glossary.md` (when a term is unfamiliar)
 
-When two docs disagree, follow the precedence in `docs/ai-implementation-guide.md` and **propose a doc update** rather than picking silently.
+When two docs disagree, follow the precedence in `docs/plan/ai-implementation-guide.md` and **propose a doc update** rather than picking silently.
 
 ## Default working mode
 
@@ -60,11 +60,11 @@ Mentioned in nearly every phase's plan. Worth re-reading at the start of each:
 
 When the user says something like "let's start Phase N":
 
-1. Re-read `docs/project-overview.md`, the relevant phase section in `docs/implementation-plan.md`, and the cross-phase invariants in `docs/acceptance-criteria.md`.
-2. Stay in Plan Mode and produce a plan covering scope, design decisions, open questions, deviations from the docs (if any, with justification), and a validation procedure that maps to `docs/acceptance-criteria.md`.
-3. List open questions. Pull from `docs/open-questions.md` plus anything new you noticed.
+1. Re-read `docs/design/project-overview.md`, the relevant phase section in `docs/plan/implementation-plan.md`, and the cross-phase invariants in `docs/plan/acceptance-criteria.md`.
+2. Stay in Plan Mode and produce a plan covering scope, design decisions, open questions, deviations from the docs (if any, with justification), and a validation procedure that maps to `docs/plan/acceptance-criteria.md`.
+3. List open questions. Pull from `docs/plan/open-questions.md` plus anything new you noticed.
 4. Wait for plan review. Begin implementation only after the plan is approved.
-5. After the phase, propose updates to the relevant docs if assumptions changed. Move resolved items out of `docs/open-questions.md` into whichever doc owns the answer.
+5. After the phase, propose updates to the relevant docs if assumptions changed. Move resolved items out of `docs/plan/open-questions.md` into whichever doc owns the answer.
 
 ## Output rules
 
@@ -72,7 +72,7 @@ When the user says something like "let's start Phase N":
 - **Chat replies follow the user's language.**
 - **No emojis** unless explicitly asked.
 - **No comments that explain what the code does.** Identifiers carry that. Comments justify *why* a non-obvious choice was made (a hidden constraint, a workaround, an invariant).
-- **README.md is human-facing**; AGENTS.md and `docs/ai-implementation-guide.md` are agent-facing. Don't blur the line.
+- **README.md is human-facing**; AGENTS.md and `docs/plan/ai-implementation-guide.md` are agent-facing. Don't blur the line.
 
 ## When in doubt
 

@@ -63,5 +63,5 @@ PEERSH_SIGNALING_FIREBASE_PROJECT_ID=<your-firebase-project-id>
 ```
 
 (Plus the IAM permissions on the runtime service account; see
-`docs/firebase-setup.md`.) The `bootstrap_psk` env var becomes a no-op
+`docs/deploy/firebase.md`.) The `bootstrap_psk` env var becomes a no-op
 in Firebase mode.

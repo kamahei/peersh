@@ -17,7 +17,7 @@ func TestImplementsStoreInterface(t *testing.T) {
 // PSK methods always return ErrNotFound / unsupported in Firebase mode.
 // These checks need no real Firestore client because they don't touch
 // the wire — tests that do require a Firestore emulator and are
-// documented in docs/firebase-setup.md.
+// documented in docs/deploy/firebase.md.
 func TestPSKMethodsBehavior(t *testing.T) {
 	s := fsstore.Open(nil) // client never reached
 	ctx := context.Background()

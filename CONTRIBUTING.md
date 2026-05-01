@@ -13,7 +13,7 @@ welcomes patches, bug reports, and ideas.
 - `app/` — Flutter app (Dart).
 - `proto/` — protobuf source. Generated Go lands at `core/protocol/...`.
 - `firebase/` — Firebase project artifacts (Cloud Functions, Firestore rules) for the official-hosted-server option.
-- `docs/` — design + operator documentation. The order to read is in `docs/ai-implementation-guide.md`.
+- `docs/` — design + operator documentation. The top-level index is `docs/README.md`; the read order for AI agents is in `docs/plan/ai-implementation-guide.md`.
 
 `AGENTS.md` is the durable instruction file for AI agents working on
 the codebase. Humans benefit from reading it too — it spells out the
@@ -21,9 +21,9 @@ project's invariants (no relay/TURN, signaling never sees data, etc.).
 
 ## Before you start
 
-- Read `docs/project-overview.md` for the design principles.
-- Read the relevant `docs/architecture.md` section.
-- Read `docs/open-questions.md` for items still in flux.
+- Read `docs/design/project-overview.md` for the design principles.
+- Read the relevant `docs/design/architecture.md` section.
+- Read `docs/plan/open-questions.md` for items still in flux.
 - Run `go test -count=1 ./...` and `cd app && flutter analyze` to
   baseline before changes.
 
@@ -71,7 +71,7 @@ The mobile AAR is gitignored; CI rebuilds it.
 
 ## Cross-phase invariants
 
-These are non-negotiable. They appear in `docs/acceptance-criteria.md`'s
+These are non-negotiable. They appear in `docs/plan/acceptance-criteria.md`'s
 "Cross-phase invariants" section and apply to every change:
 
 - No relay / TURN. NAT-traversal failure surfaces an actionable error.
