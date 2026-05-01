@@ -12,6 +12,44 @@ The signaling server is **only used for connection setup** — pairing devices a
   - **Go 1.22+** — if you prefer to build the binary directly.
 - A reverse proxy if you want browser-friendly TLS termination (Caddy / Traefik / nginx). Optional in development; recommended in production.
 
+## Quick start (Render.com — recommended for first-time personal hosting)
+
+Render reads `server/deploy/render.yaml` as a Blueprint. The same Docker image is used everywhere; Render just drives the build.
+
+1. **Push the repo to GitHub** (or your own fork).
+2. **In Render**: New → Blueprint → connect your GitHub account → pick the peersh repo. Render reads `server/deploy/render.yaml` and creates a Web Service plus a 1 GB persistent disk. Wait for the build to finish (5–10 min on first run).
+3. After the first deploy, copy the assigned hostname (e.g. `peersh-signaling-xxxx.onrender.com`) and set:
+
+   - `PEERSH_SIGNALING_DISCOVERY_WS_URL` = `wss://peersh-signaling-xxxx.onrender.com/ws`
+
+   Save → Render redeploys.
+
+4. **Open the Render Shell** for the service and create a PSK:
+
+   ```sh
+   peersh-signaling psk add --user alice --label alice-laptop
+   ```
+
+   The shell prints the secret once. Copy it; it cannot be re-displayed.
+
+5. On your Windows host:
+
+   ```sh
+   echo <secret-hex> > alice.psk
+   peershd -signaling wss://peersh-signaling-xxxx.onrender.com/ws \
+           -user alice -psk-file alice.psk
+   ```
+
+   `peershd` logs its `device_id` at startup. Copy it.
+
+6. From the mobile app or `peersh-cli` connect with the same `-user` + `-psk-file` plus `-target <peershd-device-id>`.
+
+Notes:
+
+- Render's `*.onrender.com` hostname provides automatic HTTPS. The `-insecure-http` flag the container passes is fine — TLS is terminated at Render's edge.
+- The **Starter plan** ($7/mo) is required for the persistent disk that keeps PSKs across restarts. On Free, PSKs reset every redeploy and the service spins down after 15 minutes idle.
+- Render injects `$PORT`; the binary honours it via env-var fallback so `PEERSH_SIGNALING_LISTEN` does not need to be set on Render.
+
 ## Quick start (Docker, plain HTTP — development only)
 
 From the repository root:
