@@ -53,8 +53,8 @@ const protocolVersion = 2
 
 // supportedCapabilities is the capability list peershd advertises in
 // ServerHello. "pty.v1" tells the client it may open StreamRequest{pty: ...}
-// streams.
-var supportedCapabilities = []string{"pty.v1"}
+// streams; "files.v1" enables the Tier 2 session-scoped file API.
+var supportedCapabilities = []string{"pty.v1", "files.v1"}
 
 func main() {
 	// Phase 7: detect Windows-Service install / uninstall / SCM-dispatch
@@ -382,6 +382,7 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 	defer mgr.Detach(sessionID)
 	log.Info("handshake complete", "session", sessionID, "pwsh", host.Path())
 
+	registry := newPTYRegistry()
 	for {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
@@ -391,14 +392,14 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 			log.Info("AcceptStream: end of connection", "err", err)
 			return
 		}
-		go serveStream(ctx, host, stream, log)
+		go serveStream(ctx, host, stream, registry, log)
 	}
 }
 
 // serveStream dispatches a per-stream first frame (StreamRequest) to either
 // the one-shot Exec path or the interactive PTY path. Each stream owns its
 // own protocol; this function returns when the stream closes.
-func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, log *slog.Logger) {
+func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, reg *ptyRegistry, log *slog.Logger) {
 	defer stream.Close()
 	r := wire.NewReader(stream)
 	req := &v1.StreamRequest{}
@@ -410,14 +411,16 @@ func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream,
 	case *v1.StreamRequest_Exec:
 		serveExecStream(ctx, host, stream, kind.Exec, log)
 	case *v1.StreamRequest_Pty:
-		servePTYStream(ctx, stream, r, kind.Pty, log)
+		servePTYStream(ctx, stream, r, kind.Pty, reg, log)
+	case *v1.StreamRequest_Files:
+		serveFilesStream(stream, kind.Files, reg)
 	default:
 		log.Warn("StreamRequest with no kind set")
 	}
 }
 
-func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, log *slog.Logger) {
-	clog := log.With("stream", stream.StreamID(), "pty_cmd", req.GetCommand())
+func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, reg *ptyRegistry, log *slog.Logger) {
+	clog := log.With("stream", stream.StreamID(), "pty_cmd", req.GetCommand(), "pty_id", req.GetPtyId())
 	cols := uint16(req.GetCols())
 	rows := uint16(req.GetRows())
 	clog.Info("pty open", "cols", cols, "rows", rows)
@@ -429,6 +432,9 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 		return
 	}
 	defer sess.Close()
+
+	reg.Register(req.GetPtyId(), sess)
+	defer reg.Unregister(req.GetPtyId())
 
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

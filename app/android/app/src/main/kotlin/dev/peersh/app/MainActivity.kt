@@ -20,9 +20,14 @@ class MainActivity : FlutterActivity() {
     private val eventChannelName = "dev.peersh/session/events"
 
     private val sessions = ConcurrentHashMap<Int, Session>()
-    private val ptys = ConcurrentHashMap<Int, PTYSession>()
+    // PTY map keyed by host-assigned PTYSession.id() (Long): the same id
+    // doubles as the file-API handle, so storing it directly keeps the
+    // platform side and the host side in sync without a separate lookup.
+    private val ptys = ConcurrentHashMap<Long, PTYSession>()
+    // sessionForPty maps PTY id -> session id, so the file-API methods
+    // can resolve the QUIC connection from a single ptyId arg.
+    private val sessionForPty = ConcurrentHashMap<Long, Int>()
     private val nextSessionId = AtomicInteger(1)
-    private val nextPtyId = AtomicInteger(1)
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -144,12 +149,29 @@ class MainActivity : FlutterActivity() {
                             result.error("UNKNOWN_SESSION", "no session for id=$sessionId", null)
                             return@setMethodCallHandler
                         }
-                        val ptyId = nextPtyId.getAndIncrement()
                         executor.submit {
                             try {
-                                val handler = PTYEventHandler(ptyId) { sink }
-                                val p = s.openPTY(command, cols.toLong(), rows.toLong(), handler)
+                                // Reserve the id BEFORE opening so the
+                                // PTYEventHandler can be constructed with
+                                // the matching ptyId. Session.openPTY
+                                // generates the id internally and we read
+                                // it back via PTYSession.id().
+                                val tempHandler = object : PTYHandler {
+                                    @Volatile var ptyId: Long = 0
+                                    @Volatile var realHandler: PTYEventHandler? = null
+                                    override fun onData(data: ByteArray) {
+                                        realHandler?.onData(data)
+                                    }
+                                    override fun onExit(exitCode: Long, errMessage: String) {
+                                        realHandler?.onExit(exitCode, errMessage)
+                                    }
+                                }
+                                val p = s.openPTY(command, cols.toLong(), rows.toLong(), tempHandler)
+                                val ptyId = p.id()
+                                tempHandler.ptyId = ptyId
+                                tempHandler.realHandler = PTYEventHandler(ptyId) { sink }
                                 ptys[ptyId] = p
+                                sessionForPty[ptyId] = sessionId
                                 mainHandler.post { result.success(ptyId) }
                             } catch (t: Throwable) {
                                 mainHandler.post {
@@ -159,7 +181,7 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "ptyInput" -> {
-                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toInt()
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
                         val data = call.argument<ByteArray>("data") ?: ByteArray(0)
                         val p = ptys[ptyId]
                         if (p == null) {
@@ -178,7 +200,7 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "ptyResize" -> {
-                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toInt()
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
                         val cols = (call.argument<Number>("cols") ?: 80).toInt()
                         val rows = (call.argument<Number>("rows") ?: 24).toInt()
                         val p = ptys[ptyId]
@@ -198,8 +220,9 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "closePTY" -> {
-                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toInt()
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
                         val p = ptys.remove(ptyId)
+                        sessionForPty.remove(ptyId)
                         if (p == null) {
                             result.success(null)
                             return@setMethodCallHandler
@@ -207,6 +230,79 @@ class MainActivity : FlutterActivity() {
                         executor.submit {
                             try { p.close() } catch (_: Throwable) {}
                             mainHandler.post { result.success(null) }
+                        }
+                    }
+                    "getCwd" -> {
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
+                        val sessionId = sessionForPty[ptyId]
+                        val s = sessionId?.let { sessions[it] }
+                        if (s == null) {
+                            result.success("")
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            val cwd = try { s.getCWD(ptyId) } catch (_: Throwable) { "" }
+                            mainHandler.post { result.success(cwd) }
+                        }
+                    }
+                    "listSessionFiles" -> {
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
+                        val path = call.argument<String>("path") ?: ""
+                        val sessionId = sessionForPty[ptyId]
+                        val s = sessionId?.let { sessions[it] }
+                        if (s == null) {
+                            result.error("UNKNOWN_PTY", "no session for pty id=$ptyId", null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try {
+                                val list = s.listSessionFiles(ptyId, path)
+                                val total = list.len().toInt()
+                                val items = ArrayList<HashMap<String, Any?>>(total)
+                                for (i in 0 until total) {
+                                    val e = list.get(i.toLong()) ?: continue
+                                    items.add(hashMapOf<String, Any?>(
+                                        "name" to e.name,
+                                        "path" to e.path,
+                                        "isDir" to e.isDir,
+                                        "size" to e.size,
+                                        "modifiedUnixMs" to e.modifiedUnixMs,
+                                    ))
+                                }
+                                mainHandler.post { result.success(items) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("LIST_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
+                    "readSessionFile" -> {
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
+                        val path = call.argument<String>("path") ?: ""
+                        val maxBytes = (call.argument<Number>("maxBytes") ?: 0).toLong()
+                        val sessionId = sessionForPty[ptyId]
+                        val s = sessionId?.let { sessions[it] }
+                        if (s == null) {
+                            result.error("UNKNOWN_PTY", "no session for pty id=$ptyId", null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try {
+                                val fc = s.readSessionFile(ptyId, path, maxBytes)
+                                val out = hashMapOf<String, Any?>(
+                                    "content" to fc.content,
+                                    "encoding" to fc.encoding,
+                                    "size" to fc.size,
+                                    "truncated" to fc.truncated,
+                                    "error" to fc.error,
+                                )
+                                mainHandler.post { result.success(out) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("READ_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
                         }
                     }
                     else -> result.notImplemented()
@@ -272,7 +368,7 @@ class MainActivity : FlutterActivity() {
      * key so the UI can correlate to a specific terminal screen.
      */
     private inner class PTYEventHandler(
-        private val ptyId: Int,
+        private val ptyId: Long,
         private val sinkRef: () -> EventChannel.EventSink?,
     ) : PTYHandler {
         override fun onData(data: ByteArray) {

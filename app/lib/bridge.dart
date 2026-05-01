@@ -7,6 +7,7 @@
 import 'package:flutter/services.dart';
 
 import 'models/pty_event.dart';
+import 'models/pty_file.dart';
 import 'models/session_event.dart';
 
 class PeershBridge {
@@ -90,9 +91,10 @@ class PeershBridge {
     });
   }
 
-  /// Opens an interactive PTY on an existing session. Returns a PTY id
-  /// the caller uses for [ptyInput] / [ptyResize] / [closePty]. Output
-  /// flows on [ptyEvents] tagged with the same ptyId.
+  /// Opens an interactive PTY on an existing session. Returns the host-
+  /// assigned PTY id the caller uses for [ptyInput] / [ptyResize] /
+  /// [closePty] / [getCwd] / [listSessionFiles] / [readSessionFile].
+  /// Output flows on [ptyEvents] tagged with the same ptyId.
   Future<int> openPty({
     required int sessionId,
     String command = '',
@@ -107,6 +109,56 @@ class PeershBridge {
     });
     if (id == null) throw StateError('bridge: openPTY returned null');
     return id;
+  }
+
+  /// Returns the host's last-observed cwd for the PTY (via OSC 9;9
+  /// emitted by the prompt wrapper). Empty if the prompt has not
+  /// rendered yet.
+  Future<String> getCwd({required int ptyId}) async {
+    final out = await _control.invokeMethod<String>('getCwd', {
+      'ptyId': ptyId,
+    });
+    return out ?? '';
+  }
+
+  /// Lists files at a cwd-relative `path` inside the PTY's directory.
+  /// Returns an empty list on failure (errors are swallowed and surfaced
+  /// via the [PtyFileEntry.path] convention — callers wanting hard
+  /// errors should use the platform error channel instead).
+  Future<List<PtyFileEntry>> listSessionFiles({
+    required int ptyId,
+    required String path,
+  }) async {
+    final raw = await _control.invokeMethod<List<dynamic>>('listSessionFiles', {
+      'ptyId': ptyId,
+      'path': path,
+    });
+    if (raw == null) return const [];
+    return raw
+        .cast<Map<dynamic, dynamic>>()
+        .map(PtyFileEntry.fromMap)
+        .toList(growable: false);
+  }
+
+  /// Reads a cwd-relative file. Returns the content + metadata.
+  Future<PtyFileContent> readSessionFile({
+    required int ptyId,
+    required String path,
+    int maxBytes = 0,
+  }) async {
+    final raw = await _control.invokeMethod<Map<dynamic, dynamic>>(
+      'readSessionFile',
+      {
+        'ptyId': ptyId,
+        'path': path,
+        'maxBytes': maxBytes,
+      },
+    );
+    if (raw == null) {
+      return const PtyFileContent(
+          content: <int>[], encoding: '', size: 0, truncated: false, error: 'no response');
+    }
+    return PtyFileContent.fromMap(raw);
   }
 
   /// Forwards a chunk of input bytes (keystrokes / paste payload) to the

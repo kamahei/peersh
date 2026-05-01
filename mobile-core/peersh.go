@@ -62,7 +62,8 @@ type Session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu sync.Mutex
+	mu        sync.Mutex
+	lastPTYID int64 // monotonically increasing, used as PTYRequest.pty_id
 }
 
 // OpenDirectSession dials addr (host:port) over QUIC and runs Hello. No
@@ -287,6 +288,7 @@ type PTYHandler interface {
 type PTYSession struct {
 	stream *transport.Stream
 	parent *Session
+	id     int64
 
 	mu     sync.Mutex
 	closed bool
@@ -297,6 +299,11 @@ type PTYSession struct {
 
 	pumpDone chan struct{}
 }
+
+// ID returns the client-assigned PTY id this session was opened under.
+// Used by the file-API helpers (Session.GetCWD, ListSessionFiles, etc.)
+// to address the right host-side PTY.
+func (p *PTYSession) ID() int64 { return p.id }
 
 // OpenPTY opens a pseudo-console on the host and starts streaming output
 // to handler. command empty / "auto" / "pwsh" / "powershell" / "cmd" picks
@@ -313,6 +320,7 @@ func (s *Session) OpenPTY(command string, cols, rows int, handler PTYHandler) (*
 	if rows <= 0 {
 		rows = 24
 	}
+	id := s.nextPTYID()
 	stream, err := s.conn.OpenStream(s.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("OpenStream: %w", err)
@@ -322,15 +330,25 @@ func (s *Session) OpenPTY(command string, cols, rows int, handler PTYHandler) (*
 			Command: command,
 			Cols:    uint32(cols),
 			Rows:    uint32(rows),
+			PtyId:   id,
 		}},
 	}); err != nil {
 		_ = stream.Close()
 		return nil, fmt.Errorf("write StreamRequest: %w", err)
 	}
 
-	p := &PTYSession{stream: stream, parent: s, pumpDone: make(chan struct{})}
+	p := &PTYSession{stream: stream, parent: s, id: id, pumpDone: make(chan struct{})}
 	go p.pump(handler)
 	return p, nil
+}
+
+// nextPTYID returns a fresh client-side ID for a new PTY session. Used to
+// address the host-side PTY in subsequent file-API requests.
+func (s *Session) nextPTYID() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastPTYID++
+	return s.lastPTYID
 }
 
 func (p *PTYSession) pump(handler PTYHandler) {
@@ -403,6 +421,131 @@ func (p *PTYSession) Close() error {
 }
 
 // --- Session lifecycle (continued) ---------------------------------------
+
+// --- Session-scoped file API (Phase 8 Tier 2) ---------------------------
+
+// FileEntry is the gomobile-friendly mirror of v1.FileEntry. Methods are
+// non-pointer so the binding generator can expose them as Java fields.
+type FileEntry struct {
+	Name           string
+	Path           string
+	IsDir          bool
+	Size           int64
+	ModifiedUnixMs int64
+}
+
+// FileEntryList is a thin wrapper around []FileEntry for gomobile. The
+// generator does not expose Go slices directly, so we hide them behind
+// indexed accessors.
+type FileEntryList struct {
+	entries []FileEntry
+}
+
+func (l *FileEntryList) Len() int { return len(l.entries) }
+func (l *FileEntryList) Get(i int) *FileEntry {
+	if i < 0 || i >= len(l.entries) {
+		return nil
+	}
+	e := l.entries[i]
+	return &e
+}
+
+// FileContent is the gomobile-friendly result of ReadSessionFile.
+type FileContent struct {
+	Content   []byte
+	Encoding  string
+	Size      int64
+	Truncated bool
+	Error     string
+}
+
+// GetCWD asks the host for the current working directory of the PTY
+// identified by ptyID (typically PTYSession.ID() of the Terminal screen
+// the user is looking at). Returns "" if the host hasn't observed a
+// prompt yet, or if the request failed.
+func (s *Session) GetCWD(ptyID int64) string {
+	resp, err := s.fileExchange(&v1.FilesRequest{
+		Kind: &v1.FilesRequest_GetSession{GetSession: &v1.GetSessionRequest{PtyId: ptyID}},
+	})
+	if err != nil || resp == nil {
+		return ""
+	}
+	if resp.GetError() != "" {
+		return ""
+	}
+	return resp.GetGetSession().GetCwd()
+}
+
+// ListSessionFiles enumerates entries at `path` (cwd-relative) inside
+// the host's CWD. Returns nil and an error string in FileContent.Error
+// when the request fails.
+func (s *Session) ListSessionFiles(ptyID int64, path string) *FileEntryList {
+	resp, err := s.fileExchange(&v1.FilesRequest{
+		Kind: &v1.FilesRequest_ListFiles{ListFiles: &v1.ListSessionFilesRequest{PtyId: ptyID, Path: path}},
+	})
+	out := &FileEntryList{}
+	if err != nil || resp == nil {
+		return out
+	}
+	if resp.GetError() != "" {
+		return out
+	}
+	for _, e := range resp.GetListFiles().GetEntries() {
+		out.entries = append(out.entries, FileEntry{
+			Name:           e.GetName(),
+			Path:           e.GetPath(),
+			IsDir:          e.GetIsDir(),
+			Size:           e.GetSize(),
+			ModifiedUnixMs: e.GetModifiedUnixMs(),
+		})
+	}
+	return out
+}
+
+// ReadSessionFile fetches the contents of a cwd-relative file. Returns a
+// FileContent with Error set on failure.
+func (s *Session) ReadSessionFile(ptyID int64, path string, maxBytes int64) *FileContent {
+	resp, err := s.fileExchange(&v1.FilesRequest{
+		Kind: &v1.FilesRequest_ReadFile{ReadFile: &v1.ReadSessionFileRequest{PtyId: ptyID, Path: path, MaxBytes: maxBytes}},
+	})
+	if err != nil {
+		return &FileContent{Error: err.Error()}
+	}
+	if resp == nil {
+		return &FileContent{Error: "no response"}
+	}
+	if e := resp.GetError(); e != "" {
+		return &FileContent{Error: e}
+	}
+	r := resp.GetReadFile()
+	return &FileContent{
+		Content:   r.GetContent(),
+		Encoding:  r.GetEncoding(),
+		Size:      r.GetSize(),
+		Truncated: r.GetTruncated(),
+	}
+}
+
+// fileExchange opens a fresh stream, sends a FilesRequest envelope,
+// reads a single FilesResponse, and returns it. The stream is closed
+// before returning.
+func (s *Session) fileExchange(req *v1.FilesRequest) (*v1.FilesResponse, error) {
+	stream, err := s.conn.OpenStream(s.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("OpenStream: %w", err)
+	}
+	defer stream.Close()
+	if err := wire.Write(stream, &v1.StreamRequest{
+		Kind: &v1.StreamRequest_Files{Files: req},
+	}); err != nil {
+		return nil, fmt.Errorf("write FilesRequest: %w", err)
+	}
+	resp := &v1.FilesResponse{}
+	if err := wire.Read(wire.NewReader(stream), resp); err != nil {
+		return nil, fmt.Errorf("read FilesResponse: %w", err)
+	}
+	return resp, nil
+}
 
 // Close shuts down the QUIC connection and releases the underlying UDP
 // socket. Safe to call multiple times.

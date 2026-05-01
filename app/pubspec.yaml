@@ -48,6 +48,12 @@ dependencies:
   # rendered with ANSI colours, cursor movement, alt-screen, etc.
   xterm: ^4.0.0
 
+  # Phase 8 Tier 2: syntax highlighting in the session-scoped text
+  # viewer. flutter_highlighting ships pre-baked themes; highlighting
+  # carries the language definitions.
+  flutter_highlighting: ^0.9.0+11.8.0
+  highlighting: ^0.9.0+11.8.0
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8

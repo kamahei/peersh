@@ -17,16 +17,27 @@ import (
 
 	v1 "github.com/peersh/peersh/core/protocol/peersh/v1"
 	"github.com/peersh/peersh/windows/pty"
+	"github.com/peersh/peersh/windows/session"
 	"github.com/peersh/peersh/windows/shell"
 )
 
 // Session wraps a pty.PTY and exposes Write / Resize / Close. The pump
 // goroutine inside Run drives the output direction.
+//
+// Tier 2 addition: each session owns a CWDTracker that scans the
+// child's output for OSC 9;9 prompt sequences. The tracker is fed
+// transparently inside Pump so file-API callers (GetSession /
+// ListSessionFiles / ReadSessionFile) can resolve paths against the
+// shell's last-observed cwd.
 type Session struct {
 	p pty.PTY
 
 	mu     sync.Mutex
 	closed bool
+
+	tracker *session.CWDTracker
+	cwdMu   sync.RWMutex
+	cwd     string
 }
 
 // Open spawns the requested command (or the default shell wrapper) under a
@@ -68,7 +79,17 @@ func Open(command string, args []string, cols, rows uint16) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ptyhost: spawn %q: %w", exe, err)
 	}
-	return &Session{p: p}, nil
+	return &Session{p: p, tracker: session.NewCWDTracker()}, nil
+}
+
+// CWD returns the last current-working-directory observed in the child
+// process's prompt output (via OSC 9;9 emitted by the shell wrapper).
+// Returns empty until the first prompt has rendered. Safe for concurrent
+// use.
+func (s *Session) CWD() string {
+	s.cwdMu.RLock()
+	defer s.cwdMu.RUnlock()
+	return s.cwd
 }
 
 // Write forwards user keystrokes / paste payloads to the child process.
@@ -150,6 +171,14 @@ func (s *Session) Pump(ctx context.Context, sink func(*v1.PTYFrame) error) {
 		if n > 0 {
 			payload := make([]byte, n)
 			copy(payload, buf[:n])
+			// Feed the tracker BEFORE forwarding so a fresh CWD is
+			// committed by the time the client tries to call ListFiles
+			// after seeing the prompt.
+			if paths := s.tracker.Feed(payload); len(paths) > 0 {
+				s.cwdMu.Lock()
+				s.cwd = paths[len(paths)-1]
+				s.cwdMu.Unlock()
+			}
 			frame := &v1.PTYFrame{Kind: &v1.PTYFrame_Data{Data: &v1.PTYData{Data: payload}}}
 			if serr := sink(frame); serr != nil {
 				_ = s.Close()

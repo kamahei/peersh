@@ -13,8 +13,9 @@ package peersh.v1;
 // determines how the server treats subsequent frames on the stream.
 message StreamRequest {
   oneof kind {
-    ExecRequest exec = 1;
-    PTYRequest  pty  = 2;
+    ExecRequest  exec  = 1;
+    PTYRequest   pty   = 2;
+    FilesRequest files = 3;
   }
 }
 
@@ -76,6 +77,13 @@ message PTYRequest {
   // env carries supplementary environment variables (e.g. TERM=xterm-256color).
   // The host process inherits the peershd environment plus these overrides.
   map<string, string> env = 5;
+
+  // pty_id is a client-chosen handle that becomes the lookup key for
+  // the file-API requests (FilesRequest.{Get,List,Read}*). Must be
+  // unique within this QUIC connection. Tier 2 — clients that don't
+  // care about the file API may leave it 0; the file API will refuse
+  // to resolve pty_id=0.
+  int64 pty_id = 6;
 }
 
 // PTYInput delivers a chunk of bytes from the user's keyboard / paste
@@ -121,4 +129,87 @@ message PTYFrame {
     PTYData   data   = 3;
     PTYExit   exit   = 4;
   }
+}
+
+// --- Session-scoped file API (Phase 8 Tier 2) ----------------------------
+//
+// Path resolution rule: every request supplies a `pty_id` that names a
+// live PTY session on the host. The host's CWDTracker has been observing
+// the shell's prompt OSC 9;9 emissions and holds the latest cwd. The
+// supplied `path` is interpreted relative to that cwd (empty path means
+// the cwd itself). The server rejects paths that escape the cwd (".." or
+// absolute paths) so a malicious client cannot read /etc/passwd / SAM
+// hives by spamming GetFile.
+//
+// pty_id is the same opaque integer that PTYRequest produced — peershd
+// keeps a per-stream-id map. If the PTY has been torn down, the file
+// request fails with PTY_NOT_FOUND.
+
+message FilesRequest {
+  oneof kind {
+    GetSessionRequest      get_session       = 1;
+    ListSessionFilesRequest list_files        = 2;
+    ReadSessionFileRequest  read_file         = 3;
+  }
+}
+
+message FilesResponse {
+  // error, when non-empty, indicates the request failed and the other
+  // payload fields are unset.
+  string error = 1;
+  oneof payload {
+    GetSessionResponse      get_session  = 2;
+    ListSessionFilesResponse list_files  = 3;
+    ReadSessionFileResponse  read_file   = 4;
+  }
+}
+
+message GetSessionRequest {
+  // pty_id identifies the live PTY whose cwd to report.
+  int64 pty_id = 1;
+}
+
+message GetSessionResponse {
+  // cwd is the last directory observed in the shell's prompt OSC 9;9
+  // sequence. Empty until the prompt has rendered at least once.
+  string cwd = 1;
+}
+
+message ListSessionFilesRequest {
+  int64  pty_id = 1;
+  // path is resolved against the session's cwd. Empty means cwd itself.
+  // Forward slashes and back slashes are both accepted.
+  string path = 2;
+}
+
+message FileEntry {
+  string name      = 1;
+  // path is the cwd-relative path of this entry, suitable for passing
+  // back as ListSessionFilesRequest.path or ReadSessionFileRequest.path.
+  string path      = 2;
+  bool   is_dir    = 3;
+  int64  size      = 4;
+  // modified_unix_ms is the file's modification time in unix milliseconds.
+  int64  modified_unix_ms = 5;
+}
+
+message ListSessionFilesResponse {
+  // resolved_path is the canonicalised cwd-relative path the host
+  // actually listed (after collapsing redundant separators).
+  string resolved_path = 1;
+  repeated FileEntry entries = 2;
+}
+
+message ReadSessionFileRequest {
+  int64  pty_id = 1;
+  string path   = 2;
+  // max_bytes caps the response size. 0 -> server default (4 MiB).
+  int64  max_bytes = 3;
+}
+
+message ReadSessionFileResponse {
+  bytes  content       = 1;
+  string encoding      = 2;       // "utf-8", "utf-8-bom", "utf-16-le", ...
+  int64  size          = 3;       // total file size on disk
+  bool   truncated     = 4;       // content was clipped to max_bytes
 }

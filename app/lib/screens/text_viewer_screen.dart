@@ -1,21 +1,58 @@
+// Phase 8 Tier 2 — read-only text viewer.
+//
+// Two construction modes:
+//
+//   - default: takes a PeershSession + an absolute path (legacy entry
+//     point from the terminal's "View remote file" dialog). Uses the
+//     one-shot Get-Content Exec via PeershSession.readFile. Encoding is
+//     always reported as UTF-8 (Get-Content -Encoding UTF8) and size is
+//     computed from the captured content.
+//
+//   - forSession: takes a ptyId + cwd-relative path (entry point from
+//     FileBrowserScreen). Uses bridge.readSessionFile, which returns
+//     the host-side encoding label, on-disk size, and whether the
+//     content was clipped by the host's max_bytes cap.
+//
+// Both modes share the same UI: search field with match navigation,
+// syntax-highlight toggle, copy-all action, encoding+size meta line.
+
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_highlighting/themes/github-dark.dart';
+import 'package:flutter_highlighting/themes/github.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../files/syntax_highlighting.dart';
 import '../services/peersh_session.dart';
 
-/// Built-in simple text viewer. Pulls the file content over the active
-/// session via Get-Content, then offers in-page search with match
-/// navigation, copy-all, and meta in the AppBar.
 class TextViewerScreen extends ConsumerStatefulWidget {
   const TextViewerScreen({
     super.key,
     required this.session,
     required this.path,
-  });
+    this.title,
+  })  : ptyId = null,
+        sessionRelativePath = null;
 
-  final PeershSession session;
+  /// Session-scoped entry point: paths resolve against the host shell's
+  /// last-observed cwd (via OSC 9;9). Used by FileBrowserScreen.
+  const TextViewerScreen.forSession({
+    super.key,
+    required int this.ptyId,
+    required String this.sessionRelativePath,
+    required this.title,
+  })  : session = null,
+        path = '';
+
+  final PeershSession? session;
+  final int? ptyId;
+  final String? sessionRelativePath;
   final String path;
+  final String? title;
+
+  bool get isSessionScoped => ptyId != null;
 
   @override
   ConsumerState<TextViewerScreen> createState() => _TextViewerScreenState();
@@ -25,6 +62,10 @@ class _TextViewerScreenState extends ConsumerState<TextViewerScreen> {
   final _searchCtrl = TextEditingController();
   String? _content;
   String? _error;
+  String _encoding = 'utf-8';
+  int _sizeOnDisk = 0;
+  bool _truncated = false;
+  bool _syntaxHighlight = true;
   List<int> _matches = const <int>[];
   int _currentMatch = -1;
 
@@ -44,18 +85,46 @@ class _TextViewerScreenState extends ConsumerState<TextViewerScreen> {
 
   Future<void> _load() async {
     try {
-      final raw = await widget.session.readFile(widget.path);
-      if (!mounted) return;
-      if (raw.startsWith('ERROR: ')) {
-        setState(() => _error = raw.substring(7));
+      if (widget.isSessionScoped) {
+        final fc = await ref.read(bridgeProvider).readSessionFile(
+              ptyId: widget.ptyId!,
+              path: widget.sessionRelativePath!,
+            );
+        if (!mounted) return;
+        if (fc.isError) {
+          setState(() => _error = fc.error);
+          return;
+        }
+        setState(() {
+          _content = utf8.decode(fc.content, allowMalformed: true);
+          _encoding = fc.encoding;
+          _sizeOnDisk = fc.size;
+          _truncated = fc.truncated;
+        });
       } else {
-        setState(() => _content = raw);
-        _recomputeMatches();
+        final raw = await widget.session!.readFile(widget.path);
+        if (!mounted) return;
+        if (raw.startsWith('ERROR: ')) {
+          setState(() => _error = raw.substring(7));
+          return;
+        }
+        setState(() {
+          _content = raw;
+          _encoding = 'utf-8';
+          _sizeOnDisk = raw.codeUnits.length;
+          _truncated = false;
+        });
       }
+      _recomputeMatches();
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
     }
+  }
+
+  String get _displayPath {
+    if (widget.isSessionScoped) return widget.sessionRelativePath ?? '';
+    return widget.path;
   }
 
   void _recomputeMatches() {
@@ -105,28 +174,41 @@ class _TextViewerScreenState extends ConsumerState<TextViewerScreen> {
     );
   }
 
+  String _formatSize(int size) {
+    if (size < 1024) return '$size B';
+    if (size < 1024 * 1024) return '${(size / 1024).toStringAsFixed(1)} KiB';
+    return '${(size / (1024 * 1024)).toStringAsFixed(1)} MiB';
+  }
+
   String _meta() {
-    final c = _content;
-    if (c == null) return '';
-    final bytes = c.codeUnits.length;
-    final size = bytes < 1024
-        ? '$bytes B'
-        : bytes < 1024 * 1024
-            ? '${(bytes / 1024).toStringAsFixed(1)} KiB'
-            : '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MiB';
-    return 'UTF-8 · $size';
+    if (_content == null) return '';
+    final tag = _truncated ? ' · truncated' : '';
+    return '$_encoding · ${_formatSize(_sizeOnDisk)}$tag';
   }
 
   @override
   Widget build(BuildContext context) {
+    final title = widget.title ?? _displayPath;
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.path, overflow: TextOverflow.ellipsis),
+        title: Text(title, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             tooltip: 'Copy all',
             onPressed: _content == null ? null : _copyAll,
             icon: const Icon(Icons.copy_all_outlined),
+          ),
+          IconButton(
+            tooltip: _syntaxHighlight
+                ? 'Disable syntax highlight'
+                : 'Enable syntax highlight',
+            onPressed: () =>
+                setState(() => _syntaxHighlight = !_syntaxHighlight),
+            icon: Icon(
+              _syntaxHighlight
+                  ? Icons.palette_outlined
+                  : Icons.format_color_reset_outlined,
+            ),
           ),
         ],
         bottom: PreferredSize(
@@ -152,19 +234,56 @@ class _TextViewerScreenState extends ConsumerState<TextViewerScreen> {
                       onNext: () => _moveMatch(true),
                     ),
                     Expanded(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(12),
-                        child: SelectableText(
-                          _content!,
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 13,
-                          ),
-                        ),
+                      child: _TextContent(
+                        content: _content!,
+                        path: _displayPath,
+                        syntaxHighlight: _syntaxHighlight && _searchCtrl.text.isEmpty,
                       ),
                     ),
                   ],
                 ),
+    );
+  }
+}
+
+class _TextContent extends StatelessWidget {
+  const _TextContent({
+    required this.content,
+    required this.path,
+    required this.syntaxHighlight,
+  });
+
+  final String content;
+  final String path;
+  final bool syntaxHighlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = isDark ? githubDarkTheme : githubTheme;
+    final base = TextStyle(
+      fontFamily: 'monospace',
+      fontSize: 13,
+      color: Theme.of(context).colorScheme.onSurface,
+    );
+    final language =
+        syntaxHighlight ? highlightLanguageForPath(path) : null;
+    final inner = (language == null)
+        ? SelectableText(content, style: base)
+        : SelectableText.rich(
+            TextSpan(
+              children: syntaxHighlightSpans(
+                content: content,
+                language: language,
+                theme: theme,
+                baseStyle: base,
+              ),
+              style: base,
+            ),
+          );
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: inner,
     );
   }
 }

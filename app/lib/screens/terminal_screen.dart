@@ -37,6 +37,7 @@ import '../state/settings.dart';
 import '../terminal/resize_policy.dart';
 import '../terminal/viewport_estimate.dart';
 import '../widgets/special_keys_bar.dart';
+import 'file_browser_screen.dart';
 import 'ime_input_sheet.dart';
 import 'text_viewer_screen.dart';
 
@@ -309,6 +310,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     );
   }
 
+  Future<void> _openFileBrowser() async {
+    final id = _ptyId;
+    if (id == null) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FileBrowserScreen(
+          ptyId: id,
+          title: '${widget.server.name} files',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsProvider);
@@ -345,6 +359,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
             tooltip: lineWrap ? 'Switch to horizontal scroll' : 'Switch to wrap',
             onPressed: () => _toggleWrap(!lineWrap),
             icon: Icon(lineWrap ? Icons.wrap_text : Icons.swap_horiz),
+          ),
+          IconButton(
+            tooltip: 'Browse files (cwd-scoped)',
+            onPressed: _ptyId == null ? null : _openFileBrowser,
+            icon: const Icon(Icons.folder_open_outlined),
           ),
           IconButton(
             tooltip: 'View remote file',
