@@ -161,6 +161,12 @@ func Load(path string) (Config, error) {
 func applyEnv(cfg *Config) {
 	if v := os.Getenv("PEERSH_SIGNALING_LISTEN"); v != "" {
 		cfg.ListenAddr = v
+	} else if v := os.Getenv("PORT"); v != "" {
+		// $PORT is the convention used by Render.com, Cloud Run, App
+		// Engine, Heroku, Fly.io, etc. We honour it when
+		// PEERSH_SIGNALING_LISTEN is unset so the same Docker image
+		// drops in on those platforms unchanged.
+		cfg.ListenAddr = ":" + v
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_DB"); v != "" {
 		cfg.DBPath = v
@@ -170,6 +176,24 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_TLS_KEY"); v != "" {
 		cfg.TLS.KeyFile = v
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_DISCOVERY_WS_URL"); v != "" {
+		cfg.Discovery.WSURL = v
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_DISCOVERY_STUN_SERVERS"); v != "" {
+		cfg.Discovery.STUNServers = splitCSV(v)
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_AUTH_PROVIDER"); v != "" {
+		cfg.AuthProvider = v
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_STORE_BACKEND"); v != "" {
+		cfg.StoreBackend = v
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_FIREBASE_PROJECT_ID"); v != "" {
+		cfg.Firebase.ProjectID = v
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_FIREBASE_CREDENTIALS"); v != "" {
+		cfg.Firebase.CredentialsPath = v
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
@@ -192,6 +216,19 @@ func applyEnv(cfg *Config) {
 			cfg.RateLimit.IPPerMinute = f
 		}
 	}
+}
+
+// splitCSV is a small helper for env-var-encoded comma-separated lists.
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (c Config) validate() error {

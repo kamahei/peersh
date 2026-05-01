@@ -1,13 +1,27 @@
 # Render.com Blueprint for peersh-signaling.
 #
-# Usage:
-#   1. Push this repo to GitHub.
-#   2. In Render: New → Blueprint → point at the repo root.
-#   3. Set the secret PEERSH_SIGNALING_TLS_CERT / TLS_KEY (or rely on
-#      Render's TLS termination — recommended for Render Web Services).
+# How to use:
+#   1. Push the repo to GitHub.
+#   2. In Render: New → Blueprint → connect the repo. Render reads this
+#      file and creates the Web Service.
+#   3. After the first deploy you'll have a hostname like
+#      peersh-signaling-xxxx.onrender.com. Set the env var
+#      PEERSH_SIGNALING_DISCOVERY_WS_URL to
+#      wss://peersh-signaling-xxxx.onrender.com/ws so the
+#      /.well-known/peersh.json endpoint returns the right URL.
+#   4. SSH-equivalent: open the Render Shell, run
+#      `peersh-signaling psk add --user <name>` to create a PSK.
 #
-# This template runs the signaling server with an attached persistent
-# disk for the SQLite database.
+# Notes:
+#   - Render injects $PORT; the Dockerfile honours it (no need to set
+#     PEERSH_SIGNALING_LISTEN explicitly).
+#   - Render provides automatic HTTPS at the *.onrender.com edge. The
+#     container speaks plain HTTP behind that edge (Dockerfile passes
+#     -insecure-http).
+#   - The Starter plan ($7/mo) is required for the persistent disk that
+#     keeps PSKs across restarts. The Free plan also works for smoke
+#     tests, but PSKs reset on every redeploy and the service spins down
+#     after 15 minutes of inactivity.
 
 services:
   - type: web
@@ -24,9 +38,10 @@ services:
       mountPath: /data
       sizeGB: 1
     envVars:
-      - key: PEERSH_SIGNALING_LISTEN
-        value: ":10000"  # Render expects PORT-style listening
-      - key: PEERSH_SIGNALING_DB
-        value: "/data/peersh-signaling.db"
       - key: PEERSH_SIGNALING_LOG_LEVEL
-        value: "info"
+        value: info
+      # Filled in by the operator after the first deploy. Until set,
+      # /.well-known/peersh.json returns ws_url = "" and the mobile app
+      # falls back to whatever URL the user typed in.
+      - key: PEERSH_SIGNALING_DISCOVERY_WS_URL
+        sync: false
