@@ -12,6 +12,81 @@ The signaling server is **only used for connection setup** — pairing devices a
   - **Go 1.22+** — if you prefer to build the binary directly.
 - A reverse proxy if you want browser-friendly TLS termination (Caddy / Traefik / nginx). Optional in development; recommended in production.
 
+## Quick start (Google Cloud Run — recommended for no-fixed-fee hosting)
+
+Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 360 000 GiB-seconds memory, 180 000 vCPU-seconds) covers personal use; cold-start spin-down means you pay $0 when nobody is connecting.
+
+**Trade-off**: Cloud Run's filesystem is `tmpfs`, so the SQLite DB is wiped on every cold start. `peersh-signaling` works around this with **bootstrap PSKs** — you set the PSK as an env var, and the container re-creates the record on every startup.
+
+### Steps
+
+1. **Install gcloud CLI** if you haven't: <https://cloud.google.com/sdk/docs/install>
+2. **Authenticate**: `gcloud auth login`
+3. **Create or pick a GCP project** with billing enabled:
+
+   ```sh
+   gcloud projects create peersh-signaling-<your-suffix>      # or skip if you have one
+   gcloud config set project peersh-signaling-<your-suffix>
+   ```
+4. **Run the deploy script** (from the repo root):
+
+   ```sh
+   PROJECT_ID=$(gcloud config get-value project) REGION=asia-northeast1 \
+     server/deploy/cloud-run/deploy.sh
+   ```
+
+   The script enables required APIs, creates an Artifact Registry repo, builds the Docker image, and deploys to Cloud Run. Output ends with the assigned `https://...run.app` URL plus the next-step commands.
+
+5. **Generate a PSK locally** (any 32-byte hex value works):
+
+   ```sh
+   # On Windows PowerShell
+   [Convert]::ToHexString((1..32 | %{[byte](Get-Random -Max 256)}))
+   # Or via openssl on any Unix
+   openssl rand -hex 32
+   ```
+
+6. **Wire the PSK + discovery URL into the running service**:
+
+   ```sh
+   gcloud run services update peersh-signaling \
+     --region=asia-northeast1 \
+     --update-env-vars=PEERSH_SIGNALING_DISCOVERY_WS_URL=wss://<host>/ws,\
+   PEERSH_SIGNALING_BOOTSTRAP_PSK=alice:<hex>:alice-laptop
+   ```
+
+   Replace `<host>` with the `*.run.app` host name from step 4 and `<hex>` with the secret from step 5.
+
+7. **Verify**:
+
+   ```sh
+   curl https://<host>/healthz                       # → ok
+   curl https://<host>/.well-known/peersh.json       # → JSON with the WS URL
+   ```
+
+8. **Connect from peershd** on your Windows host:
+
+   ```sh
+   echo <hex> > alice.psk
+   peershd -signaling wss://<host>/ws -user alice -psk-file alice.psk
+   ```
+
+   `peershd` logs its `device_id` at startup. Use that as `-target` from `peersh-cli` or the mobile app's server entry.
+
+### Migrating to Phase 5 (Firestore + Firebase Auth) later
+
+The same Cloud Run service can be flipped to Firebase mode by updating env vars (no rebuild required):
+
+```sh
+gcloud run services update peersh-signaling \
+  --region=asia-northeast1 \
+  --update-env-vars=PEERSH_SIGNALING_AUTH_PROVIDER=firebase,\
+PEERSH_SIGNALING_STORE_BACKEND=firestore,\
+PEERSH_SIGNALING_FIREBASE_PROJECT_ID=<your-firebase-project-id>
+```
+
+The bootstrap-PSK env var becomes a no-op in Firebase mode. See `docs/firebase-setup.md` for the full Phase 5 walkthrough.
+
 ## Quick start (Render.com — recommended for first-time personal hosting)
 
 Render reads `server/deploy/render.yaml` as a Blueprint. The same Docker image is used everywhere; Render just drives the build.

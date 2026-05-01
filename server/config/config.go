@@ -38,6 +38,20 @@ type Config struct {
 	RateLimit RateLimitConfig `toml:"rate_limit"`
 	Discovery DiscoveryConfig `toml:"discovery"`
 	Firebase  FirebaseConfig  `toml:"firebase"`
+
+	// BootstrapPSKs is the list of PSK records to ensure-exist on every
+	// server startup. Useful on platforms with ephemeral filesystems
+	// (Cloud Run, Render Free, etc.) where the SQLite store does not
+	// survive cold starts. Configured via TOML or via the
+	// PEERSH_SIGNALING_BOOTSTRAP_PSK env var.
+	BootstrapPSKs []BootstrapPSK `toml:"bootstrap_psk"`
+}
+
+// BootstrapPSK is one (user_id, secret) pair to seed at startup.
+type BootstrapPSK struct {
+	UserID    string `toml:"user_id"`
+	SecretHex string `toml:"secret_hex"`
+	Label     string `toml:"label"`
 }
 
 // FirebaseConfig configures the firebase auth provider and the firestore
@@ -195,6 +209,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PEERSH_SIGNALING_FIREBASE_CREDENTIALS"); v != "" {
 		cfg.Firebase.CredentialsPath = v
 	}
+	if v := os.Getenv("PEERSH_SIGNALING_BOOTSTRAP_PSK"); v != "" {
+		if parsed, err := parseBootstrapPSKs(v); err == nil {
+			cfg.BootstrapPSKs = append(cfg.BootstrapPSKs, parsed...)
+		}
+	}
 	if v := os.Getenv("PEERSH_SIGNALING_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
@@ -229,6 +248,36 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// parseBootstrapPSKs parses the PEERSH_SIGNALING_BOOTSTRAP_PSK env var
+// format:
+//
+//	user1:hex_secret1[:label1],user2:hex_secret2[:label2]
+//
+// Whitespace around tokens is trimmed. Entries that do not parse are
+// silently dropped (the server still starts; only the broken entry is
+// missing).
+func parseBootstrapPSKs(s string) ([]BootstrapPSK, error) {
+	out := make([]BootstrapPSK, 0)
+	for _, entry := range splitCSV(s) {
+		parts := strings.SplitN(entry, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		bp := BootstrapPSK{
+			UserID:    strings.TrimSpace(parts[0]),
+			SecretHex: strings.TrimSpace(parts[1]),
+		}
+		if len(parts) == 3 {
+			bp.Label = strings.TrimSpace(parts[2])
+		}
+		if bp.UserID == "" || bp.SecretHex == "" {
+			continue
+		}
+		out = append(out, bp)
+	}
+	return out, nil
 }
 
 func (c Config) validate() error {

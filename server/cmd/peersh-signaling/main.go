@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -110,6 +111,10 @@ func runServe(args []string) error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer st.Close()
+
+	if err := applyBootstrapPSKs(ctx, st, cfg.BootstrapPSKs, logger); err != nil {
+		return fmt.Errorf("bootstrap psk: %w", err)
+	}
 
 	authProvider, authBuilder, authKind, err := buildAuth(ctx, cfg, st)
 	if err != nil {
@@ -220,6 +225,48 @@ func buildAuth(ctx context.Context, cfg config.Config, st store.Store) (auth.Pro
 	default:
 		return nil, nil, store.AuthProviderUnknown, fmt.Errorf("config: unknown auth_provider %q", cfg.AuthProvider)
 	}
+}
+
+// applyBootstrapPSKs upserts every PSK record listed in cfg.BootstrapPSKs
+// so the server can run on a platform with an ephemeral filesystem
+// (Cloud Run / Render Free) without losing PSKs across cold starts.
+//
+// Bootstrap entries are upserts: an entry that already exists with a
+// different secret is overwritten with the env-var value. Operators
+// using a persistent backend (sqlite + disk, firestore) can leave the
+// list empty.
+func applyBootstrapPSKs(ctx context.Context, st store.Store, entries []config.BootstrapPSK, logger *slog.Logger) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	for _, e := range entries {
+		secret, err := hex.DecodeString(e.SecretHex)
+		if err != nil {
+			logger.Warn("bootstrap psk: bad hex; skipping",
+				"user", e.UserID, "err", err)
+			continue
+		}
+		if _, err := st.GetUser(ctx, e.UserID); err != nil {
+			if err := st.PutUser(ctx, store.User{
+				ID:           e.UserID,
+				AuthProvider: store.AuthProviderPSK,
+				CreatedAt:    now,
+			}); err != nil {
+				return fmt.Errorf("put user %s: %w", e.UserID, err)
+			}
+		}
+		if err := st.PutPSKRecord(ctx, store.PSKRecord{
+			UserID:       e.UserID,
+			Secret:       secret,
+			DisplayLabel: e.Label,
+			CreatedAt:    now,
+		}); err != nil {
+			return fmt.Errorf("put psk %s: %w", e.UserID, err)
+		}
+		logger.Info("bootstrap psk applied", "user", e.UserID, "label", e.Label)
+	}
+	return nil
 }
 
 // runPSK dispatches the psk subsubcommand.

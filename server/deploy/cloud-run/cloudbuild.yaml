@@ -1,0 +1,31 @@
+# Cloud Build config for peersh-signaling.
+#
+# Usage (with deploy.sh wrapper):
+#   server/deploy/cloud-run/deploy.sh
+#
+# Usage (manual):
+#   gcloud builds submit \
+#     --config=server/deploy/cloud-run/cloudbuild.yaml \
+#     --substitutions=_REGION=asia-northeast1,_REPO=peersh,_TAG=latest
+
+substitutions:
+  _REGION: asia-northeast1
+  _REPO: peersh
+  _IMAGE: peersh-signaling
+  _TAG: latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=server/deploy/Dockerfile
+      - --tag=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
+      - --tag=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$BUILD_ID
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$BUILD_ID
