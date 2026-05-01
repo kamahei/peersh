@@ -92,7 +92,7 @@ echo "================================================================"
 echo " Deployed."
 echo " URL:   $URL"
 echo " WS:    ${URL/https:\/\//wss:\/\/}/ws"
-echo " Health $URL/healthz"
+echo " Health $URL/health"
 echo " Disco  $URL/.well-known/peersh.json"
 echo "================================================================"
 echo

@@ -54,7 +54,7 @@ EXPOSE 8443
 # Honour $PORT for platforms that inject it (Render.com / Cloud Run /
 # App Engine / Heroku / Fly.io). Fall back to 8443 for plain docker-compose.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -q --spider "http://127.0.0.1:${PORT:-8443}/healthz" || exit 1
+  CMD wget -q --spider "http://127.0.0.1:${PORT:-8443}/health" || exit 1
 
 # Sensible defaults that hosting platforms either inherit or override.
 ENV PEERSH_SIGNALING_DB=/data/peersh-signaling.db

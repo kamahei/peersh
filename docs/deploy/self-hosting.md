@@ -79,7 +79,7 @@ Caddy snippet:
 ```caddyfile
 signaling.example.com {
   reverse_proxy /ws localhost:8443
-  reverse_proxy /healthz localhost:8443
+  reverse_proxy /health localhost:8443
   reverse_proxy /metrics localhost:8443
   reverse_proxy /.well-known/peersh.json localhost:8443
 }

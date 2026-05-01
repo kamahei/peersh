@@ -34,3 +34,7 @@ app/.flutter-plugins-dependencies
 
 # Local PSK secrets — never commit
 /local/
+
+# Local peersh-signaling SQLite state (generated when running server locally)
+peersh-signaling.db
+peersh-signaling.db-*

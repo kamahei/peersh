@@ -32,7 +32,7 @@ services:
     autoDeploy: true
     dockerfilePath: ./server/deploy/Dockerfile
     dockerContext: .
-    healthCheckPath: /healthz
+    healthCheckPath: /health
     disk:
       name: peersh-signaling-data
       mountPath: /data

@@ -47,12 +47,12 @@ primary_region = "nrt"
     timeout = "2s"
 
 [checks]
-  [checks.healthz]
+  [checks.health]
     type = "http"
     interval = "30s"
     timeout = "5s"
     grace_period = "10s"
     method = "get"
-    path = "/healthz"
+    path = "/health"
     protocol = "http"
     port = 8443

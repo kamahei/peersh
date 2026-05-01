@@ -142,7 +142,9 @@ func runServe(args []string) error {
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", server.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Cloud Run / Google Front End intercepts /healthz at the edge, so the
+	// app-level liveness probe is exposed at /health instead.
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})

@@ -70,7 +70,7 @@ Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 36
 7. **Verify**:
 
    ```sh
-   curl https://<host>/healthz                    # → ok
+   curl https://<host>/health                     # → ok  (Cloud Run reserves /healthz at the edge)
    curl https://<host>/.well-known/peersh.json    # → JSON with the WS URL
    curl https://<host>/metrics                    # → Prometheus exposition
    ```
