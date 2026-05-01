@@ -5,7 +5,7 @@ import '../models/server_entry.dart';
 import '../state/servers.dart';
 import 'server_editor_screen.dart';
 import 'settings_screen.dart';
-import 'terminal_screen.dart';
+import 'terminal_tabs_screen.dart';
 
 class ServersScreen extends ConsumerWidget {
   const ServersScreen({super.key});
@@ -76,7 +76,7 @@ class ServersScreen extends ConsumerWidget {
                       ),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => TerminalScreen(server: s),
+                          builder: (_) => TerminalTabsScreen(server: s),
                         ),
                       ),
                       trailing: IconButton(
