@@ -1,3 +1,34 @@
+/// One persisted PTY the host is willing to let the client reattach to.
+class PtyHandleInfo {
+  const PtyHandleInfo({
+    required this.handle,
+    required this.command,
+    required this.attached,
+    required this.cwd,
+    required this.lastSeenUnixMs,
+  });
+
+  /// Server-assigned reattach handle.
+  final String handle;
+  /// What the PTY is running ("auto" / "pwsh" / "claude" / ...).
+  final String command;
+  /// True when another stream is currently bound. Trying to reattach
+  /// to an already-attached handle is rejected by the server.
+  final bool attached;
+  /// Last-observed cwd (or empty if no prompt has rendered yet).
+  final String cwd;
+  /// Time of the most recent attach/detach transition.
+  final int lastSeenUnixMs;
+
+  static PtyHandleInfo fromMap(Map<dynamic, dynamic> m) => PtyHandleInfo(
+        handle: (m['handle'] as String?) ?? '',
+        command: (m['command'] as String?) ?? '',
+        attached: (m['attached'] as bool?) ?? false,
+        cwd: (m['cwd'] as String?) ?? '',
+        lastSeenUnixMs: (m['lastSeenUnixMs'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// Cwd-relative file entry returned by `bridge.listSessionFiles`.
 class PtyFileEntry {
   const PtyFileEntry({

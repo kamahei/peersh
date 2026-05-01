@@ -289,6 +289,7 @@ type PTYSession struct {
 	stream *transport.Stream
 	parent *Session
 	id     int64
+	handle string // server-assigned reattach handle (Phase 6b Tier 2)
 
 	mu     sync.Mutex
 	closed bool
@@ -305,6 +306,16 @@ type PTYSession struct {
 // to address the right host-side PTY.
 func (p *PTYSession) ID() int64 { return p.id }
 
+// Handle returns the server-assigned reattach handle, set after the
+// PTY's first PTYReattachAck arrives. Empty until the ack frame has
+// landed; callers needing a guaranteed-non-empty value should call
+// HandleAfterFirstFrame which blocks briefly.
+func (p *PTYSession) Handle() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.handle
+}
+
 // OpenPTY opens a pseudo-console on the host and starts streaming output
 // to handler. command empty / "auto" / "pwsh" / "powershell" / "cmd" picks
 // the operator-configured default shell (with the OSC 9;9 prompt
@@ -314,6 +325,26 @@ func (p *PTYSession) ID() int64 { return p.id }
 // caller may run a PTY and one-shot Execs concurrently against the same
 // Session because each lives on its own QUIC stream.
 func (s *Session) OpenPTY(command string, cols, rows int, handler PTYHandler) (*PTYSession, error) {
+	return s.openPTYInternal(command, "", cols, rows, handler)
+}
+
+// OpenPTYReattach reattaches to a previously-persisted PTY by its
+// server-assigned handle. cols/rows are still applied to resize the
+// existing pseudo-console. The host streams the scrollback ring buffer
+// before live data resumes.
+//
+// Reattach can fail if the handle is unknown, expired, or another
+// client is currently bound; in that case the handler's OnExit fires
+// with the rejection reason and PTYSession.Close should still be
+// called to release the local stream.
+func (s *Session) OpenPTYReattach(reattachHandle string, cols, rows int, handler PTYHandler) (*PTYSession, error) {
+	if reattachHandle == "" {
+		return nil, errors.New("OpenPTYReattach: empty handle")
+	}
+	return s.openPTYInternal("", reattachHandle, cols, rows, handler)
+}
+
+func (s *Session) openPTYInternal(command, reattachHandle string, cols, rows int, handler PTYHandler) (*PTYSession, error) {
 	if cols <= 0 {
 		cols = 80
 	}
@@ -327,10 +358,11 @@ func (s *Session) OpenPTY(command string, cols, rows int, handler PTYHandler) (*
 	}
 	if err := wire.Write(stream, &v1.StreamRequest{
 		Kind: &v1.StreamRequest_Pty{Pty: &v1.PTYRequest{
-			Command: command,
-			Cols:    uint32(cols),
-			Rows:    uint32(rows),
-			PtyId:   id,
+			Command:        command,
+			Cols:           uint32(cols),
+			Rows:           uint32(rows),
+			PtyId:          id,
+			ReattachHandle: reattachHandle,
 		}},
 	}); err != nil {
 		_ = stream.Close()
@@ -361,6 +393,17 @@ func (p *PTYSession) pump(handler PTYHandler) {
 			return
 		}
 		switch k := frame.GetKind().(type) {
+		case *v1.PTYFrame_ReattachAck:
+			ack := k.ReattachAck
+			p.mu.Lock()
+			p.handle = ack.GetHandle()
+			p.mu.Unlock()
+			if !ack.GetAccepted() {
+				// Reattach refused; surface as an error exit so the
+				// client UI can react.
+				handler.OnExit(-1, "reattach refused: "+ack.GetReason())
+				return
+			}
 		case *v1.PTYFrame_Data:
 			if d := k.Data.GetData(); len(d) > 0 {
 				handler.OnData(d)
@@ -450,6 +493,29 @@ func (l *FileEntryList) Get(i int) *FileEntry {
 	return &e
 }
 
+// PTYHandle mirrors v1.PTYHandle for gomobile.
+type PTYHandle struct {
+	Handle         string
+	Command        string
+	Attached       bool
+	CWD            string
+	LastSeenUnixMs int64
+}
+
+// PTYHandleList wraps []PTYHandle.
+type PTYHandleList struct {
+	entries []PTYHandle
+}
+
+func (l *PTYHandleList) Len() int { return len(l.entries) }
+func (l *PTYHandleList) Get(i int) *PTYHandle {
+	if i < 0 || i >= len(l.entries) {
+		return nil
+	}
+	e := l.entries[i]
+	return &e
+}
+
 // FileContent is the gomobile-friendly result of ReadSessionFile.
 type FileContent struct {
 	Content   []byte
@@ -500,6 +566,43 @@ func (s *Session) ListSessionFiles(ptyID int64, path string) *FileEntryList {
 		})
 	}
 	return out
+}
+
+// ListPTYs enumerates the persisted PTYs the host is currently
+// holding for this connection. Empty list when no PTYs are alive.
+func (s *Session) ListPTYs() *PTYHandleList {
+	resp, err := s.fileExchange(&v1.FilesRequest{
+		Kind: &v1.FilesRequest_ListPtys{ListPtys: &v1.ListPTYsRequest{}},
+	})
+	out := &PTYHandleList{}
+	if err != nil || resp == nil || resp.GetError() != "" {
+		return out
+	}
+	for _, h := range resp.GetListPtys().GetPtys() {
+		out.entries = append(out.entries, PTYHandle{
+			Handle:         h.GetHandle(),
+			Command:        h.GetCommand(),
+			Attached:       h.GetAttached(),
+			CWD:            h.GetCwd(),
+			LastSeenUnixMs: h.GetLastSeenUnixMs(),
+		})
+	}
+	return out
+}
+
+// KillPTY tears down a persisted PTY by its handle (closes the child
+// process and drops the ring buffer immediately).
+func (s *Session) KillPTY(handle string) string {
+	resp, err := s.fileExchange(&v1.FilesRequest{
+		Kind: &v1.FilesRequest_KillPty{KillPty: &v1.KillPTYRequest{Handle: handle}},
+	})
+	if err != nil {
+		return err.Error()
+	}
+	if resp.GetError() != "" {
+		return resp.GetError()
+	}
+	return ""
 }
 
 // ReadSessionFile fetches the contents of a cwd-relative file. Returns a

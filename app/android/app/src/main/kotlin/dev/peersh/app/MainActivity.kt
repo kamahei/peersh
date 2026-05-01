@@ -144,6 +144,7 @@ class MainActivity : FlutterActivity() {
                         val command = call.argument<String>("command") ?: ""
                         val cols = (call.argument<Number>("cols") ?: 80).toInt()
                         val rows = (call.argument<Number>("rows") ?: 24).toInt()
+                        val reattachHandle = call.argument<String>("reattachHandle") ?: ""
                         val s = sessions[sessionId]
                         if (s == null) {
                             result.error("UNKNOWN_SESSION", "no session for id=$sessionId", null)
@@ -151,11 +152,6 @@ class MainActivity : FlutterActivity() {
                         }
                         executor.submit {
                             try {
-                                // Reserve the id BEFORE opening so the
-                                // PTYEventHandler can be constructed with
-                                // the matching ptyId. Session.openPTY
-                                // generates the id internally and we read
-                                // it back via PTYSession.id().
                                 val tempHandler = object : PTYHandler {
                                     @Volatile var ptyId: Long = 0
                                     @Volatile var realHandler: PTYEventHandler? = null
@@ -166,16 +162,85 @@ class MainActivity : FlutterActivity() {
                                         realHandler?.onExit(exitCode, errMessage)
                                     }
                                 }
-                                val p = s.openPTY(command, cols.toLong(), rows.toLong(), tempHandler)
+                                val p = if (reattachHandle.isNotEmpty()) {
+                                    s.openPTYReattach(reattachHandle, cols.toLong(), rows.toLong(), tempHandler)
+                                } else {
+                                    s.openPTY(command, cols.toLong(), rows.toLong(), tempHandler)
+                                }
                                 val ptyId = p.id()
                                 tempHandler.ptyId = ptyId
                                 tempHandler.realHandler = PTYEventHandler(ptyId) { sink }
                                 ptys[ptyId] = p
                                 sessionForPty[ptyId] = sessionId
-                                mainHandler.post { result.success(ptyId) }
+                                // Best-effort: poll the host-assigned
+                                // reattach handle for the next 2 s so
+                                // the Dart side can persist it. The ack
+                                // arrives within a few hundred ms in
+                                // practice.
+                                var handle = ""
+                                for (i in 0 until 20) {
+                                    handle = p.handle()
+                                    if (handle.isNotEmpty()) break
+                                    Thread.sleep(100)
+                                }
+                                mainHandler.post {
+                                    result.success(hashMapOf<String, Any?>(
+                                        "ptyId" to ptyId,
+                                        "handle" to handle,
+                                    ))
+                                }
                             } catch (t: Throwable) {
                                 mainHandler.post {
                                     result.error("PTY_OPEN_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
+                    "listPTYs" -> {
+                        val sessionId = (call.argument<Number>("sessionId") ?: 0).toInt()
+                        val s = sessions[sessionId]
+                        if (s == null) {
+                            result.error("UNKNOWN_SESSION", "no session for id=$sessionId", null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try {
+                                val list = s.listPTYs()
+                                val total = list.len().toInt()
+                                val items = ArrayList<HashMap<String, Any?>>(total)
+                                for (i in 0 until total) {
+                                    val e = list.get(i.toLong()) ?: continue
+                                    items.add(hashMapOf<String, Any?>(
+                                        "handle" to e.handle,
+                                        "command" to e.command,
+                                        "attached" to e.attached,
+                                        "cwd" to e.cwd,
+                                        "lastSeenUnixMs" to e.lastSeenUnixMs,
+                                    ))
+                                }
+                                mainHandler.post { result.success(items) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("LIST_PTYS_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
+                    "killPTY" -> {
+                        val sessionId = (call.argument<Number>("sessionId") ?: 0).toInt()
+                        val handle = call.argument<String>("handle") ?: ""
+                        val s = sessions[sessionId]
+                        if (s == null) {
+                            result.error("UNKNOWN_SESSION", "no session for id=$sessionId", null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try {
+                                val err = s.killPTY(handle)
+                                mainHandler.post { result.success(err) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("KILL_PTY_FAILED", t.message ?: t.javaClass.simpleName, null)
                                 }
                             }
                         }

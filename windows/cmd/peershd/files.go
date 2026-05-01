@@ -65,7 +65,7 @@ const MaxFileReadBytes = 4 << 20 // 4 MiB
 // serveFilesStream handles one client-initiated stream that begins with
 // FilesRequest. The stream is a single request/response pair and is
 // closed after the response is written.
-func serveFilesStream(stream *transport.Stream, req *v1.FilesRequest, reg *ptyRegistry) {
+func serveFilesStream(stream *transport.Stream, req *v1.FilesRequest, reg *ptyRegistry, mgr *ptyhost.Manager) {
 	resp := &v1.FilesResponse{}
 	switch kind := req.GetKind().(type) {
 	case *v1.FilesRequest_GetSession:
@@ -74,10 +74,38 @@ func serveFilesStream(stream *transport.Stream, req *v1.FilesRequest, reg *ptyRe
 		resp = handleListFiles(kind.ListFiles, reg)
 	case *v1.FilesRequest_ReadFile:
 		resp = handleReadFile(kind.ReadFile, reg)
+	case *v1.FilesRequest_ListPtys:
+		resp = handleListPTYs(mgr)
+	case *v1.FilesRequest_KillPty:
+		resp = handleKillPTY(kind.KillPty, mgr)
 	default:
 		resp.Error = "files: unknown request kind"
 	}
 	_ = wire.Write(stream, resp)
+}
+
+func handleListPTYs(mgr *ptyhost.Manager) *v1.FilesResponse {
+	listings := mgr.List()
+	out := &v1.ListPTYsResponse{}
+	for _, l := range listings {
+		out.Ptys = append(out.Ptys, &v1.PTYHandle{
+			Handle:         string(l.Handle),
+			Command:        l.Command,
+			Attached:       l.Attached,
+			Cwd:            l.CWD,
+			LastSeenUnixMs: l.LastSeenMs,
+		})
+	}
+	return &v1.FilesResponse{
+		Payload: &v1.FilesResponse_ListPtys{ListPtys: out},
+	}
+}
+
+func handleKillPTY(req *v1.KillPTYRequest, mgr *ptyhost.Manager) *v1.FilesResponse {
+	mgr.Drop(ptyhost.ManagedHandle(req.GetHandle()))
+	return &v1.FilesResponse{
+		Payload: &v1.FilesResponse_KillPty{KillPty: &v1.KillPTYResponse{Ok: true}},
+	}
 }
 
 func handleGetSession(req *v1.GetSessionRequest, reg *ptyRegistry) *v1.FilesResponse {

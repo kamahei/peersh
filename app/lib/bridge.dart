@@ -92,23 +92,52 @@ class PeershBridge {
   }
 
   /// Opens an interactive PTY on an existing session. Returns the host-
-  /// assigned PTY id the caller uses for [ptyInput] / [ptyResize] /
-  /// [closePty] / [getCwd] / [listSessionFiles] / [readSessionFile].
-  /// Output flows on [ptyEvents] tagged with the same ptyId.
-  Future<int> openPty({
+  /// assigned PTY id + the server-issued reattach handle. The caller
+  /// uses the id for [ptyInput] / [ptyResize] / [closePty] / file API
+  /// calls; the handle is what survives connection drops.
+  ///
+  /// Pass [reattachHandle] to bind to a previously-persisted PTY (the
+  /// server replays its scrollback ring buffer first).
+  Future<({int ptyId, String handle})> openPty({
     required int sessionId,
     String command = '',
     int cols = 80,
     int rows = 24,
+    String reattachHandle = '',
   }) async {
-    final id = await _control.invokeMethod<int>('openPTY', {
+    final raw = await _control.invokeMethod<Map<dynamic, dynamic>>('openPTY', {
       'sessionId': sessionId,
       'command': command,
       'cols': cols,
       'rows': rows,
+      'reattachHandle': reattachHandle,
     });
-    if (id == null) throw StateError('bridge: openPTY returned null');
-    return id;
+    if (raw == null) throw StateError('bridge: openPTY returned null');
+    return (
+      ptyId: (raw['ptyId'] as num).toInt(),
+      handle: (raw['handle'] as String?) ?? '',
+    );
+  }
+
+  /// Returns the persisted PTYs the host is holding for this session.
+  Future<List<PtyHandleInfo>> listPtys({required int sessionId}) async {
+    final raw = await _control.invokeMethod<List<dynamic>>('listPTYs', {
+      'sessionId': sessionId,
+    });
+    if (raw == null) return const [];
+    return raw
+        .cast<Map<dynamic, dynamic>>()
+        .map(PtyHandleInfo.fromMap)
+        .toList(growable: false);
+  }
+
+  /// Tear down a persisted PTY by its handle.
+  Future<String> killPty({required int sessionId, required String handle}) async {
+    final out = await _control.invokeMethod<String>('killPTY', {
+      'sessionId': sessionId,
+      'handle': handle,
+    });
+    return out ?? '';
   }
 
   /// Returns the host's last-observed cwd for the PTY (via OSC 9;9

@@ -14,6 +14,7 @@ import 'package:xterm/xterm.dart';
 import '../models/pty_event.dart';
 import '../services/peersh_session.dart';
 import '../state/settings.dart';
+import '../state/persisted_pty_handles.dart';
 import '../terminal/resize_policy.dart';
 import '../terminal/viewport_estimate.dart';
 
@@ -31,6 +32,10 @@ class TerminalTabModel extends ChangeNotifier {
 
   /// Host-assigned PTY id, set after openPty completes.
   int? ptyId;
+
+  /// Server-assigned reattach handle. Persisted across reconnects so
+  /// the client can rebind to the same shell + scrollback.
+  String reattachHandle = '';
 
   /// Last cwd reported by the host (for tab title).
   String _lastCwd = '';
@@ -132,19 +137,30 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       visibleCols: visibleCols,
     );
     try {
-      final ptyId = await ref.read(bridgeProvider).openPty(
+      final reattach = widget.tab.reattachHandle;
+      final result = await ref.read(bridgeProvider).openPty(
             sessionId: widget.session.id,
             cols: remoteCols,
             rows: dims.rows,
+            reattachHandle: reattach,
           );
       if (!mounted) {
-        await ref.read(bridgeProvider).closePty(ptyId: ptyId);
+        await ref.read(bridgeProvider).closePty(ptyId: result.ptyId);
         return;
       }
-      widget.tab.ptyId = ptyId;
+      widget.tab.ptyId = result.ptyId;
+      widget.tab.reattachHandle = result.handle;
       _lastSentCols = remoteCols;
       _lastSentRows = dims.rows;
       _sub = ref.read(bridgeProvider).ptyEvents().listen(_onEvent);
+      // Remember this handle locally so the user can rejoin later if
+      // the connection drops or they leave + return.
+      if (result.handle.isNotEmpty) {
+        ref.read(persistedPtyHandlesProvider.notifier).remember(
+              serverId: widget.session.serverId,
+              handle: result.handle,
+            );
+      }
       setState(() {});
       _scheduleCwdRefresh();
     } catch (e) {

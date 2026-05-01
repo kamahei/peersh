@@ -383,6 +383,9 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 	log.Info("handshake complete", "session", sessionID, "pwsh", host.Path())
 
 	registry := newPTYRegistry()
+	ptyMgr := ptyhost.NewManager()
+	defer ptyMgr.Close()
+	go runPTYSweeper(ctx, ptyMgr)
 	for {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
@@ -392,14 +395,27 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 			log.Info("AcceptStream: end of connection", "err", err)
 			return
 		}
-		go serveStream(ctx, host, stream, registry, log)
+		go serveStream(ctx, host, stream, registry, ptyMgr, log)
+	}
+}
+
+func runPTYSweeper(ctx context.Context, mgr *ptyhost.Manager) {
+	t := time.NewTicker(60 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			mgr.Sweep()
+		}
 	}
 }
 
 // serveStream dispatches a per-stream first frame (StreamRequest) to either
 // the one-shot Exec path or the interactive PTY path. Each stream owns its
 // own protocol; this function returns when the stream closes.
-func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, reg *ptyRegistry, log *slog.Logger) {
+func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger) {
 	defer stream.Close()
 	r := wire.NewReader(stream)
 	req := &v1.StreamRequest{}
@@ -411,47 +427,104 @@ func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream,
 	case *v1.StreamRequest_Exec:
 		serveExecStream(ctx, host, stream, kind.Exec, log)
 	case *v1.StreamRequest_Pty:
-		servePTYStream(ctx, stream, r, kind.Pty, reg, log)
+		servePTYStream(ctx, stream, r, kind.Pty, reg, mgr, log)
 	case *v1.StreamRequest_Files:
-		serveFilesStream(stream, kind.Files, reg)
+		serveFilesStream(stream, kind.Files, reg, mgr)
 	default:
 		log.Warn("StreamRequest with no kind set")
 	}
 }
 
-func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, reg *ptyRegistry, log *slog.Logger) {
-	clog := log.With("stream", stream.StreamID(), "pty_cmd", req.GetCommand(), "pty_id", req.GetPtyId())
+func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger) {
+	clog := log.With("stream", stream.StreamID(), "pty_cmd", req.GetCommand(), "pty_id", req.GetPtyId(), "reattach", req.GetReattachHandle() != "")
 	cols := uint16(req.GetCols())
 	rows := uint16(req.GetRows())
-	clog.Info("pty open", "cols", cols, "rows", rows)
 
-	sess, err := ptyhost.Open(req.GetCommand(), req.GetArgs(), cols, rows)
-	if err != nil {
-		clog.Warn("ptyhost.Open failed", "err", err)
-		_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Exit{Exit: &v1.PTYExit{ExitCode: -1, Error: err.Error()}}})
-		return
+	var (
+		sess     *ptyhost.Session
+		handle   ptyhost.ManagedHandle
+		replay   []byte
+	)
+
+	if h := req.GetReattachHandle(); h != "" {
+		// Reattach path.
+		s, snap, alreadyAttached, err := mgr.Attach(ptyhost.ManagedHandle(h))
+		if err != nil {
+			clog.Info("reattach rejected: unknown handle", "err", err)
+			_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
+				Handle: h, Accepted: false, Reason: err.Error(),
+			}}})
+			return
+		}
+		if alreadyAttached {
+			clog.Info("reattach rejected: already attached")
+			_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
+				Handle: h, Accepted: false, Reason: "another client is currently attached",
+			}}})
+			return
+		}
+		sess = s
+		handle = ptyhost.ManagedHandle(h)
+		replay = snap
+		if cols > 0 && rows > 0 {
+			_ = sess.Resize(cols, rows)
+		}
+		clog.Info("pty reattached", "cols", cols, "rows", rows, "replay_bytes", len(replay))
+	} else {
+		// Fresh open.
+		clog.Info("pty open", "cols", cols, "rows", rows)
+		s, err := ptyhost.Open(req.GetCommand(), req.GetArgs(), cols, rows)
+		if err != nil {
+			clog.Warn("ptyhost.Open failed", "err", err)
+			_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Exit{Exit: &v1.PTYExit{ExitCode: -1, Error: err.Error()}}})
+			return
+		}
+		sess = s
+		commandLabel := req.GetCommand()
+		if commandLabel == "" {
+			commandLabel = "auto"
+		}
+		handle = mgr.Register(sess, commandLabel)
 	}
-	defer sess.Close()
 
+	// Stream-scoped registration in the per-connection PTY id registry
+	// so the file API can reach this Session.
 	reg.Register(req.GetPtyId(), sess)
 	defer reg.Unregister(req.GetPtyId())
+
+	// Always send a PTYReattachAck as the first server-bound frame so
+	// the client learns the handle (whether fresh or reattached).
+	_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
+		Handle: string(handle), Accepted: true,
+	}}})
+	if len(replay) > 0 {
+		_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Data{Data: &v1.PTYData{Data: replay}}})
+	}
 
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Output direction: pump child bytes -> wire frames.
+	// On stream close, detach from the Manager (PTY survives idle TTL).
+	// The Session is NOT closed here — Manager.Sweep / Drop is the
+	// authoritative way to terminate it.
+	defer mgr.Detach(handle)
+
 	var writeMu sync.Mutex
 	pumpDone := make(chan struct{})
 	go func() {
 		defer close(pumpDone)
 		sess.Pump(pumpCtx, func(f *v1.PTYFrame) error {
+			// Append to ring buffer alongside wire write so reattach
+			// replay is byte-identical to what the client just saw.
+			if data := f.GetData(); data != nil {
+				mgr.Append(handle, data.GetData())
+			}
 			writeMu.Lock()
 			defer writeMu.Unlock()
 			return wire.Write(stream, f)
 		})
 	}()
 
-	// Input direction: read PTYFrames from the wire, route Input/Resize.
 	for {
 		frame := &v1.PTYFrame{}
 		if err := wire.Read(r, frame); err != nil {
@@ -471,14 +544,14 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 				clog.Info("pty resize", "err", err)
 			}
 		default:
-			// Server-bound frames (Data / Exit) on the input direction
-			// are protocol violations; ignore.
+			// Server-bound frames (Data / Exit / ReattachAck) on the
+			// input direction are protocol violations; ignore.
 		}
 	}
 
 	cancel()
 	<-pumpDone
-	clog.Info("pty closed")
+	clog.Info("pty stream closed")
 }
 
 func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionManager) (string, *pwsh.Host, error) {

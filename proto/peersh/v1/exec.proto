@@ -84,6 +84,34 @@ message PTYRequest {
   // care about the file API may leave it 0; the file API will refuse
   // to resolve pty_id=0.
   int64 pty_id = 6;
+
+  // reattach_handle, when non-empty, requests reattaching to a
+  // previously-opened persisted PTY identified by this server-assigned
+  // handle. command / args / env are ignored for reattach (the
+  // existing child keeps running); cols / rows are honoured (they
+  // resize the existing PTY). The server replies with a
+  // PTYReattachAck frame as the first server-bound frame, followed by
+  // the scrollback replay as PTYData chunks. Phase 6b Tier 2.
+  string reattach_handle = 7;
+}
+
+// PTYReattachAck is the first server-bound frame on a reattach stream.
+// It tells the client whether the requested handle was attached (and
+// the new server-assigned handle, in case the client needs to refresh
+// its stored copy). After ack, the server flushes the scrollback ring
+// buffer as zero or more PTYData frames in chronological order, then
+// resumes live PTY data flow.
+message PTYReattachAck {
+  // handle is the server-assigned reattach handle. For a fresh PTY
+  // that just got persisted, this is the newly-issued handle. For a
+  // successful reattach this echoes the request's reattach_handle.
+  string handle = 1;
+  // accepted is false when the requested handle was unknown / expired
+  // / already attached by another client; the rest of the stream
+  // carries a final PTYExit and closes.
+  bool accepted = 2;
+  // reason is human-readable text when accepted=false.
+  string reason = 3;
 }
 
 // PTYInput delivers a chunk of bytes from the user's keyboard / paste
@@ -119,15 +147,17 @@ message PTYExit {
   string error = 2;
 }
 
-// PTYFrame multiplexes the four direction-specific message types onto the
-// single QUIC stream. Client → server frames use the input / resize fields;
-// server → client frames use the data / exit fields.
+// PTYFrame multiplexes the direction-specific message types onto the
+// single QUIC stream. Client → server frames use the input / resize
+// fields; server → client frames use the data / exit / reattach_ack
+// fields.
 message PTYFrame {
   oneof kind {
-    PTYInput  input  = 1;
-    PTYResize resize = 2;
-    PTYData   data   = 3;
-    PTYExit   exit   = 4;
+    PTYInput       input        = 1;
+    PTYResize      resize       = 2;
+    PTYData        data         = 3;
+    PTYExit        exit         = 4;
+    PTYReattachAck reattach_ack = 5;
   }
 }
 
@@ -150,6 +180,8 @@ message FilesRequest {
     GetSessionRequest      get_session       = 1;
     ListSessionFilesRequest list_files        = 2;
     ReadSessionFileRequest  read_file         = 3;
+    ListPTYsRequest         list_ptys         = 4;
+    KillPTYRequest          kill_pty          = 5;
   }
 }
 
@@ -161,7 +193,49 @@ message FilesResponse {
     GetSessionResponse      get_session  = 2;
     ListSessionFilesResponse list_files  = 3;
     ReadSessionFileResponse  read_file   = 4;
+    ListPTYsResponse         list_ptys   = 5;
+    KillPTYResponse          kill_pty    = 6;
   }
+}
+
+// KillPTYRequest tears down a persisted PTY by its reattach handle.
+// Unlike a stream close (which detaches but keeps the PTY alive for
+// the idle TTL), KillPTY closes the underlying child process and
+// drops the ring buffer immediately. Phase 6b Tier 2.
+message KillPTYRequest {
+  string handle = 1;
+}
+
+message KillPTYResponse {
+  bool ok = 1;
+}
+
+// ListPTYsRequest enumerates persisted PTYs the connected client may
+// reattach to. There are no parameters today — peersh's per-connection
+// Manager scope means the response naturally only includes this
+// client's own PTYs. Phase 6b Tier 2.
+message ListPTYsRequest {}
+
+message PTYHandle {
+  // handle is the server-assigned reattach handle.
+  string handle = 1;
+  // command is what the PTY is running (diagnostic; "auto" / "pwsh" /
+  // "claude" / ...). May be empty for default shells.
+  string command = 2;
+  // attached is true when another stream is currently bound. A client
+  // that wants to take over should explicitly close the old session
+  // first; reattaching to an already-attached PTY is rejected.
+  bool attached = 3;
+  // cwd is the most recent directory the host observed (via OSC 9;9).
+  // Empty until the prompt has rendered at least once.
+  string cwd = 4;
+  // last_seen_unix_ms is the wall-clock time of the most recent
+  // attach/detach transition.
+  int64 last_seen_unix_ms = 5;
+}
+
+message ListPTYsResponse {
+  repeated PTYHandle ptys = 1;
 }
 
 message GetSessionRequest {

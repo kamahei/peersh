@@ -314,9 +314,17 @@ type PTYRequest struct {
 	// unique within this QUIC connection. Tier 2 — clients that don't
 	// care about the file API may leave it 0; the file API will refuse
 	// to resolve pty_id=0.
-	PtyId         int64 `protobuf:"varint,6,opt,name=pty_id,json=ptyId,proto3" json:"pty_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PtyId int64 `protobuf:"varint,6,opt,name=pty_id,json=ptyId,proto3" json:"pty_id,omitempty"`
+	// reattach_handle, when non-empty, requests reattaching to a
+	// previously-opened persisted PTY identified by this server-assigned
+	// handle. command / args / env are ignored for reattach (the
+	// existing child keeps running); cols / rows are honoured (they
+	// resize the existing PTY). The server replies with a
+	// PTYReattachAck frame as the first server-bound frame, followed by
+	// the scrollback replay as PTYData chunks. Phase 6b Tier 2.
+	ReattachHandle string `protobuf:"bytes,7,opt,name=reattach_handle,json=reattachHandle,proto3" json:"reattach_handle,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PTYRequest) Reset() {
@@ -391,6 +399,86 @@ func (x *PTYRequest) GetPtyId() int64 {
 	return 0
 }
 
+func (x *PTYRequest) GetReattachHandle() string {
+	if x != nil {
+		return x.ReattachHandle
+	}
+	return ""
+}
+
+// PTYReattachAck is the first server-bound frame on a reattach stream.
+// It tells the client whether the requested handle was attached (and
+// the new server-assigned handle, in case the client needs to refresh
+// its stored copy). After ack, the server flushes the scrollback ring
+// buffer as zero or more PTYData frames in chronological order, then
+// resumes live PTY data flow.
+type PTYReattachAck struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// handle is the server-assigned reattach handle. For a fresh PTY
+	// that just got persisted, this is the newly-issued handle. For a
+	// successful reattach this echoes the request's reattach_handle.
+	Handle string `protobuf:"bytes,1,opt,name=handle,proto3" json:"handle,omitempty"`
+	// accepted is false when the requested handle was unknown / expired
+	// / already attached by another client; the rest of the stream
+	// carries a final PTYExit and closes.
+	Accepted bool `protobuf:"varint,2,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	// reason is human-readable text when accepted=false.
+	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PTYReattachAck) Reset() {
+	*x = PTYReattachAck{}
+	mi := &file_peersh_v1_exec_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PTYReattachAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PTYReattachAck) ProtoMessage() {}
+
+func (x *PTYReattachAck) ProtoReflect() protoreflect.Message {
+	mi := &file_peersh_v1_exec_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PTYReattachAck.ProtoReflect.Descriptor instead.
+func (*PTYReattachAck) Descriptor() ([]byte, []int) {
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *PTYReattachAck) GetHandle() string {
+	if x != nil {
+		return x.Handle
+	}
+	return ""
+}
+
+func (x *PTYReattachAck) GetAccepted() bool {
+	if x != nil {
+		return x.Accepted
+	}
+	return false
+}
+
+func (x *PTYReattachAck) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 // PTYInput delivers a chunk of bytes from the user's keyboard / paste
 // buffer to the child process's stdin.
 type PTYInput struct {
@@ -402,7 +490,7 @@ type PTYInput struct {
 
 func (x *PTYInput) Reset() {
 	*x = PTYInput{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[4]
+	mi := &file_peersh_v1_exec_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -414,7 +502,7 @@ func (x *PTYInput) String() string {
 func (*PTYInput) ProtoMessage() {}
 
 func (x *PTYInput) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[4]
+	mi := &file_peersh_v1_exec_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -427,7 +515,7 @@ func (x *PTYInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PTYInput.ProtoReflect.Descriptor instead.
 func (*PTYInput) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{4}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PTYInput) GetData() []byte {
@@ -449,7 +537,7 @@ type PTYResize struct {
 
 func (x *PTYResize) Reset() {
 	*x = PTYResize{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[5]
+	mi := &file_peersh_v1_exec_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -461,7 +549,7 @@ func (x *PTYResize) String() string {
 func (*PTYResize) ProtoMessage() {}
 
 func (x *PTYResize) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[5]
+	mi := &file_peersh_v1_exec_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -474,7 +562,7 @@ func (x *PTYResize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PTYResize.ProtoReflect.Descriptor instead.
 func (*PTYResize) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{5}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PTYResize) GetCols() uint32 {
@@ -503,7 +591,7 @@ type PTYData struct {
 
 func (x *PTYData) Reset() {
 	*x = PTYData{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[6]
+	mi := &file_peersh_v1_exec_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -515,7 +603,7 @@ func (x *PTYData) String() string {
 func (*PTYData) ProtoMessage() {}
 
 func (x *PTYData) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[6]
+	mi := &file_peersh_v1_exec_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -528,7 +616,7 @@ func (x *PTYData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PTYData.ProtoReflect.Descriptor instead.
 func (*PTYData) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{6}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PTYData) GetData() []byte {
@@ -555,7 +643,7 @@ type PTYExit struct {
 
 func (x *PTYExit) Reset() {
 	*x = PTYExit{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[7]
+	mi := &file_peersh_v1_exec_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +655,7 @@ func (x *PTYExit) String() string {
 func (*PTYExit) ProtoMessage() {}
 
 func (x *PTYExit) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[7]
+	mi := &file_peersh_v1_exec_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +668,7 @@ func (x *PTYExit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PTYExit.ProtoReflect.Descriptor instead.
 func (*PTYExit) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{7}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PTYExit) GetExitCode() int32 {
@@ -597,9 +685,10 @@ func (x *PTYExit) GetError() string {
 	return ""
 }
 
-// PTYFrame multiplexes the four direction-specific message types onto the
-// single QUIC stream. Client → server frames use the input / resize fields;
-// server → client frames use the data / exit fields.
+// PTYFrame multiplexes the direction-specific message types onto the
+// single QUIC stream. Client → server frames use the input / resize
+// fields; server → client frames use the data / exit / reattach_ack
+// fields.
 type PTYFrame struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Kind:
@@ -608,6 +697,7 @@ type PTYFrame struct {
 	//	*PTYFrame_Resize
 	//	*PTYFrame_Data
 	//	*PTYFrame_Exit
+	//	*PTYFrame_ReattachAck
 	Kind          isPTYFrame_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -615,7 +705,7 @@ type PTYFrame struct {
 
 func (x *PTYFrame) Reset() {
 	*x = PTYFrame{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[8]
+	mi := &file_peersh_v1_exec_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -627,7 +717,7 @@ func (x *PTYFrame) String() string {
 func (*PTYFrame) ProtoMessage() {}
 
 func (x *PTYFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[8]
+	mi := &file_peersh_v1_exec_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -640,7 +730,7 @@ func (x *PTYFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PTYFrame.ProtoReflect.Descriptor instead.
 func (*PTYFrame) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{8}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PTYFrame) GetKind() isPTYFrame_Kind {
@@ -686,6 +776,15 @@ func (x *PTYFrame) GetExit() *PTYExit {
 	return nil
 }
 
+func (x *PTYFrame) GetReattachAck() *PTYReattachAck {
+	if x != nil {
+		if x, ok := x.Kind.(*PTYFrame_ReattachAck); ok {
+			return x.ReattachAck
+		}
+	}
+	return nil
+}
+
 type isPTYFrame_Kind interface {
 	isPTYFrame_Kind()
 }
@@ -706,6 +805,10 @@ type PTYFrame_Exit struct {
 	Exit *PTYExit `protobuf:"bytes,4,opt,name=exit,proto3,oneof"`
 }
 
+type PTYFrame_ReattachAck struct {
+	ReattachAck *PTYReattachAck `protobuf:"bytes,5,opt,name=reattach_ack,json=reattachAck,proto3,oneof"`
+}
+
 func (*PTYFrame_Input) isPTYFrame_Kind() {}
 
 func (*PTYFrame_Resize) isPTYFrame_Kind() {}
@@ -714,6 +817,8 @@ func (*PTYFrame_Data) isPTYFrame_Kind() {}
 
 func (*PTYFrame_Exit) isPTYFrame_Kind() {}
 
+func (*PTYFrame_ReattachAck) isPTYFrame_Kind() {}
+
 type FilesRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Kind:
@@ -721,6 +826,8 @@ type FilesRequest struct {
 	//	*FilesRequest_GetSession
 	//	*FilesRequest_ListFiles
 	//	*FilesRequest_ReadFile
+	//	*FilesRequest_ListPtys
+	//	*FilesRequest_KillPty
 	Kind          isFilesRequest_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -728,7 +835,7 @@ type FilesRequest struct {
 
 func (x *FilesRequest) Reset() {
 	*x = FilesRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[9]
+	mi := &file_peersh_v1_exec_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -740,7 +847,7 @@ func (x *FilesRequest) String() string {
 func (*FilesRequest) ProtoMessage() {}
 
 func (x *FilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[9]
+	mi := &file_peersh_v1_exec_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -753,7 +860,7 @@ func (x *FilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilesRequest.ProtoReflect.Descriptor instead.
 func (*FilesRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{9}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *FilesRequest) GetKind() isFilesRequest_Kind {
@@ -790,6 +897,24 @@ func (x *FilesRequest) GetReadFile() *ReadSessionFileRequest {
 	return nil
 }
 
+func (x *FilesRequest) GetListPtys() *ListPTYsRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*FilesRequest_ListPtys); ok {
+			return x.ListPtys
+		}
+	}
+	return nil
+}
+
+func (x *FilesRequest) GetKillPty() *KillPTYRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*FilesRequest_KillPty); ok {
+			return x.KillPty
+		}
+	}
+	return nil
+}
+
 type isFilesRequest_Kind interface {
 	isFilesRequest_Kind()
 }
@@ -806,11 +931,23 @@ type FilesRequest_ReadFile struct {
 	ReadFile *ReadSessionFileRequest `protobuf:"bytes,3,opt,name=read_file,json=readFile,proto3,oneof"`
 }
 
+type FilesRequest_ListPtys struct {
+	ListPtys *ListPTYsRequest `protobuf:"bytes,4,opt,name=list_ptys,json=listPtys,proto3,oneof"`
+}
+
+type FilesRequest_KillPty struct {
+	KillPty *KillPTYRequest `protobuf:"bytes,5,opt,name=kill_pty,json=killPty,proto3,oneof"`
+}
+
 func (*FilesRequest_GetSession) isFilesRequest_Kind() {}
 
 func (*FilesRequest_ListFiles) isFilesRequest_Kind() {}
 
 func (*FilesRequest_ReadFile) isFilesRequest_Kind() {}
+
+func (*FilesRequest_ListPtys) isFilesRequest_Kind() {}
+
+func (*FilesRequest_KillPty) isFilesRequest_Kind() {}
 
 type FilesResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -822,6 +959,8 @@ type FilesResponse struct {
 	//	*FilesResponse_GetSession
 	//	*FilesResponse_ListFiles
 	//	*FilesResponse_ReadFile
+	//	*FilesResponse_ListPtys
+	//	*FilesResponse_KillPty
 	Payload       isFilesResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -829,7 +968,7 @@ type FilesResponse struct {
 
 func (x *FilesResponse) Reset() {
 	*x = FilesResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[10]
+	mi := &file_peersh_v1_exec_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -841,7 +980,7 @@ func (x *FilesResponse) String() string {
 func (*FilesResponse) ProtoMessage() {}
 
 func (x *FilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[10]
+	mi := &file_peersh_v1_exec_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -854,7 +993,7 @@ func (x *FilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilesResponse.ProtoReflect.Descriptor instead.
 func (*FilesResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{10}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *FilesResponse) GetError() string {
@@ -898,6 +1037,24 @@ func (x *FilesResponse) GetReadFile() *ReadSessionFileResponse {
 	return nil
 }
 
+func (x *FilesResponse) GetListPtys() *ListPTYsResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*FilesResponse_ListPtys); ok {
+			return x.ListPtys
+		}
+	}
+	return nil
+}
+
+func (x *FilesResponse) GetKillPty() *KillPTYResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*FilesResponse_KillPty); ok {
+			return x.KillPty
+		}
+	}
+	return nil
+}
+
 type isFilesResponse_Payload interface {
 	isFilesResponse_Payload()
 }
@@ -914,11 +1071,285 @@ type FilesResponse_ReadFile struct {
 	ReadFile *ReadSessionFileResponse `protobuf:"bytes,4,opt,name=read_file,json=readFile,proto3,oneof"`
 }
 
+type FilesResponse_ListPtys struct {
+	ListPtys *ListPTYsResponse `protobuf:"bytes,5,opt,name=list_ptys,json=listPtys,proto3,oneof"`
+}
+
+type FilesResponse_KillPty struct {
+	KillPty *KillPTYResponse `protobuf:"bytes,6,opt,name=kill_pty,json=killPty,proto3,oneof"`
+}
+
 func (*FilesResponse_GetSession) isFilesResponse_Payload() {}
 
 func (*FilesResponse_ListFiles) isFilesResponse_Payload() {}
 
 func (*FilesResponse_ReadFile) isFilesResponse_Payload() {}
+
+func (*FilesResponse_ListPtys) isFilesResponse_Payload() {}
+
+func (*FilesResponse_KillPty) isFilesResponse_Payload() {}
+
+// KillPTYRequest tears down a persisted PTY by its reattach handle.
+// Unlike a stream close (which detaches but keeps the PTY alive for
+// the idle TTL), KillPTY closes the underlying child process and
+// drops the ring buffer immediately. Phase 6b Tier 2.
+type KillPTYRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Handle        string                 `protobuf:"bytes,1,opt,name=handle,proto3" json:"handle,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KillPTYRequest) Reset() {
+	*x = KillPTYRequest{}
+	mi := &file_peersh_v1_exec_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KillPTYRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KillPTYRequest) ProtoMessage() {}
+
+func (x *KillPTYRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_peersh_v1_exec_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KillPTYRequest.ProtoReflect.Descriptor instead.
+func (*KillPTYRequest) Descriptor() ([]byte, []int) {
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *KillPTYRequest) GetHandle() string {
+	if x != nil {
+		return x.Handle
+	}
+	return ""
+}
+
+type KillPTYResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KillPTYResponse) Reset() {
+	*x = KillPTYResponse{}
+	mi := &file_peersh_v1_exec_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KillPTYResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KillPTYResponse) ProtoMessage() {}
+
+func (x *KillPTYResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_peersh_v1_exec_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KillPTYResponse.ProtoReflect.Descriptor instead.
+func (*KillPTYResponse) Descriptor() ([]byte, []int) {
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *KillPTYResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+// ListPTYsRequest enumerates persisted PTYs the connected client may
+// reattach to. There are no parameters today — peersh's per-connection
+// Manager scope means the response naturally only includes this
+// client's own PTYs. Phase 6b Tier 2.
+type ListPTYsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPTYsRequest) Reset() {
+	*x = ListPTYsRequest{}
+	mi := &file_peersh_v1_exec_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPTYsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPTYsRequest) ProtoMessage() {}
+
+func (x *ListPTYsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_peersh_v1_exec_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPTYsRequest.ProtoReflect.Descriptor instead.
+func (*ListPTYsRequest) Descriptor() ([]byte, []int) {
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{14}
+}
+
+type PTYHandle struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// handle is the server-assigned reattach handle.
+	Handle string `protobuf:"bytes,1,opt,name=handle,proto3" json:"handle,omitempty"`
+	// command is what the PTY is running (diagnostic; "auto" / "pwsh" /
+	// "claude" / ...). May be empty for default shells.
+	Command string `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	// attached is true when another stream is currently bound. A client
+	// that wants to take over should explicitly close the old session
+	// first; reattaching to an already-attached PTY is rejected.
+	Attached bool `protobuf:"varint,3,opt,name=attached,proto3" json:"attached,omitempty"`
+	// cwd is the most recent directory the host observed (via OSC 9;9).
+	// Empty until the prompt has rendered at least once.
+	Cwd string `protobuf:"bytes,4,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	// last_seen_unix_ms is the wall-clock time of the most recent
+	// attach/detach transition.
+	LastSeenUnixMs int64 `protobuf:"varint,5,opt,name=last_seen_unix_ms,json=lastSeenUnixMs,proto3" json:"last_seen_unix_ms,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PTYHandle) Reset() {
+	*x = PTYHandle{}
+	mi := &file_peersh_v1_exec_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PTYHandle) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PTYHandle) ProtoMessage() {}
+
+func (x *PTYHandle) ProtoReflect() protoreflect.Message {
+	mi := &file_peersh_v1_exec_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PTYHandle.ProtoReflect.Descriptor instead.
+func (*PTYHandle) Descriptor() ([]byte, []int) {
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *PTYHandle) GetHandle() string {
+	if x != nil {
+		return x.Handle
+	}
+	return ""
+}
+
+func (x *PTYHandle) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
+func (x *PTYHandle) GetAttached() bool {
+	if x != nil {
+		return x.Attached
+	}
+	return false
+}
+
+func (x *PTYHandle) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *PTYHandle) GetLastSeenUnixMs() int64 {
+	if x != nil {
+		return x.LastSeenUnixMs
+	}
+	return 0
+}
+
+type ListPTYsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ptys          []*PTYHandle           `protobuf:"bytes,1,rep,name=ptys,proto3" json:"ptys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPTYsResponse) Reset() {
+	*x = ListPTYsResponse{}
+	mi := &file_peersh_v1_exec_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPTYsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPTYsResponse) ProtoMessage() {}
+
+func (x *ListPTYsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_peersh_v1_exec_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPTYsResponse.ProtoReflect.Descriptor instead.
+func (*ListPTYsResponse) Descriptor() ([]byte, []int) {
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ListPTYsResponse) GetPtys() []*PTYHandle {
+	if x != nil {
+		return x.Ptys
+	}
+	return nil
+}
 
 type GetSessionRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -930,7 +1361,7 @@ type GetSessionRequest struct {
 
 func (x *GetSessionRequest) Reset() {
 	*x = GetSessionRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[11]
+	mi := &file_peersh_v1_exec_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -942,7 +1373,7 @@ func (x *GetSessionRequest) String() string {
 func (*GetSessionRequest) ProtoMessage() {}
 
 func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[11]
+	mi := &file_peersh_v1_exec_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -955,7 +1386,7 @@ func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{11}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetSessionRequest) GetPtyId() int64 {
@@ -976,7 +1407,7 @@ type GetSessionResponse struct {
 
 func (x *GetSessionResponse) Reset() {
 	*x = GetSessionResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[12]
+	mi := &file_peersh_v1_exec_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -988,7 +1419,7 @@ func (x *GetSessionResponse) String() string {
 func (*GetSessionResponse) ProtoMessage() {}
 
 func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[12]
+	mi := &file_peersh_v1_exec_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1001,7 +1432,7 @@ func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{12}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetSessionResponse) GetCwd() string {
@@ -1023,7 +1454,7 @@ type ListSessionFilesRequest struct {
 
 func (x *ListSessionFilesRequest) Reset() {
 	*x = ListSessionFilesRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[13]
+	mi := &file_peersh_v1_exec_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1035,7 +1466,7 @@ func (x *ListSessionFilesRequest) String() string {
 func (*ListSessionFilesRequest) ProtoMessage() {}
 
 func (x *ListSessionFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[13]
+	mi := &file_peersh_v1_exec_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1048,7 +1479,7 @@ func (x *ListSessionFilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionFilesRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionFilesRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{13}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListSessionFilesRequest) GetPtyId() int64 {
@@ -1081,7 +1512,7 @@ type FileEntry struct {
 
 func (x *FileEntry) Reset() {
 	*x = FileEntry{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[14]
+	mi := &file_peersh_v1_exec_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1093,7 +1524,7 @@ func (x *FileEntry) String() string {
 func (*FileEntry) ProtoMessage() {}
 
 func (x *FileEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[14]
+	mi := &file_peersh_v1_exec_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1106,7 +1537,7 @@ func (x *FileEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileEntry.ProtoReflect.Descriptor instead.
 func (*FileEntry) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{14}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *FileEntry) GetName() string {
@@ -1156,7 +1587,7 @@ type ListSessionFilesResponse struct {
 
 func (x *ListSessionFilesResponse) Reset() {
 	*x = ListSessionFilesResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[15]
+	mi := &file_peersh_v1_exec_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +1599,7 @@ func (x *ListSessionFilesResponse) String() string {
 func (*ListSessionFilesResponse) ProtoMessage() {}
 
 func (x *ListSessionFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[15]
+	mi := &file_peersh_v1_exec_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +1612,7 @@ func (x *ListSessionFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionFilesResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionFilesResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{15}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListSessionFilesResponse) GetResolvedPath() string {
@@ -1210,7 +1641,7 @@ type ReadSessionFileRequest struct {
 
 func (x *ReadSessionFileRequest) Reset() {
 	*x = ReadSessionFileRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[16]
+	mi := &file_peersh_v1_exec_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1222,7 +1653,7 @@ func (x *ReadSessionFileRequest) String() string {
 func (*ReadSessionFileRequest) ProtoMessage() {}
 
 func (x *ReadSessionFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[16]
+	mi := &file_peersh_v1_exec_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1235,7 +1666,7 @@ func (x *ReadSessionFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadSessionFileRequest.ProtoReflect.Descriptor instead.
 func (*ReadSessionFileRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{16}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ReadSessionFileRequest) GetPtyId() int64 {
@@ -1271,7 +1702,7 @@ type ReadSessionFileResponse struct {
 
 func (x *ReadSessionFileResponse) Reset() {
 	*x = ReadSessionFileResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[17]
+	mi := &file_peersh_v1_exec_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1283,7 +1714,7 @@ func (x *ReadSessionFileResponse) String() string {
 func (*ReadSessionFileResponse) ProtoMessage() {}
 
 func (x *ReadSessionFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[17]
+	mi := &file_peersh_v1_exec_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1296,7 +1727,7 @@ func (x *ReadSessionFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadSessionFileResponse.ProtoReflect.Descriptor instead.
 func (*ReadSessionFileResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{17}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ReadSessionFileResponse) GetContent() []byte {
@@ -1345,7 +1776,7 @@ const file_peersh_v1_exec_proto_rawDesc = "" +
 	"\x06stdout\x18\x01 \x01(\fH\x00R\x06stdout\x12\x18\n" +
 	"\x06stderr\x18\x02 \x01(\fH\x00R\x06stderr\x12\x12\n" +
 	"\x04done\x18\x03 \x01(\bR\x04doneB\a\n" +
-	"\x05chunk\"\xe3\x01\n" +
+	"\x05chunk\"\x8c\x02\n" +
 	"\n" +
 	"PTYRequest\x12\x18\n" +
 	"\acommand\x18\x01 \x01(\tR\acommand\x12\x12\n" +
@@ -1353,10 +1784,15 @@ const file_peersh_v1_exec_proto_rawDesc = "" +
 	"\x04cols\x18\x03 \x01(\rR\x04cols\x12\x12\n" +
 	"\x04rows\x18\x04 \x01(\rR\x04rows\x120\n" +
 	"\x03env\x18\x05 \x03(\v2\x1e.peersh.v1.PTYRequest.EnvEntryR\x03env\x12\x15\n" +
-	"\x06pty_id\x18\x06 \x01(\x03R\x05ptyId\x1a6\n" +
+	"\x06pty_id\x18\x06 \x01(\x03R\x05ptyId\x12'\n" +
+	"\x0freattach_handle\x18\a \x01(\tR\x0ereattachHandle\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x1e\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\\\n" +
+	"\x0ePTYReattachAck\x12\x16\n" +
+	"\x06handle\x18\x01 \x01(\tR\x06handle\x12\x1a\n" +
+	"\baccepted\x18\x02 \x01(\bR\baccepted\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\x1e\n" +
 	"\bPTYInput\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"3\n" +
 	"\tPTYResize\x12\x12\n" +
@@ -1366,28 +1802,46 @@ const file_peersh_v1_exec_proto_rawDesc = "" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"<\n" +
 	"\aPTYExit\x12\x1b\n" +
 	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xc3\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x83\x02\n" +
 	"\bPTYFrame\x12+\n" +
 	"\x05input\x18\x01 \x01(\v2\x13.peersh.v1.PTYInputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x02 \x01(\v2\x14.peersh.v1.PTYResizeH\x00R\x06resize\x12(\n" +
 	"\x04data\x18\x03 \x01(\v2\x12.peersh.v1.PTYDataH\x00R\x04data\x12(\n" +
-	"\x04exit\x18\x04 \x01(\v2\x12.peersh.v1.PTYExitH\x00R\x04exitB\x06\n" +
-	"\x04kind\"\xde\x01\n" +
+	"\x04exit\x18\x04 \x01(\v2\x12.peersh.v1.PTYExitH\x00R\x04exit\x12>\n" +
+	"\freattach_ack\x18\x05 \x01(\v2\x19.peersh.v1.PTYReattachAckH\x00R\vreattachAckB\x06\n" +
+	"\x04kind\"\xd1\x02\n" +
 	"\fFilesRequest\x12?\n" +
 	"\vget_session\x18\x01 \x01(\v2\x1c.peersh.v1.GetSessionRequestH\x00R\n" +
 	"getSession\x12C\n" +
 	"\n" +
 	"list_files\x18\x02 \x01(\v2\".peersh.v1.ListSessionFilesRequestH\x00R\tlistFiles\x12@\n" +
-	"\tread_file\x18\x03 \x01(\v2!.peersh.v1.ReadSessionFileRequestH\x00R\breadFileB\x06\n" +
-	"\x04kind\"\xfb\x01\n" +
+	"\tread_file\x18\x03 \x01(\v2!.peersh.v1.ReadSessionFileRequestH\x00R\breadFile\x129\n" +
+	"\tlist_ptys\x18\x04 \x01(\v2\x1a.peersh.v1.ListPTYsRequestH\x00R\blistPtys\x126\n" +
+	"\bkill_pty\x18\x05 \x01(\v2\x19.peersh.v1.KillPTYRequestH\x00R\akillPtyB\x06\n" +
+	"\x04kind\"\xf0\x02\n" +
 	"\rFilesResponse\x12\x14\n" +
 	"\x05error\x18\x01 \x01(\tR\x05error\x12@\n" +
 	"\vget_session\x18\x02 \x01(\v2\x1d.peersh.v1.GetSessionResponseH\x00R\n" +
 	"getSession\x12D\n" +
 	"\n" +
 	"list_files\x18\x03 \x01(\v2#.peersh.v1.ListSessionFilesResponseH\x00R\tlistFiles\x12A\n" +
-	"\tread_file\x18\x04 \x01(\v2\".peersh.v1.ReadSessionFileResponseH\x00R\breadFileB\t\n" +
-	"\apayload\"*\n" +
+	"\tread_file\x18\x04 \x01(\v2\".peersh.v1.ReadSessionFileResponseH\x00R\breadFile\x12:\n" +
+	"\tlist_ptys\x18\x05 \x01(\v2\x1b.peersh.v1.ListPTYsResponseH\x00R\blistPtys\x127\n" +
+	"\bkill_pty\x18\x06 \x01(\v2\x1a.peersh.v1.KillPTYResponseH\x00R\akillPtyB\t\n" +
+	"\apayload\"(\n" +
+	"\x0eKillPTYRequest\x12\x16\n" +
+	"\x06handle\x18\x01 \x01(\tR\x06handle\"!\n" +
+	"\x0fKillPTYResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x11\n" +
+	"\x0fListPTYsRequest\"\x96\x01\n" +
+	"\tPTYHandle\x12\x16\n" +
+	"\x06handle\x18\x01 \x01(\tR\x06handle\x12\x18\n" +
+	"\acommand\x18\x02 \x01(\tR\acommand\x12\x1a\n" +
+	"\battached\x18\x03 \x01(\bR\battached\x12\x10\n" +
+	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12)\n" +
+	"\x11last_seen_unix_ms\x18\x05 \x01(\x03R\x0elastSeenUnixMs\"<\n" +
+	"\x10ListPTYsResponse\x12(\n" +
+	"\x04ptys\x18\x01 \x03(\v2\x14.peersh.v1.PTYHandleR\x04ptys\"*\n" +
 	"\x11GetSessionRequest\x12\x15\n" +
 	"\x06pty_id\x18\x01 \x01(\x03R\x05ptyId\"&\n" +
 	"\x12GetSessionResponse\x12\x10\n" +
@@ -1428,49 +1882,61 @@ func file_peersh_v1_exec_proto_rawDescGZIP() []byte {
 	return file_peersh_v1_exec_proto_rawDescData
 }
 
-var file_peersh_v1_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_peersh_v1_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_peersh_v1_exec_proto_goTypes = []any{
 	(*StreamRequest)(nil),            // 0: peersh.v1.StreamRequest
 	(*ExecRequest)(nil),              // 1: peersh.v1.ExecRequest
 	(*ExecResponse)(nil),             // 2: peersh.v1.ExecResponse
 	(*PTYRequest)(nil),               // 3: peersh.v1.PTYRequest
-	(*PTYInput)(nil),                 // 4: peersh.v1.PTYInput
-	(*PTYResize)(nil),                // 5: peersh.v1.PTYResize
-	(*PTYData)(nil),                  // 6: peersh.v1.PTYData
-	(*PTYExit)(nil),                  // 7: peersh.v1.PTYExit
-	(*PTYFrame)(nil),                 // 8: peersh.v1.PTYFrame
-	(*FilesRequest)(nil),             // 9: peersh.v1.FilesRequest
-	(*FilesResponse)(nil),            // 10: peersh.v1.FilesResponse
-	(*GetSessionRequest)(nil),        // 11: peersh.v1.GetSessionRequest
-	(*GetSessionResponse)(nil),       // 12: peersh.v1.GetSessionResponse
-	(*ListSessionFilesRequest)(nil),  // 13: peersh.v1.ListSessionFilesRequest
-	(*FileEntry)(nil),                // 14: peersh.v1.FileEntry
-	(*ListSessionFilesResponse)(nil), // 15: peersh.v1.ListSessionFilesResponse
-	(*ReadSessionFileRequest)(nil),   // 16: peersh.v1.ReadSessionFileRequest
-	(*ReadSessionFileResponse)(nil),  // 17: peersh.v1.ReadSessionFileResponse
-	nil,                              // 18: peersh.v1.PTYRequest.EnvEntry
+	(*PTYReattachAck)(nil),           // 4: peersh.v1.PTYReattachAck
+	(*PTYInput)(nil),                 // 5: peersh.v1.PTYInput
+	(*PTYResize)(nil),                // 6: peersh.v1.PTYResize
+	(*PTYData)(nil),                  // 7: peersh.v1.PTYData
+	(*PTYExit)(nil),                  // 8: peersh.v1.PTYExit
+	(*PTYFrame)(nil),                 // 9: peersh.v1.PTYFrame
+	(*FilesRequest)(nil),             // 10: peersh.v1.FilesRequest
+	(*FilesResponse)(nil),            // 11: peersh.v1.FilesResponse
+	(*KillPTYRequest)(nil),           // 12: peersh.v1.KillPTYRequest
+	(*KillPTYResponse)(nil),          // 13: peersh.v1.KillPTYResponse
+	(*ListPTYsRequest)(nil),          // 14: peersh.v1.ListPTYsRequest
+	(*PTYHandle)(nil),                // 15: peersh.v1.PTYHandle
+	(*ListPTYsResponse)(nil),         // 16: peersh.v1.ListPTYsResponse
+	(*GetSessionRequest)(nil),        // 17: peersh.v1.GetSessionRequest
+	(*GetSessionResponse)(nil),       // 18: peersh.v1.GetSessionResponse
+	(*ListSessionFilesRequest)(nil),  // 19: peersh.v1.ListSessionFilesRequest
+	(*FileEntry)(nil),                // 20: peersh.v1.FileEntry
+	(*ListSessionFilesResponse)(nil), // 21: peersh.v1.ListSessionFilesResponse
+	(*ReadSessionFileRequest)(nil),   // 22: peersh.v1.ReadSessionFileRequest
+	(*ReadSessionFileResponse)(nil),  // 23: peersh.v1.ReadSessionFileResponse
+	nil,                              // 24: peersh.v1.PTYRequest.EnvEntry
 }
 var file_peersh_v1_exec_proto_depIdxs = []int32{
 	1,  // 0: peersh.v1.StreamRequest.exec:type_name -> peersh.v1.ExecRequest
 	3,  // 1: peersh.v1.StreamRequest.pty:type_name -> peersh.v1.PTYRequest
-	9,  // 2: peersh.v1.StreamRequest.files:type_name -> peersh.v1.FilesRequest
-	18, // 3: peersh.v1.PTYRequest.env:type_name -> peersh.v1.PTYRequest.EnvEntry
-	4,  // 4: peersh.v1.PTYFrame.input:type_name -> peersh.v1.PTYInput
-	5,  // 5: peersh.v1.PTYFrame.resize:type_name -> peersh.v1.PTYResize
-	6,  // 6: peersh.v1.PTYFrame.data:type_name -> peersh.v1.PTYData
-	7,  // 7: peersh.v1.PTYFrame.exit:type_name -> peersh.v1.PTYExit
-	11, // 8: peersh.v1.FilesRequest.get_session:type_name -> peersh.v1.GetSessionRequest
-	13, // 9: peersh.v1.FilesRequest.list_files:type_name -> peersh.v1.ListSessionFilesRequest
-	16, // 10: peersh.v1.FilesRequest.read_file:type_name -> peersh.v1.ReadSessionFileRequest
-	12, // 11: peersh.v1.FilesResponse.get_session:type_name -> peersh.v1.GetSessionResponse
-	15, // 12: peersh.v1.FilesResponse.list_files:type_name -> peersh.v1.ListSessionFilesResponse
-	17, // 13: peersh.v1.FilesResponse.read_file:type_name -> peersh.v1.ReadSessionFileResponse
-	14, // 14: peersh.v1.ListSessionFilesResponse.entries:type_name -> peersh.v1.FileEntry
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	10, // 2: peersh.v1.StreamRequest.files:type_name -> peersh.v1.FilesRequest
+	24, // 3: peersh.v1.PTYRequest.env:type_name -> peersh.v1.PTYRequest.EnvEntry
+	5,  // 4: peersh.v1.PTYFrame.input:type_name -> peersh.v1.PTYInput
+	6,  // 5: peersh.v1.PTYFrame.resize:type_name -> peersh.v1.PTYResize
+	7,  // 6: peersh.v1.PTYFrame.data:type_name -> peersh.v1.PTYData
+	8,  // 7: peersh.v1.PTYFrame.exit:type_name -> peersh.v1.PTYExit
+	4,  // 8: peersh.v1.PTYFrame.reattach_ack:type_name -> peersh.v1.PTYReattachAck
+	17, // 9: peersh.v1.FilesRequest.get_session:type_name -> peersh.v1.GetSessionRequest
+	19, // 10: peersh.v1.FilesRequest.list_files:type_name -> peersh.v1.ListSessionFilesRequest
+	22, // 11: peersh.v1.FilesRequest.read_file:type_name -> peersh.v1.ReadSessionFileRequest
+	14, // 12: peersh.v1.FilesRequest.list_ptys:type_name -> peersh.v1.ListPTYsRequest
+	12, // 13: peersh.v1.FilesRequest.kill_pty:type_name -> peersh.v1.KillPTYRequest
+	18, // 14: peersh.v1.FilesResponse.get_session:type_name -> peersh.v1.GetSessionResponse
+	21, // 15: peersh.v1.FilesResponse.list_files:type_name -> peersh.v1.ListSessionFilesResponse
+	23, // 16: peersh.v1.FilesResponse.read_file:type_name -> peersh.v1.ReadSessionFileResponse
+	16, // 17: peersh.v1.FilesResponse.list_ptys:type_name -> peersh.v1.ListPTYsResponse
+	13, // 18: peersh.v1.FilesResponse.kill_pty:type_name -> peersh.v1.KillPTYResponse
+	15, // 19: peersh.v1.ListPTYsResponse.ptys:type_name -> peersh.v1.PTYHandle
+	20, // 20: peersh.v1.ListSessionFilesResponse.entries:type_name -> peersh.v1.FileEntry
+	21, // [21:21] is the sub-list for method output_type
+	21, // [21:21] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_peersh_v1_exec_proto_init() }
@@ -1487,21 +1953,26 @@ func file_peersh_v1_exec_proto_init() {
 		(*ExecResponse_Stdout)(nil),
 		(*ExecResponse_Stderr)(nil),
 	}
-	file_peersh_v1_exec_proto_msgTypes[8].OneofWrappers = []any{
+	file_peersh_v1_exec_proto_msgTypes[9].OneofWrappers = []any{
 		(*PTYFrame_Input)(nil),
 		(*PTYFrame_Resize)(nil),
 		(*PTYFrame_Data)(nil),
 		(*PTYFrame_Exit)(nil),
+		(*PTYFrame_ReattachAck)(nil),
 	}
-	file_peersh_v1_exec_proto_msgTypes[9].OneofWrappers = []any{
+	file_peersh_v1_exec_proto_msgTypes[10].OneofWrappers = []any{
 		(*FilesRequest_GetSession)(nil),
 		(*FilesRequest_ListFiles)(nil),
 		(*FilesRequest_ReadFile)(nil),
+		(*FilesRequest_ListPtys)(nil),
+		(*FilesRequest_KillPty)(nil),
 	}
-	file_peersh_v1_exec_proto_msgTypes[10].OneofWrappers = []any{
+	file_peersh_v1_exec_proto_msgTypes[11].OneofWrappers = []any{
 		(*FilesResponse_GetSession)(nil),
 		(*FilesResponse_ListFiles)(nil),
 		(*FilesResponse_ReadFile)(nil),
+		(*FilesResponse_ListPtys)(nil),
+		(*FilesResponse_KillPty)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1509,7 +1980,7 @@ func file_peersh_v1_exec_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_peersh_v1_exec_proto_rawDesc), len(file_peersh_v1_exec_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

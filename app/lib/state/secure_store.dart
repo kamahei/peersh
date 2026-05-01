@@ -44,4 +44,10 @@ class SecureStore {
   Future<void> writeSettings(Map<String, dynamic> settings) async {
     await _storage.write(key: _settingsKey, value: jsonEncode(settings));
   }
+
+  /// Generic key/value access for callers that maintain their own
+  /// schema (e.g. PersistedPtyHandles uses key "pty_handles.v1").
+  Future<String?> readKey(String key) => _storage.read(key: key);
+  Future<void> writeKey(String key, String value) =>
+      _storage.write(key: key, value: value);
 }

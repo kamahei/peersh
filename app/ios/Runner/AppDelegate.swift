@@ -47,7 +47,8 @@ import UIKit
 
       case "echo", "openDirectSession", "openSignalingSession", "exec", "readFile", "closeSession",
            "openPTY", "ptyInput", "ptyResize", "closePTY",
-           "getCwd", "listSessionFiles", "readSessionFile":
+           "getCwd", "listSessionFiles", "readSessionFile",
+           "listPTYs", "killPTY":
         result(FlutterError(code: "IOS_BIND_PENDING",
                             message: "Run gomobile bind -target=ios on macOS",
                             details: nil))

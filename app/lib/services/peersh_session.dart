@@ -10,7 +10,7 @@ import '../models/session_event.dart';
 /// One Riverpod-friendly active session. Owns a session id from the
 /// bridge plus a buffered output stream the UI can consume.
 class PeershSession {
-  PeershSession._(this.bridge, this.id, this._eventsSub) {
+  PeershSession._(this.bridge, this.id, this.serverId, this._eventsSub) {
     _eventsSub.onData(_onEvent);
   }
 
@@ -29,7 +29,7 @@ class PeershSession {
     );
     final controller = StreamController<SessionEvent>.broadcast();
     final sub = bridge.events().listen(null);
-    final session = PeershSession._(bridge, id, sub).._sink = controller;
+    final session = PeershSession._(bridge, id, server.id, sub).._sink = controller;
     sub.onData((evt) {
       if (evt.sessionId == id) {
         controller.add(evt);
@@ -47,7 +47,7 @@ class PeershSession {
     final id = await bridge.openDirectSession(addr: addr);
     final controller = StreamController<SessionEvent>.broadcast();
     final sub = bridge.events().listen(null);
-    final session = PeershSession._(bridge, id, sub).._sink = controller;
+    final session = PeershSession._(bridge, id, '', sub).._sink = controller;
     sub.onData((evt) {
       if (evt.sessionId == id) {
         controller.add(evt);
@@ -59,6 +59,10 @@ class PeershSession {
 
   final PeershBridge bridge;
   final int id;
+  /// The ServerEntry.id this session is bound to. Used to scope per-
+  /// server local state (e.g. persisted PTY reattach handles). Empty
+  /// for direct (non-signaling) sessions.
+  final String serverId;
   final StreamSubscription<SessionEvent> _eventsSub;
   late final StreamController<SessionEvent> _sink;
 
