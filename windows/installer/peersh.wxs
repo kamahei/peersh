@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  peersh-host MSI installer (WiX 4 / 7 toolset).
+
+  Build via scripts/build-msi.cmd (preferred) or by hand:
+
+      dotnet tool install -g wix
+      wix eula accept wix7
+      wix extension add -g WixToolset.UI.wixext
+      wix build windows/installer/peersh.wxs ^
+          -ext WixToolset.UI.wixext ^
+          -d Version=0.1.0 -d BinDir=path/to/bin ^
+          -o dist/peersh-host-0.1.0-x64.msi
+
+  Prerequisites: bin/peershd.exe must already be built for x64.
+
+  What the MSI installs:
+    + peershd.exe and peersh-cli.exe under [ProgramFiles64Folder]\peersh\
+    + License (Apache 2.0) shown during install
+    + System PATH entry so a fresh CMD prompt sees peershd
+    + Start menu shortcut "peersh host (interactive)" for first-time setup
+    + Add/Remove Programs entry with Publisher / About URL
+
+  What the MSI does NOT do:
+    + Register peershd as a Windows Service. Operators run
+      `peershd -install` (or -install-logon-task) themselves after the
+      MSI lays the binary down; this keeps the MSI side idempotent and
+      matches the explicit-opt-in stance peersh takes around scheduled
+      tasks / services.
+    + Bundle pwsh.exe. peershd defers to whichever PowerShell is on
+      PATH (pwsh > powershell.exe fallback).
+
+  Upgrade path: every release bumps Version; the UpgradeCode stays
+  fixed so a newer MSI cleanly replaces an older install.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <?define ProductName       = "peersh host" ?>
+  <?define Manufacturer      = "peersh contributors" ?>
+  <?define UpgradeCode       = "9d3f2c6b-1b8f-4b1f-a3b2-1d3a8e6c0a01" ?>
+
+  <Package Name="$(ProductName)"
+           Manufacturer="$(Manufacturer)"
+           Version="$(Version)"
+           UpgradeCode="$(UpgradeCode)"
+           InstallerVersion="500"
+           Compressed="yes"
+           Scope="perMachine">
+
+    <SummaryInformation Description="peersh remote-PowerShell host"
+                        Manufacturer="$(Manufacturer)" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of $(ProductName) is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Apache 2.0 license shown in the install wizard. RTF is the
+         format WiX's UI extensions consume; License.rtf is generated
+         from LICENSE by scripts/build-msi.cmd and the full path is
+         passed in as $(LicenseRtf) to keep wix's path resolution
+         independent of the cwd that invoked it. -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(LicenseRtf)" />
+
+    <!-- Branding: keep things plain so we don't have to ship custom
+         banner art for the installer. -->
+    <Property Id="ARPHELPLINK" Value="https://github.com/kamahei/peersh" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/kamahei/peersh" />
+    <!-- WixUI_InstallDir already sets ARPNOMODIFY/ARPNOREPAIR; redefining
+         them here would collide. -->
+
+
+    <Feature Id="Main" Title="$(ProductName)" Level="1" AllowAdvertise="no">
+      <ComponentGroupRef Id="PeershHostFiles" />
+      <ComponentRef Id="PeershHostShortcut" />
+      <ComponentRef Id="PeershHostPathEntry" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="peersh" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuPeersh" Name="peersh" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="PeershHostFiles" Directory="INSTALLFOLDER">
+      <Component Id="PeershdExe" Guid="*">
+        <File Id="peershd_exe"
+              Source="$(BinDir)\peershd.exe"
+              Name="peershd.exe"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="PeershCliExe" Guid="*">
+        <File Id="peersh_cli_exe"
+              Source="$(BinDir)\peersh-cli.exe"
+              Name="peersh-cli.exe"
+              KeyPath="yes" />
+      </Component>
+      <Component Id="LicenseFile" Guid="*">
+        <File Id="LICENSE_txt"
+              Source="$(BinDir)\..\LICENSE"
+              Name="LICENSE.txt"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Start menu shortcut to run peershd in interactive mode for
+         first-time setup. The file in INSTALLFOLDER is the install
+         marker; the shortcut just launches it with no args. -->
+    <Component Id="PeershHostShortcut" Directory="ProgramMenuPeersh" Guid="*">
+      <Shortcut Id="PeershHostInteractive"
+                Name="peersh host (interactive)"
+                Description="Run the peersh Windows host in interactive mode"
+                Target="[INSTALLFOLDER]peershd.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveProgramMenuPeersh"
+                    Directory="ProgramMenuPeersh"
+                    On="uninstall" />
+      <RegistryValue Root="HKCU"
+                     Key="Software\peersh\peersh-host"
+                     Name="installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <!-- Add INSTALLFOLDER to the system PATH so `peershd` and
+         `peersh-cli` work from any prompt. WiX does this by writing
+         a fresh PATH entry under HKLM\System\CurrentControlSet
+         \Control\Session Manager\Environment. -->
+    <Component Id="PeershHostPathEntry" Directory="INSTALLFOLDER" Guid="*">
+      <Environment Id="PathEntry"
+                   Name="PATH"
+                   Value="[INSTALLFOLDER]"
+                   Permanent="no"
+                   Part="last"
+                   Action="set"
+                   System="yes" />
+      <RegistryValue Root="HKLM"
+                     Key="Software\peersh\peersh-host"
+                     Name="path-installed"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Package>
+</Wix>

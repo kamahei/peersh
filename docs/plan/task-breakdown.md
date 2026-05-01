@@ -275,10 +275,14 @@ Remaining Phase 6b anchor points (deferred):
 >
 > Phase 7 work that remains and is not yet tractable from this remote-only Windows dev box:
 >
-> - MSI installer (WiX or similar) and per-user upgrade flow.
 > - Auto-update for the Windows binaries.
-> - Play Store / App Store / F-Droid metadata + signing pipelines.
+> - App Store / F-Droid metadata + signing pipelines (the Google Play side is drafted under `docs/store/`).
 > - OIDC / Postgres backends if community demand emerges.
-> - Logo / website / docs site.
-> - xterm.dart full ANSI rendering on the Flutter terminal screen.
+> - Logo / website / docs site (icon now ships at `app/icon/peersh_imagegen_1024.png`; website is still TBD).
 > - Spawn-pwsh-as-active-user for service mode (WTSQueryUserToken + CreateProcessAsUser). Currently the logon-task path covers the same use case more simply.
+>
+> Phase 7 work additionally shipped (post-Phase-8):
+>
+> - **MSI installer** under `windows/installer/peersh.wxs` (WiX 4 / 7) plus the driver `scripts/build-msi.cmd`. Builds an 8 MB MSI containing peershd.exe + peersh-cli.exe with PATH entry, Start menu shortcut, Apache 2.0 license dialog, and Add/Remove Programs registration. Service registration stays explicit-opt-in via `peershd -install` afterward.
+> - **xterm.dart full ANSI rendering** — replaced the Phase 4b `LogView` in Phase 8 Tier 1.
+> - **Token-gated `/metrics`** (Phase 8 sidecar). `PEERSH_SIGNALING_METRICS_TOKEN` empty → 404; set → bearer required.
