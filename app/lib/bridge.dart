@@ -6,11 +6,16 @@
 
 import 'package:flutter/services.dart';
 
+import 'models/pty_event.dart';
 import 'models/session_event.dart';
 
 class PeershBridge {
   static const _control = MethodChannel('dev.peersh/bridge');
   static const _events = EventChannel('dev.peersh/session/events');
+
+  /// Cached broadcast stream so PTY and Exec consumers share the same
+  /// EventChannel subscription instead of competing on receiveBroadcastStream.
+  static final Stream<dynamic> _eventsStream = _events.receiveBroadcastStream();
 
   /// Returns mobile-core's build identifier.
   Future<String> version() async {
@@ -85,9 +90,63 @@ class PeershBridge {
     });
   }
 
-  /// Broadcast stream of events from all open sessions, tagged with
-  /// sessionId.
-  Stream<SessionEvent> events() => _events
-      .receiveBroadcastStream()
+  /// Opens an interactive PTY on an existing session. Returns a PTY id
+  /// the caller uses for [ptyInput] / [ptyResize] / [closePty]. Output
+  /// flows on [ptyEvents] tagged with the same ptyId.
+  Future<int> openPty({
+    required int sessionId,
+    String command = '',
+    int cols = 80,
+    int rows = 24,
+  }) async {
+    final id = await _control.invokeMethod<int>('openPTY', {
+      'sessionId': sessionId,
+      'command': command,
+      'cols': cols,
+      'rows': rows,
+    });
+    if (id == null) throw StateError('bridge: openPTY returned null');
+    return id;
+  }
+
+  /// Forwards a chunk of input bytes (keystrokes / paste payload) to the
+  /// remote child process.
+  Future<void> ptyInput({required int ptyId, required List<int> data}) async {
+    await _control.invokeMethod<void>('ptyInput', {
+      'ptyId': ptyId,
+      'data': data is Uint8List ? data : Uint8List.fromList(data),
+    });
+  }
+
+  /// Notifies the remote PTY of a terminal grid resize.
+  Future<void> ptyResize({required int ptyId, required int cols, required int rows}) async {
+    await _control.invokeMethod<void>('ptyResize', {
+      'ptyId': ptyId,
+      'cols': cols,
+      'rows': rows,
+    });
+  }
+
+  /// Closes a PTY. Idempotent.
+  Future<void> closePty({required int ptyId}) async {
+    await _control.invokeMethod<void>('closePTY', {
+      'ptyId': ptyId,
+    });
+  }
+
+  /// Broadcast stream of one-shot Exec events from all open sessions.
+  /// PTY events on the same channel are filtered out.
+  Stream<SessionEvent> events() => _eventsStream
+      .where((raw) {
+        final m = raw as Map<dynamic, dynamic>;
+        final type = m['type'] as String?;
+        return type == 'stdout' || type == 'stderr' || type == 'done';
+      })
       .map((raw) => SessionEvent.fromMap(raw as Map<dynamic, dynamic>));
+
+  /// Broadcast stream of PTY data + exit events tagged with ptyId.
+  Stream<PtyEvent> ptyEvents() => _eventsStream
+      .map((raw) => PtyEvent.fromMap(raw as Map<dynamic, dynamic>))
+      .where((e) => e != null)
+      .cast<PtyEvent>();
 }

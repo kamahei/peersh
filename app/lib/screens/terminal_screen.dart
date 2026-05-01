@@ -1,16 +1,45 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+// Phase 8 Tier 1 — interactive PTY terminal screen.
+//
+// Wraps an xterm.dart `Terminal` against a peersh PTY session. Two
+// display modes coexist (per-screen toggle on top of the persisted
+// settings default):
+//
+//   - Wrap: standard `TerminalView`, autoResize=true. The visible grid
+//     follows the device viewport; xterm wraps lines at the right edge.
+//     For PowerShell-flavoured shells the REMOTE PTY is sized to at
+//     least 120 columns so PowerShell's formatter doesn't truncate
+//     output for a 36-cell phone screen — see resize_policy.dart.
+//
+//   - Scroll: TerminalView with autoResize=false, sized to exactly 120
+//     cells, wrapped in a horizontal SingleChildScrollView. The user
+//     scrolls horizontally to see beyond the screen edge. Both the
+//     local xterm and the remote PTY are pinned to 120 columns so
+//     PowerShell's idea of "console width" matches what xterm renders.
+//
+// Connect order: render the TerminalView eagerly (with a translucent
+// loading overlay while the QUIC session negotiates), pre-seed the host
+// PTY using a viewport estimate so PSReadLine doesn't latch onto the
+// xterm-default 80x24, then track xterm's onResize callbacks for any
+// post-startup adjustments.
 
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:xterm/xterm.dart';
+
+import '../models/pty_event.dart';
 import '../models/server_entry.dart';
 import '../services/peersh_session.dart';
 import '../state/settings.dart';
-import '../widgets/log_view.dart';
+import '../terminal/resize_policy.dart';
+import '../terminal/viewport_estimate.dart';
+import '../widgets/special_keys_bar.dart';
 import 'ime_input_sheet.dart';
 import 'text_viewer_screen.dart';
 
-/// Active terminal session screen. Handles the wrap/scroll toggle,
-/// command input, IME bottom sheet, and the entry point to the text
-/// viewer.
 class TerminalScreen extends ConsumerStatefulWidget {
   const TerminalScreen({super.key, required this.server});
 
@@ -20,86 +49,228 @@ class TerminalScreen extends ConsumerStatefulWidget {
   ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends ConsumerState<TerminalScreen> {
-  final _cmdCtrl = TextEditingController();
+class _TerminalScreenState extends ConsumerState<TerminalScreen>
+    with WidgetsBindingObserver {
   PeershSession? _session;
+  int? _ptyId;
+  bool _openingPty = false;
   String? _connectError;
-  bool _running = false;
+
+  /// Per-screen override on top of [settingsProvider]'s default.
   bool? _localLineWrapOverride;
+
+  late final Terminal _terminal = Terminal(maxLines: 10000);
+  late final TerminalController _ctrl = TerminalController();
+
+  StreamSubscription<PtyEvent>? _ptySub;
+  Timer? _resizeDebounce;
+
+  /// Last cols/rows we successfully sent in a PTYResize message. Compared
+  /// against the next request to suppress no-op chatter.
+  int _sentCols = 0;
+  int _sentRows = 0;
+
+  /// Tracks the shell the host actually spawned. Today we always spawn
+  /// pwsh (peershd's default), so `isPowerShellShell` is true; reserved
+  /// for the future where PTYRequest can name a different binary.
+  final String _shell = 'auto';
+
+  // _utf8 is a streaming UTF-8 decoder. PTY chunks are arbitrary byte
+  // boundaries — a single multi-byte glyph can span two PTYData frames —
+  // so we must NOT call utf8.decode on each chunk independently. The
+  // streaming converter holds the partial-byte state across chunks.
+  final Utf8Decoder _utf8 = const Utf8Decoder(allowMalformed: true);
 
   @override
   void initState() {
     super.initState();
-    _connect();
+    WidgetsBinding.instance.addObserver(this);
+    _terminal.onOutput = _handleTerminalOutput;
+    _terminal.onResize = (cols, rows, _, __) => _onTerminalResize(cols, rows);
+    _connectSession();
   }
 
-  Future<void> _connect() async {
+  @override
+  void didChangeMetrics() {
+    // Orientation change, IME show/hide, foldable hinge — all of these
+    // change the available area. Force a rebuild so the TerminalView
+    // re-measures and emits a fresh onResize.
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _resizeDebounce?.cancel();
+    _ptySub?.cancel();
+    final id = _ptyId;
+    final s = _session;
+    if (id != null) {
+      ref.read(bridgeProvider).closePty(ptyId: id);
+    }
+    if (s != null) {
+      s.close();
+    }
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  bool _resolvedLineWrap() {
+    final override = _localLineWrapOverride;
+    if (override != null) return override;
+    return ref.read(settingsProvider).maybeWhen(
+          data: (s) => s.lineWrap,
+          orElse: () => true,
+        );
+  }
+
+  Future<void> _connectSession() async {
+    final bridge = ref.read(bridgeProvider);
     try {
-      final s = await PeershSession.open(
-        bridge: ref.read(bridgeProvider),
+      final session = await PeershSession.open(
+        bridge: bridge,
         server: widget.server,
       );
       if (!mounted) {
-        s.close();
+        await session.close();
         return;
       }
-      setState(() => _session = s);
-      // Listen for events to repaint as output streams in.
-      s.events.listen((_) {
-        if (mounted) setState(() {});
-      });
+      setState(() => _session = session);
+      // Pre-seed PTY size from the viewport estimate so the shell's
+      // startup banner doesn't latch onto xterm's default 80x24.
+      _maybeOpenPty();
     } catch (e) {
       if (!mounted) return;
       setState(() => _connectError = '$e');
     }
   }
 
-  @override
-  void dispose() {
-    _cmdCtrl.dispose();
-    _session?.close();
-    super.dispose();
-  }
+  Future<void> _maybeOpenPty() async {
+    if (_openingPty || _ptyId != null) return;
+    final session = _session;
+    if (session == null) return;
+    final fontSize = ref.read(settingsProvider).maybeWhen(
+          data: (s) => s.fontSize,
+          orElse: () => 13.0,
+        );
+    final dims = estimateViewportCells(context, fontSize: fontSize);
+    final lineWrap = _resolvedLineWrap();
+    final visibleCols = lineWrap ? dims.cols : kHorizontalScrollCols;
+    final remoteCols = remoteColsFor(
+      shell: _shell,
+      lineWrap: lineWrap,
+      visibleCols: visibleCols,
+    );
 
-  Future<void> _runOnce() async {
-    final s = _session;
-    if (s == null) return;
-    final cmd = _cmdCtrl.text.trim();
-    if (cmd.isEmpty) return;
-    setState(() => _running = true);
+    _openingPty = true;
     try {
-      await s.exec(cmd);
+      final ptyId = await ref.read(bridgeProvider).openPty(
+            sessionId: session.id,
+            cols: remoteCols,
+            rows: dims.rows,
+          );
+      if (!mounted) {
+        await ref.read(bridgeProvider).closePty(ptyId: ptyId);
+        return;
+      }
+      _sentCols = remoteCols;
+      _sentRows = dims.rows;
+      _ptySub = ref.read(bridgeProvider).ptyEvents().listen(_onPtyEvent);
+      setState(() => _ptyId = ptyId);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('exec: $e')),
-      );
+      setState(() => _connectError = '$e');
     } finally {
-      if (mounted) {
-        setState(() {
-          _running = false;
-          _cmdCtrl.clear();
-        });
-      }
+      _openingPty = false;
     }
   }
 
+  /// Called by xterm whenever it computes a new grid size for itself.
+  /// Translates into a debounced PTYResize against the host.
+  void _onTerminalResize(int cols, int rows) {
+    if (cols <= 0 || rows <= 0) return;
+    if (_ptyId == null) {
+      // PTY not opened yet; the initial size is set by _maybeOpenPty.
+      return;
+    }
+    final lineWrap = _resolvedLineWrap();
+    final visibleCols = lineWrap ? cols : kHorizontalScrollCols;
+    final remoteCols = remoteColsFor(
+      shell: _shell,
+      lineWrap: lineWrap,
+      visibleCols: visibleCols,
+    );
+    if (remoteCols == _sentCols && rows == _sentRows) return;
+    _resizeDebounce?.cancel();
+    _resizeDebounce = Timer(const Duration(milliseconds: 100), () {
+      final id = _ptyId;
+      if (id == null) return;
+      _sentCols = remoteCols;
+      _sentRows = rows;
+      ref
+          .read(bridgeProvider)
+          .ptyResize(ptyId: id, cols: remoteCols, rows: rows)
+          .catchError((_) {});
+    });
+  }
+
+  /// Toggle wrap/scroll. Forces a fresh resize push since the remote-cols
+  /// formula changes between modes.
+  void _toggleWrap(bool wrap) {
+    setState(() => _localLineWrapOverride = wrap);
+    final id = _ptyId;
+    if (id == null) return;
+    final visibleCols = wrap ? _terminal.viewWidth : kHorizontalScrollCols;
+    final remoteCols = remoteColsFor(
+      shell: _shell,
+      lineWrap: wrap,
+      visibleCols: visibleCols,
+    );
+    final rows = _terminal.viewHeight == 0 ? 24 : _terminal.viewHeight;
+    _sentCols = remoteCols;
+    _sentRows = rows;
+    ref
+        .read(bridgeProvider)
+        .ptyResize(ptyId: id, cols: remoteCols, rows: rows)
+        .catchError((_) {});
+  }
+
+  void _onPtyEvent(PtyEvent event) {
+    if (event.ptyId != _ptyId) return;
+    if (event is PtyDataEvent) {
+      _terminal.write(_utf8.convert(event.data));
+    } else if (event is PtyExitEvent) {
+      _terminal.write(
+        '\r\n\x1b[33m[pty exited code=${event.exitCode}${event.error.isEmpty ? '' : ' err=${event.error}'}]\x1b[0m\r\n',
+      );
+    }
+  }
+
+  Future<void> _handleTerminalOutput(String text) async {
+    final id = _ptyId;
+    if (id == null) return;
+    final bytes = Uint8List.fromList(utf8.encode(text));
+    try {
+      await ref.read(bridgeProvider).ptyInput(ptyId: id, data: bytes);
+    } catch (_) {
+      // Best-effort: drop keystroke if the platform side isn't ready.
+    }
+  }
+
+  Future<void> _sendBytes(List<int> data) async {
+    final id = _ptyId;
+    if (id == null) return;
+    await ref
+        .read(bridgeProvider)
+        .ptyInput(ptyId: id, data: Uint8List.fromList(data));
+  }
+
   Future<void> _openIme() async {
-    final s = _session;
-    if (s == null) return;
     final result = await ImeInputSheet.show(context);
     if (result == null || !mounted) return;
     final normalized = terminalInputFromEditorText(result.text,
         appendEnter: result.appendEnter);
-    // For Phase 4b's simple log view we treat IME input as one Exec
-    // (the host runs it as a single PowerShell statement). When Phase 6
-    // introduces a true PTY, this becomes a write to the live shell.
-    setState(() => _running = true);
-    try {
-      await s.exec(normalized.trimRight());
-    } finally {
-      if (mounted) setState(() => _running = false);
-    }
+    await _sendBytes(utf8.encode(normalized));
   }
 
   Future<void> _openTextViewer() async {
@@ -141,87 +312,152 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   @override
   Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsProvider);
-    final defaultWrap = settingsAsync.maybeWhen(
-      data: (s) => s.lineWrap,
-      orElse: () => true,
-    );
     final fontSize = settingsAsync.maybeWhen(
       data: (s) => s.fontSize,
       orElse: () => 13.0,
     );
-    final wrap = _localLineWrapOverride ?? defaultWrap;
+    final lineWrap = _resolvedLineWrap();
+
+    if (_connectError != null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(widget.server.name)),
+        body: _ConnectError(
+          message: _connectError!,
+          onRetry: () {
+            setState(() {
+              _connectError = null;
+              _ptyId = null;
+              _session = null;
+            });
+            _connectSession();
+          },
+        ),
+      );
+    }
+
+    final showLoader = _session == null || _ptyId == null;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.server.name),
         actions: [
           IconButton(
-            tooltip: wrap ? 'Switch to scroll mode' : 'Switch to wrap mode',
-            onPressed: () => setState(() => _localLineWrapOverride = !wrap),
-            icon: Icon(wrap ? Icons.wrap_text : Icons.swap_horiz),
+            tooltip: lineWrap ? 'Switch to horizontal scroll' : 'Switch to wrap',
+            onPressed: () => _toggleWrap(!lineWrap),
+            icon: Icon(lineWrap ? Icons.wrap_text : Icons.swap_horiz),
           ),
           IconButton(
             tooltip: 'View remote file',
             onPressed: _session == null ? null : _openTextViewer,
             icon: const Icon(Icons.description_outlined),
           ),
-          IconButton(
-            tooltip: 'IME input',
-            onPressed: _session == null ? null : _openIme,
-            icon: const Icon(Icons.keyboard_alt_outlined),
-          ),
         ],
       ),
-      body: _connectError != null
-          ? _ConnectError(message: _connectError!, onRetry: () {
-              setState(() {
-                _connectError = null;
-                _session = null;
-              });
-              _connect();
-            })
-          : _session == null
-              ? const Center(child: CircularProgressIndicator())
-              : Column(
-                  children: [
-                    Expanded(
-                      child: LogView(
-                        lines: _session!.bufferedLines,
-                        partial: _session!.currentPartial,
-                        lineWrap: wrap,
-                        fontSize: fontSize,
-                        errorMessage: _session!.completionError,
-                      ),
-                    ),
-                    SafeArea(
-                      top: false,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _cmdCtrl,
-                                enabled: !_running,
-                                decoration: const InputDecoration(
-                                  isDense: true,
-                                  border: OutlineInputBorder(),
-                                  labelText: 'PowerShell command',
-                                ),
-                                onSubmitted: (_) => _runOnce(),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            FilledButton(
-                              onPressed: _running ? null : _runOnce,
-                              child: Text(_running ? '…' : 'Run'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                Expanded(
+                  child: lineWrap
+                      ? _WrapBody(terminal: _terminal, ctrl: _ctrl, fontSize: fontSize)
+                      : _ScrollBody(terminal: _terminal, ctrl: _ctrl, fontSize: fontSize),
                 ),
+                SpecialKeysBar(
+                  onSendBytes: _sendBytes,
+                  onImeInput: _openIme,
+                ),
+              ],
+            ),
+            if (showLoader)
+              Positioned.fill(
+                child: ColoredBox(
+                  color: Colors.black.withOpacity(0.55),
+                  child: const Center(child: CircularProgressIndicator()),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Wrap mode: standard TerminalView. xterm autoResizes the grid to the
+/// viewport and wraps long lines at the visible right edge.
+class _WrapBody extends StatelessWidget {
+  const _WrapBody({
+    required this.terminal,
+    required this.ctrl,
+    required this.fontSize,
+  });
+
+  final Terminal terminal;
+  final TerminalController ctrl;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return TerminalView(
+      terminal,
+      controller: ctrl,
+      autofocus: true,
+      textStyle: TerminalStyle(fontSize: fontSize),
+      backgroundOpacity: 1.0,
+      padding: const EdgeInsets.all(4),
+    );
+  }
+}
+
+/// Scroll mode: pin xterm at exactly [kHorizontalScrollCols] columns,
+/// disable autoResize, and wrap in a horizontal SingleChildScrollView so
+/// the user can pan side-to-side. Both local xterm and remote PTY use
+/// the same column count, so the shell's formatter and the rendered
+/// width agree.
+class _ScrollBody extends StatelessWidget {
+  const _ScrollBody({
+    required this.terminal,
+    required this.ctrl,
+    required this.fontSize,
+  });
+
+  final Terminal terminal;
+  final TerminalController ctrl;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, c) {
+        // Generous over-estimate so xterm's true cell width never
+        // exceeds the SizedBox and clips the rightmost cells.
+        final cellW = fontSize * 0.7;
+        final cellH = fontSize * 1.2;
+        final width = kHorizontalScrollCols * cellW;
+        final rows = (c.maxHeight / cellH).floor().clamp(5, 200);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (terminal.viewWidth != kHorizontalScrollCols ||
+              terminal.viewHeight != rows) {
+            terminal.resize(kHorizontalScrollCols, rows);
+          }
+        });
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+            width: width,
+            height: c.maxHeight,
+            child: TerminalView(
+              terminal,
+              controller: ctrl,
+              autoResize: false,
+              autofocus: true,
+              textStyle: TerminalStyle(fontSize: fontSize),
+              backgroundOpacity: 1.0,
+              padding: const EdgeInsets.all(4),
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -1,20 +1,37 @@
-// Exec messages flow on per-command bidi streams opened after the control
-// stream's Hello handshake completes. Each fresh stream begins with one
-// ExecRequest from the client; the server then streams ExecResponse messages
-// until done = true.
+// Per-command (and per-PTY) bidi streams opened after the control stream's
+// Hello handshake completes.
+//
+// Every fresh stream begins with a StreamRequest envelope so the server can
+// dispatch between the one-shot Exec path (Phase 1) and the interactive PTY
+// path (Phase 8). The two paths share the underlying QUIC transport but
+// have distinct response shapes.
 syntax = "proto3";
 
 package peersh.v1;
 
-// ExecRequest is the first message on a fresh per-command stream.
+// StreamRequest is the first frame on a fresh stream. The populated `kind`
+// determines how the server treats subsequent frames on the stream.
+message StreamRequest {
+  oneof kind {
+    ExecRequest exec = 1;
+    PTYRequest  pty  = 2;
+  }
+}
+
+// --- Exec (one-shot) -------------------------------------------------------
+
+// ExecRequest runs a single command and streams its output back. Used by
+// peersh-cli's prompt loop and the mobile app's text viewer (ReadFile is
+// implemented as Exec under the hood).
 message ExecRequest {
   // command is the PowerShell expression to execute. Treated as a single
-  // pipeline; the host may append a sentinel marker to detect completion.
+  // pipeline; the host appends a sentinel marker to detect completion.
   string command = 1;
 
   // working_dir, if non-empty, is set as the current working directory for
   // this command only. Empty means "use the session's current directory".
-  // Phase 1 does not implement directory switching; this field is reserved.
+  // Reserved in Phase 1; implemented by the cwd-aware ReadFile path in
+  // Phase 8 Tier 2.
   string working_dir = 2;
 }
 
@@ -32,4 +49,76 @@ message ExecResponse {
 
   // done signals end-of-command. The stream is closed after this message.
   bool done = 3;
+}
+
+// --- PTY (interactive) -----------------------------------------------------
+
+// PTYRequest opens a pseudo-console-backed shell or program on the host.
+// After the server acks (by starting to send PTYData frames), the client
+// streams keystrokes as PTYInput frames and resize notifications as
+// PTYResize frames; the server streams PTYData frames carrying raw output
+// (ANSI sequences and all) and finally a single PTYExit terminator.
+message PTYRequest {
+  // command, when non-empty, is the executable to spawn (e.g. "claude").
+  // Empty means "use the operator-configured default shell" — usually
+  // pwsh wrapped with the OSC 9;9 prompt instrumentation.
+  string command = 1;
+
+  // args are the command-line arguments passed verbatim. Ignored when
+  // command is empty (the server picks the default shell wrapper).
+  repeated string args = 2;
+
+  // cols and rows are the initial terminal grid the client wants the
+  // pseudo-console sized to.
+  uint32 cols = 3;
+  uint32 rows = 4;
+
+  // env carries supplementary environment variables (e.g. TERM=xterm-256color).
+  // The host process inherits the peershd environment plus these overrides.
+  map<string, string> env = 5;
+}
+
+// PTYInput delivers a chunk of bytes from the user's keyboard / paste
+// buffer to the child process's stdin.
+message PTYInput {
+  bytes data = 1;
+}
+
+// PTYResize tells the child the terminal grid dimensions changed.
+// Programs that re-flow on SIGWINCH (or its Windows equivalent) react.
+message PTYResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+// PTYData carries raw output bytes from the child's pseudo-console.
+// ConPTY merges stdout/stderr into a single byte stream, so unlike
+// ExecResponse there is no separate channel tagging.
+message PTYData {
+  bytes data = 1;
+}
+
+// PTYExit terminates the PTY stream. After PTYExit the server closes the
+// stream and any further client frames are discarded.
+message PTYExit {
+  // exit_code mirrors the child process's exit status. -1 indicates an
+  // unknown / abnormal exit (e.g. peersh killed the process to satisfy
+  // an idle timeout).
+  int32 exit_code = 1;
+
+  // error, when non-empty, describes a server-side failure (spawn error,
+  // pseudo-console allocation failure, ...).
+  string error = 2;
+}
+
+// PTYFrame multiplexes the four direction-specific message types onto the
+// single QUIC stream. Client → server frames use the input / resize fields;
+// server → client frames use the data / exit fields.
+message PTYFrame {
+  oneof kind {
+    PTYInput  input  = 1;
+    PTYResize resize = 2;
+    PTYData   data   = 3;
+    PTYExit   exit   = 4;
+  }
 }

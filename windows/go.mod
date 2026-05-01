@@ -5,6 +5,7 @@ go 1.25.0
 require github.com/peersh/peersh/core v0.0.0
 
 require (
+	github.com/UserExistsError/conpty v0.1.4 // indirect
 	github.com/kardianos/service v1.2.4 // indirect
 	github.com/pion/dtls/v2 v2.2.7 // indirect
 	github.com/pion/logging v0.2.2 // indirect

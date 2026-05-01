@@ -25,7 +25,12 @@ import (
 
 // Build is updated when a new mobile-core release is cut. The Flutter app
 // reads this via Version() to surface in About / debug screens.
-const Build = "mobile-core/0.2+phase4b"
+const Build = "mobile-core/0.3+phase8t1"
+
+// protocolVersion is the wire-format version this build speaks. Bumped
+// from 1 to 2 in Phase 8 when the per-stream first frame switched from
+// raw ExecRequest to a StreamRequest envelope.
+const protocolVersion = 2
 
 // Version returns the mobile-core build identifier. Smoke test for "is the
 // gomobile bind alive at all".
@@ -208,7 +213,9 @@ func (s *Session) execLocked(command string, handler Output) error {
 	}
 	defer stream.Close()
 
-	if err := wire.Write(stream, &v1.ExecRequest{Command: command}); err != nil {
+	if err := wire.Write(stream, &v1.StreamRequest{
+		Kind: &v1.StreamRequest_Exec{Exec: &v1.ExecRequest{Command: command}},
+	}); err != nil {
 		handler.OnDone(err.Error())
 		return err
 	}
@@ -259,6 +266,144 @@ func (s *Session) ReadFile(path string) string {
 	return string(h.stdout)
 }
 
+// --- PTY (interactive) ---------------------------------------------------
+
+// PTYHandler is the platform-side callback that receives PTY output bytes
+// and a final exit notification. Like Output, the methods are invoked
+// from a Go-side worker goroutine; the platform side forwards them to a
+// Flutter EventChannel sink. Bytes are merged stdout/stderr from ConPTY
+// (no separate channel tagging).
+type PTYHandler interface {
+	OnData(data []byte)
+	// OnExit is called exactly once when the child process terminates or
+	// the stream tears down. exitCode is the process exit status; -1 if
+	// unknown. errMessage is "" on clean exit, non-empty for failures.
+	OnExit(exitCode int, errMessage string)
+}
+
+// PTYSession is one open pseudo-console on the peersh host. The platform
+// side calls Write to forward keystrokes, Resize when the local terminal
+// changes dimensions, and Close to terminate.
+type PTYSession struct {
+	stream *transport.Stream
+	parent *Session
+
+	mu     sync.Mutex
+	closed bool
+
+	// writeMu serializes wire.Write calls (the read pump and the
+	// platform-side input goroutine both write).
+	writeMu sync.Mutex
+
+	pumpDone chan struct{}
+}
+
+// OpenPTY opens a pseudo-console on the host and starts streaming output
+// to handler. command empty / "auto" / "pwsh" / "powershell" / "cmd" picks
+// the operator-configured default shell (with the OSC 9;9 prompt
+// instrumentation); any other value is run verbatim with args.
+//
+// One PTYSession per Session is the supported topology for Tier 1; the
+// caller may run a PTY and one-shot Execs concurrently against the same
+// Session because each lives on its own QUIC stream.
+func (s *Session) OpenPTY(command string, cols, rows int, handler PTYHandler) (*PTYSession, error) {
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	stream, err := s.conn.OpenStream(s.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("OpenStream: %w", err)
+	}
+	if err := wire.Write(stream, &v1.StreamRequest{
+		Kind: &v1.StreamRequest_Pty{Pty: &v1.PTYRequest{
+			Command: command,
+			Cols:    uint32(cols),
+			Rows:    uint32(rows),
+		}},
+	}); err != nil {
+		_ = stream.Close()
+		return nil, fmt.Errorf("write StreamRequest: %w", err)
+	}
+
+	p := &PTYSession{stream: stream, parent: s, pumpDone: make(chan struct{})}
+	go p.pump(handler)
+	return p, nil
+}
+
+func (p *PTYSession) pump(handler PTYHandler) {
+	defer close(p.pumpDone)
+	r := wire.NewReader(p.stream)
+	for {
+		frame := &v1.PTYFrame{}
+		if err := wire.Read(r, frame); err != nil {
+			handler.OnExit(-1, err.Error())
+			return
+		}
+		switch k := frame.GetKind().(type) {
+		case *v1.PTYFrame_Data:
+			if d := k.Data.GetData(); len(d) > 0 {
+				handler.OnData(d)
+			}
+		case *v1.PTYFrame_Exit:
+			handler.OnExit(int(k.Exit.GetExitCode()), k.Exit.GetError())
+			return
+		default:
+			// Server should not send Input/Resize on this stream.
+		}
+	}
+}
+
+// Write forwards keystrokes / paste payloads from the local user to the
+// remote child process.
+func (p *PTYSession) Write(data []byte) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("ptysession: closed")
+	}
+	p.mu.Unlock()
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	return wire.Write(p.stream, &v1.PTYFrame{
+		Kind: &v1.PTYFrame_Input{Input: &v1.PTYInput{Data: data}},
+	})
+}
+
+// Resize tells the remote pseudo-console the terminal grid changed.
+func (p *PTYSession) Resize(cols, rows int) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("ptysession: closed")
+	}
+	p.mu.Unlock()
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	return wire.Write(p.stream, &v1.PTYFrame{
+		Kind: &v1.PTYFrame_Resize{Resize: &v1.PTYResize{Cols: uint32(cols), Rows: uint32(rows)}},
+	})
+}
+
+// Close terminates the PTY by closing the underlying QUIC stream. The
+// host's pseudo-console pump observes EOF and tears down the child.
+func (p *PTYSession) Close() error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil
+	}
+	p.closed = true
+	p.mu.Unlock()
+	err := p.stream.Close()
+	<-p.pumpDone
+	return err
+}
+
+// --- Session lifecycle (continued) ---------------------------------------
+
 // Close shuts down the QUIC connection and releases the underlying UDP
 // socket. Safe to call multiple times.
 func (s *Session) Close() error {
@@ -307,7 +452,7 @@ func doHello(ctx context.Context, conn *transport.Conn) error {
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
-	if err := wire.Write(ctrl, &v1.ClientHello{ProtocolVersion: 1, ClientId: "mobile-core"}); err != nil {
+	if err := wire.Write(ctrl, &v1.ClientHello{ProtocolVersion: protocolVersion, ClientId: "mobile-core"}); err != nil {
 		return fmt.Errorf("write ClientHello: %w", err)
 	}
 	_ = ctrl.Close()
@@ -315,8 +460,8 @@ func doHello(ctx context.Context, conn *transport.Conn) error {
 	if err := wire.Read(wire.NewReader(ctrl), srv); err != nil {
 		return fmt.Errorf("read ServerHello: %w", err)
 	}
-	if srv.GetProtocolVersion() != 1 {
-		return fmt.Errorf("server protocol_version %d, expected 1", srv.GetProtocolVersion())
+	if srv.GetProtocolVersion() != protocolVersion {
+		return fmt.Errorf("server protocol_version %d, expected %d", srv.GetProtocolVersion(), protocolVersion)
 	}
 	return nil
 }

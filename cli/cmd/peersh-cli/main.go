@@ -40,8 +40,8 @@ import (
 )
 
 const (
-	protocolVersion = 1
-	clientID        = "peersh-cli/0.1"
+	protocolVersion = 2
+	clientID        = "peersh-cli/0.2"
 )
 
 func main() {
@@ -52,6 +52,9 @@ func main() {
 	pskFile := flag.String("psk-file", "", "(signaling mode) path to a file containing a hex-encoded PSK")
 	target := flag.String("target", "", "(signaling mode) target peershd device_id to connect to")
 	stunServer := flag.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
+
+	ptyMode := flag.Bool("pty", false, "open an interactive PTY instead of the one-shot REPL (Phase 8 Tier 1)")
+	ptyCmd := flag.String("pty-cmd", "", "executable to spawn under the PTY; empty = operator-default shell")
 
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
@@ -67,13 +70,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*addr, *signalingURL, *userID, *pskFile, *target, *stunServer); err != nil {
+	if err := run(*addr, *signalingURL, *userID, *pskFile, *target, *stunServer, *ptyMode, *ptyCmd); err != nil {
 		slog.Error("peersh-cli exiting on error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, signalingURL, userID, pskFile, target, stunServer string) error {
+func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode bool, ptyCmd string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -114,6 +117,9 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string) error {
 		if err := doHandshake(ctx, conn); err != nil {
 			return fmt.Errorf("handshake: %w", err)
 		}
+		if ptyMode {
+			return runPTY(ctx, conn, ptyCmd)
+		}
 		return repl(ctx, conn)
 	}
 
@@ -129,6 +135,9 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string) error {
 	slog.Info("connected", "remote", dialAddr)
 	if err := doHandshake(ctx, conn); err != nil {
 		return fmt.Errorf("handshake: %w", err)
+	}
+	if ptyMode {
+		return runPTY(ctx, conn, ptyCmd)
 	}
 	return repl(ctx, conn)
 }
@@ -309,8 +318,10 @@ func runOnce(ctx context.Context, conn *transport.Conn, cmd string) error {
 	}
 	defer stream.Close()
 
-	if err := wire.Write(stream, &v1.ExecRequest{Command: cmd}); err != nil {
-		return fmt.Errorf("write ExecRequest: %w", err)
+	if err := wire.Write(stream, &v1.StreamRequest{
+		Kind: &v1.StreamRequest_Exec{Exec: &v1.ExecRequest{Command: cmd}},
+	}); err != nil {
+		return fmt.Errorf("write StreamRequest: %w", err)
 	}
 
 	r := wire.NewReader(stream)

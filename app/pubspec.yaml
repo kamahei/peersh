@@ -43,6 +43,11 @@ dependencies:
   # Phase 4b: HTTP client for /.well-known/peersh.json discovery.
   http: ^1.2.2
 
+  # Phase 8 Tier 1: full xterm-style terminal emulation. Replaces the
+  # Phase 4b LogView for the live PTY screen — claude / codex / pwsh
+  # rendered with ANSI colours, cursor movement, alt-screen, etc.
+  xterm: ^4.0.0
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8

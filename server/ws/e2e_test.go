@@ -186,7 +186,7 @@ func TestEndToEndSignalingPlusQUIC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream(control): %v", err)
 	}
-	if err := wire.Write(ctrl, &v1.ClientHello{ProtocolVersion: 1, ClientId: "test-cli"}); err != nil {
+	if err := wire.Write(ctrl, &v1.ClientHello{ProtocolVersion: 2, ClientId: "test-cli"}); err != nil {
 		t.Fatalf("write ClientHello: %v", err)
 	}
 	_ = ctrl.Close()
@@ -195,17 +195,19 @@ func TestEndToEndSignalingPlusQUIC(t *testing.T) {
 	if err := wire.Read(r, srvHello); err != nil {
 		t.Fatalf("read ServerHello: %v", err)
 	}
-	if srvHello.GetProtocolVersion() != 1 {
+	if srvHello.GetProtocolVersion() != 2 {
 		t.Fatalf("server protocol_version: %d", srvHello.GetProtocolVersion())
 	}
 
-	// One per-command stream: ExecRequest → ExecResponse(stdout=cmd, done=true).
+	// One per-command stream: StreamRequest{Exec} → ExecResponse(stdout=cmd, done=true).
 	exec, err := conn.OpenStream(ctx)
 	if err != nil {
 		t.Fatalf("OpenStream(exec): %v", err)
 	}
-	if err := wire.Write(exec, &v1.ExecRequest{Command: "hello-world"}); err != nil {
-		t.Fatalf("write ExecRequest: %v", err)
+	if err := wire.Write(exec, &v1.StreamRequest{
+		Kind: &v1.StreamRequest_Exec{Exec: &v1.ExecRequest{Command: "hello-world"}},
+	}); err != nil {
+		t.Fatalf("write StreamRequest: %v", err)
 	}
 	er := wire.NewReader(exec)
 	var got string
@@ -248,7 +250,7 @@ func runEchoHost(ctx context.Context, l *transport.Listener) error {
 			if err := wire.Read(r, ch); err != nil {
 				return
 			}
-			_ = wire.Write(ctrl, &v1.ServerHello{ProtocolVersion: 1, ServerId: "echo-test"})
+			_ = wire.Write(ctrl, &v1.ServerHello{ProtocolVersion: 2, ServerId: "echo-test"})
 			for {
 				s, err := c.AcceptStream(ctx)
 				if err != nil {
@@ -256,8 +258,12 @@ func runEchoHost(ctx context.Context, l *transport.Listener) error {
 				}
 				go func(s *transport.Stream) {
 					defer s.Close()
-					req := &v1.ExecRequest{}
-					if err := wire.Read(wire.NewReader(s), req); err != nil {
+					sreq := &v1.StreamRequest{}
+					if err := wire.Read(wire.NewReader(s), sreq); err != nil {
+						return
+					}
+					req := sreq.GetExec()
+					if req == nil {
 						return
 					}
 					_ = wire.Write(s, &v1.ExecResponse{

@@ -257,7 +257,7 @@ func TestPhase3FullChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream(control): %v", err)
 	}
-	if err := wire.Write(ctrl, &v1.ClientHello{ProtocolVersion: 1, ClientId: "phase3-cli"}); err != nil {
+	if err := wire.Write(ctrl, &v1.ClientHello{ProtocolVersion: 2, ClientId: "phase3-cli"}); err != nil {
 		t.Fatalf("write ClientHello: %v", err)
 	}
 	_ = ctrl.Close()
@@ -271,8 +271,10 @@ func TestPhase3FullChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream(exec): %v", err)
 	}
-	if err := wire.Write(exec, &v1.ExecRequest{Command: "phase3-echo"}); err != nil {
-		t.Fatalf("write ExecRequest: %v", err)
+	if err := wire.Write(exec, &v1.StreamRequest{
+		Kind: &v1.StreamRequest_Exec{Exec: &v1.ExecRequest{Command: "phase3-echo"}},
+	}); err != nil {
+		t.Fatalf("write StreamRequest: %v", err)
 	}
 	er := wire.NewReader(exec)
 	var got string

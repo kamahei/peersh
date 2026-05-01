@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -42,10 +43,18 @@ import (
 	"github.com/peersh/peersh/core/transport"
 	"github.com/peersh/peersh/core/transport/devtls"
 	"github.com/peersh/peersh/core/wire"
+	"sync"
+
+	"github.com/peersh/peersh/windows/ptyhost"
 	"github.com/peersh/peersh/windows/pwsh"
 )
 
-const protocolVersion = 1
+const protocolVersion = 2
+
+// supportedCapabilities is the capability list peershd advertises in
+// ServerHello. "pty.v1" tells the client it may open StreamRequest{pty: ...}
+// streams.
+var supportedCapabilities = []string{"pty.v1"}
 
 func main() {
 	// Phase 7: detect Windows-Service install / uninstall / SCM-dispatch
@@ -382,8 +391,88 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 			log.Info("AcceptStream: end of connection", "err", err)
 			return
 		}
-		go serveExec(ctx, host, stream, log)
+		go serveStream(ctx, host, stream, log)
 	}
+}
+
+// serveStream dispatches a per-stream first frame (StreamRequest) to either
+// the one-shot Exec path or the interactive PTY path. Each stream owns its
+// own protocol; this function returns when the stream closes.
+func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, log *slog.Logger) {
+	defer stream.Close()
+	r := wire.NewReader(stream)
+	req := &v1.StreamRequest{}
+	if err := wire.Read(r, req); err != nil {
+		log.Warn("read StreamRequest", "err", err)
+		return
+	}
+	switch kind := req.GetKind().(type) {
+	case *v1.StreamRequest_Exec:
+		serveExecStream(ctx, host, stream, kind.Exec, log)
+	case *v1.StreamRequest_Pty:
+		servePTYStream(ctx, stream, r, kind.Pty, log)
+	default:
+		log.Warn("StreamRequest with no kind set")
+	}
+}
+
+func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, log *slog.Logger) {
+	clog := log.With("stream", stream.StreamID(), "pty_cmd", req.GetCommand())
+	cols := uint16(req.GetCols())
+	rows := uint16(req.GetRows())
+	clog.Info("pty open", "cols", cols, "rows", rows)
+
+	sess, err := ptyhost.Open(req.GetCommand(), req.GetArgs(), cols, rows)
+	if err != nil {
+		clog.Warn("ptyhost.Open failed", "err", err)
+		_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Exit{Exit: &v1.PTYExit{ExitCode: -1, Error: err.Error()}}})
+		return
+	}
+	defer sess.Close()
+
+	pumpCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Output direction: pump child bytes -> wire frames.
+	var writeMu sync.Mutex
+	pumpDone := make(chan struct{})
+	go func() {
+		defer close(pumpDone)
+		sess.Pump(pumpCtx, func(f *v1.PTYFrame) error {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			return wire.Write(stream, f)
+		})
+	}()
+
+	// Input direction: read PTYFrames from the wire, route Input/Resize.
+	for {
+		frame := &v1.PTYFrame{}
+		if err := wire.Read(r, frame); err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+				clog.Info("pty read frame", "err", err)
+			}
+			break
+		}
+		switch k := frame.GetKind().(type) {
+		case *v1.PTYFrame_Input:
+			if _, err := sess.Write(k.Input.GetData()); err != nil {
+				clog.Info("pty write to child", "err", err)
+				break
+			}
+		case *v1.PTYFrame_Resize:
+			if err := sess.Resize(uint16(k.Resize.GetCols()), uint16(k.Resize.GetRows())); err != nil {
+				clog.Info("pty resize", "err", err)
+			}
+		default:
+			// Server-bound frames (Data / Exit) on the input direction
+			// are protocol violations; ignore.
+		}
+	}
+
+	cancel()
+	<-pumpDone
+	clog.Info("pty closed")
 }
 
 func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionManager) (string, *pwsh.Host, error) {
@@ -403,7 +492,7 @@ func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionM
 	}
 	if err := wire.Write(ctrl, &v1.ServerHello{
 		ProtocolVersion: protocolVersion,
-		Capabilities:    nil,
+		Capabilities:    supportedCapabilities,
 		ServerId:        "peershd/0.1",
 		SessionId:       id,
 		Reattached:      reattached,
@@ -413,14 +502,7 @@ func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionM
 	return id, host, nil
 }
 
-func serveExec(ctx context.Context, host *pwsh.Host, stream *transport.Stream, log *slog.Logger) {
-	defer stream.Close()
-	r := wire.NewReader(stream)
-	req := &v1.ExecRequest{}
-	if err := wire.Read(r, req); err != nil {
-		log.Warn("read ExecRequest", "err", err)
-		return
-	}
+func serveExecStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, req *v1.ExecRequest, log *slog.Logger) {
 	cmd := req.GetCommand()
 	clog := log.With("stream", stream.StreamID(), "cmd_len", len(cmd))
 	clog.Info("exec received")

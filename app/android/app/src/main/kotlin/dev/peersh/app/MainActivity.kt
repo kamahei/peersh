@@ -7,6 +7,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import peersh.Output
+import peersh.PTYHandler
+import peersh.PTYSession
 import peersh.Peersh
 import peersh.Session
 import java.util.concurrent.ConcurrentHashMap
@@ -18,7 +20,9 @@ class MainActivity : FlutterActivity() {
     private val eventChannelName = "dev.peersh/session/events"
 
     private val sessions = ConcurrentHashMap<Int, Session>()
+    private val ptys = ConcurrentHashMap<Int, PTYSession>()
     private val nextSessionId = AtomicInteger(1)
+    private val nextPtyId = AtomicInteger(1)
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -130,6 +134,81 @@ class MainActivity : FlutterActivity() {
                             mainHandler.post { result.success(null) }
                         }
                     }
+                    "openPTY" -> {
+                        val sessionId = (call.argument<Number>("sessionId") ?: 0).toInt()
+                        val command = call.argument<String>("command") ?: ""
+                        val cols = (call.argument<Number>("cols") ?: 80).toInt()
+                        val rows = (call.argument<Number>("rows") ?: 24).toInt()
+                        val s = sessions[sessionId]
+                        if (s == null) {
+                            result.error("UNKNOWN_SESSION", "no session for id=$sessionId", null)
+                            return@setMethodCallHandler
+                        }
+                        val ptyId = nextPtyId.getAndIncrement()
+                        executor.submit {
+                            try {
+                                val handler = PTYEventHandler(ptyId) { sink }
+                                val p = s.openPTY(command, cols.toLong(), rows.toLong(), handler)
+                                ptys[ptyId] = p
+                                mainHandler.post { result.success(ptyId) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("PTY_OPEN_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
+                    "ptyInput" -> {
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toInt()
+                        val data = call.argument<ByteArray>("data") ?: ByteArray(0)
+                        val p = ptys[ptyId]
+                        if (p == null) {
+                            result.error("UNKNOWN_PTY", "no pty for id=$ptyId", null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try {
+                                p.write(data)
+                                mainHandler.post { result.success(null) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("PTY_WRITE_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
+                    "ptyResize" -> {
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toInt()
+                        val cols = (call.argument<Number>("cols") ?: 80).toInt()
+                        val rows = (call.argument<Number>("rows") ?: 24).toInt()
+                        val p = ptys[ptyId]
+                        if (p == null) {
+                            result.error("UNKNOWN_PTY", "no pty for id=$ptyId", null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try {
+                                p.resize(cols.toLong(), rows.toLong())
+                                mainHandler.post { result.success(null) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("PTY_RESIZE_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
+                    "closePTY" -> {
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toInt()
+                        val p = ptys.remove(ptyId)
+                        if (p == null) {
+                            result.success(null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try { p.close() } catch (_: Throwable) {}
+                            mainHandler.post { result.success(null) }
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             } catch (t: Throwable) {
@@ -139,7 +218,11 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        // Best-effort: close any sessions left open by the Dart side.
+        // Best-effort: close any sessions/ptys left open by the Dart side.
+        for ((_, p) in ptys) {
+            try { p.close() } catch (_: Throwable) {}
+        }
+        ptys.clear()
         for ((_, s) in sessions) {
             try { s.close() } catch (_: Throwable) {}
         }
@@ -177,6 +260,35 @@ class MainActivity : FlutterActivity() {
                 put("type", type)
                 if (data != null) put("data", data) // platform codec sends ByteArray as Uint8List
                 if (error.isNotEmpty()) put("error", error)
+            }
+            mainHandler.post { sinkRef()?.success(event) }
+        }
+    }
+
+    /**
+     * PTYEventHandler implements peersh.PTYHandler and forwards PTY output
+     * + exit events to the Flutter EventChannel. Events are tagged with a
+     * "type" key so Dart can multiplex (ptyData / ptyExit) and a "ptyId"
+     * key so the UI can correlate to a specific terminal screen.
+     */
+    private inner class PTYEventHandler(
+        private val ptyId: Int,
+        private val sinkRef: () -> EventChannel.EventSink?,
+    ) : PTYHandler {
+        override fun onData(data: ByteArray) {
+            val event = HashMap<String, Any?>().apply {
+                put("ptyId", ptyId)
+                put("type", "ptyData")
+                put("data", data)
+            }
+            mainHandler.post { sinkRef()?.success(event) }
+        }
+        override fun onExit(exitCode: Long, errMessage: String) {
+            val event = HashMap<String, Any?>().apply {
+                put("ptyId", ptyId)
+                put("type", "ptyExit")
+                put("exitCode", exitCode)
+                if (errMessage.isNotEmpty()) put("error", errMessage)
             }
             mainHandler.post { sinkRef()?.success(event) }
         }
