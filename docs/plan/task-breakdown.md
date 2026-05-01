@@ -213,13 +213,54 @@ Phase 6 was decomposed into P6-T01 through P6-T04:
 - T03: peershd `doHandshake` returns `(session_id, *pwsh.Host)`; `serveConn` keeps the manager-owned host and detaches on QUIC close instead of killing pwsh.
 - T04: doc reconciliation.
 
-Phase 6b anchor points:
+### Phase 6b — Multi-tab terminal + PTY persistence
 
-- Ring buffer per session capturing stdout/stderr emitted while the client is detached. Server opens a server-initiated stream on reattach to drain the buffer to the client.
+> **Status: shipped (Tier 1 + Tier 2).** Tier 1 replaced the single-PTY `TerminalScreen` with a tabbed view (`TerminalTabsScreen` + `TerminalPane`) that hosts multiple terminals against the same QUIC connection; tabs survive switches via `IndexedStack`. Tier 2 added server-side PTY persistence via `windows/ptyhost.Manager` (256 KiB scrollback ring buffer per Session, 30-minute idle TTL, periodic sweep), the `PTYReattachAck` frame as the first server-bound frame on every PTY stream, `FilesRequest.{ListPTYs,KillPTY}` RPCs, and the mobile reattach UI (bottom-sheet picker on connect / "+" tab; long-press tab → "Close (keep alive)" or "Kill PTY"). Reattach handles persist via `flutter_secure_storage` so the user can leave + return + rebind to the same shell. Tab labels auto-update from the OSC 9;9 cwd via 2 s polling.
+>
+> Phase 6b was decomposed into P6b-T01 through P6b-T10:
+>
+> - T01: TerminalTabsScreen with multi-PTY (IndexedStack-backed tab list).
+> - T02: TerminalPane widget extraction (one xterm Terminal + PTY lifecycle per tab).
+> - T03: Tab title from cwd / shell command.
+> - T04: Routing change ServersScreen → TerminalTabsScreen.
+> - T05: Tier 1 build verify + commit + push.
+> - T06: PTY persistence + scrollback ring buffer (`ptyhost.Manager`).
+> - T07: PTY reattach protocol + dispatch (`PTYReattachAck`, `ListPTYs`, `KillPTY`).
+> - T08: mobile-core reattach API (`Session.OpenPTYReattach`, `ListPTYs`, `KillPTY`).
+> - T09: Tabs screen reattach UI (picker, persisted handles, long-press menu).
+> - T10: Tier 2 build verify + commit + push.
+
+Remaining Phase 6b anchor points (deferred):
+
 - Android Foreground Service plugin (or native) so the active session can survive app backgrounding within OS limits.
 - iOS Background Modes + the App-Store-review caveat work.
-- Mobile-side auto-reconnect with exponential backoff and `session_id` persistence.
-- App-side surfacing of `reattached = true` in the terminal screen ("resumed your previous session" banner).
+- Mobile-side auto-reconnect with exponential backoff. Today the user must tap "Retry" after a connection drops; reattach will pick up the same shells once reconnected.
+- App-side "session resumed" banner in the terminal screen.
+- Per-host scrollback size override (today the cap is the server-side default 256 KiB).
+
+## Phase 8 — Interactive PTY terminal + session-scoped file API
+
+> **Status: shipped (Tier 1 + Tier 2).** Tier 1 replaced the one-shot Exec model on the mobile terminal with a full ConPTY-backed pseudo-console: `windows/pty` ConPTY wrapper, `windows/shell` resolver that wraps PowerShell / cmd with an OSC 9;9 prompt emitter, `proto/peersh/v1/exec.proto` extended with `StreamRequest` envelope dispatching between the legacy `ExecRequest` and the new `PTYRequest` / `PTYInput` / `PTYResize` / `PTYData` / `PTYExit` messages (plus `PTYFrame` multiplexing). `peershd` advertises `capabilities = ["pty.v1"]` after bumping `protocol_version` to 2. The mobile-core gained `Session.OpenPTY` + `PTYSession.Write`/`Resize`/`Close`; Flutter switched to `xterm.dart 4.0` for ANSI rendering, added a soft-keyboard-friendly special-keys bar (Esc/Ctrl/Tab/arrows/^C^D^L^Z/PgUp/PgDn/Home/End plus an IME-input launcher at the leftmost slot mirroring peersh), and ports the `resize_policy.dart` / `viewport_estimate.dart` helpers from peersh so PowerShell's startup cwd-cache doesn't lock the PTY at xterm's default 80x24. peersh-cli grew a `-pty` mode for fast end-to-end protocol verification on the host machine.
+>
+> Tier 2 added cwd tracking and a session-scoped file browser/viewer: `windows/session.CWDTracker` (port of peersh's OSC 9;9 state machine, with chunk-boundary handling and a 4 KiB body cap), `ptyhost.Session.CWD()` exposed via `Session.GetCWD`, and the new `FilesRequest` / `FilesResponse` envelope on the existing per-stream wire format (capability `files.v1`). New mobile screens: `FileBrowserScreen` (session-scoped, no operator-configured roots, no bookmarks — peersh's design intentionally narrows the scope) and a rewritten `TextViewerScreen` (`.forSession` constructor with the new `bridge.readSessionFile` RPC; syntax-highlight toggle via `flutter_highlighting`; encoding + size + truncated-badge meta strip; copy-all and search nav).
+>
+> Phase 8 was decomposed into P8-T01 through P8-T22:
+>
+> - T01–T11: Tier 1 (ConPTY + shell wrapper + protocol + mobile xterm + special-keys bar + peersh-cli mode + verify).
+> - T12: Tier 1 real-device test (claude / codex CLIs verified through arrow keys / Ctrl+C / resize).
+> - T13–T15: Tier 2 server-side (cwdtracker + Session.CWD + Files protocol).
+> - T16: peershd Files dispatch (resolveSessionPath enforces cwd containment; UTF-16 BOM transcode to UTF-8).
+> - T17–T18: mobile-core + bridge for files API.
+> - T19: `flutter_highlighting` + ported `syntax_highlighting.dart`.
+> - T20: `FileBrowserScreen.forSession`.
+> - T21: `TextViewerScreen` rewrite (peersh parity).
+> - T22: `TerminalScreen` AppBar entry point for the file browser.
+
+## Security hardening (carried throughout)
+
+> **Status: ongoing as items emerge.** Notable item from Phase 8 / Cloud Run rollout:
+>
+> - `/metrics` endpoint gated behind `PEERSH_SIGNALING_METRICS_TOKEN` (fail-closed: empty token → 404, otherwise `Authorization: Bearer <token>` required, ConstantTimeCompare). Public-access Cloud Run + an unauthenticated `/metrics` would have leaked Go runtime version + active-session counts + per-reason auth-failure rates to the entire internet; the token gate keeps Prometheus telemetry private without disabling the endpoint for legitimate scrapers.
 
 ## Phase 7 — Polish, Public Release, and Beyond
 

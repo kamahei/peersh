@@ -30,7 +30,7 @@ All Phase 3 open questions were resolved during Phase 3 planning.
 All Phase 4 open questions were resolved during Phase 4b planning:
 
 - **Multi-server / multi-device UX → two-level list.** ServersScreen → TerminalScreen on tap; Phase 4b ships single-target-per-server (the user pastes the host's device_id into the server entry). Richer multi-device-per-server discovery waits for Firestore (Phase 5).
-- **Terminal UI fidelity → simple monospaced log view.** Implemented as `LogView`; xterm-style ANSI rendering is reserved for Phase 7 polish if real-world feedback asks for it.
+- **Terminal UI fidelity** — Phase 4b shipped a simple monospaced log view; **Phase 8 superseded it with full xterm.dart 4.x ANSI rendering** (the LogView class is gone). The simple-log path is no longer reachable.
 - **Streaming Go → Dart → EventChannel + base64-encoded chunk events.** One `EventChannel` shared across sessions; events tagged with `sessionId`. The platform message codec carries `ByteArray` natively on Android (Uint8List on Dart side) so no further encoding is required.
 
 ### Phase 5 (Firebase Auth + FCM) — partially resolved
@@ -41,13 +41,22 @@ Phase 5's server-side shipped (`core/auth/firebase`, `core/store/firestore`, Clo
 - **Behavior when the Windows device is unreachable even after FCM** — Phase 5b decision (mobile-side error UX). Default still applies: bounded wait (~30 s), then "Could not reach your Windows device. It may be offline."
 - **Device list sync across multiple mobile devices** — Phase 5b decision (FlutterFire-side). Default still applies: Firestore read on app start with client-side caching, no real-time listener.
 
-### Phase 6 (Background Persistence + Session Resumption) — partially resolved
+### Phase 6 / 6b (Background Persistence + Session Resumption) — partially resolved
 
-Phase 6's server-side reattach shipped (`pwsh.SessionManager`, `session_id` on Hello, peershd reattach plumbing). The remaining items belong to Phase 6b (client-side and OS-specific work).
+Phase 6 and Phase 6b Tier 1+2 are shipped: `pwsh.SessionManager` for the legacy Exec model, plus the new `ptyhost.Manager` with 256 KiB ring buffer + 30 min TTL + `PTYReattachAck` + `ListPTYs` / `KillPTY` RPCs and the matching mobile reattach UI. The remaining items belong to the deferred-by-design Phase 6b items (auto-reconnect + Foreground Service / iOS BG Modes).
 
-- **Idle timeout policy → 30 min hardcoded** (`pwsh.DefaultIdleTimeout`). Per-user / per-server configurability is a Phase 6b polish item if real usage patterns demand it.
-- **Output buffer overflow during long disconnects** — Phase 6b decision (the ring buffer itself is Phase 6b). Default still applies: truncate oldest, mark replay as truncated.
-- **iOS App Store review risks** — Phase 6b decision. Default still applies: TestFlight first under `voip`, document the App Store risk, accept that public iOS distribution may need a different approach.
+- **Idle timeout policy → 30 min hardcoded** (`pwsh.DefaultIdleTimeout`, `ptyhost.IdleTimeout`). Per-user configurability remains a future polish item.
+- **Ring-buffer overflow during long disconnects → resolved.** `ptyhost.RingBufferSize = 256 KiB`, oldest bytes drop on overflow; replay reflects whatever the client most recently saw.
+- **iOS App Store review risks** — still deferred (no iOS device available remotely).
+
+### Phase 8 (Interactive PTY Terminal + session-scoped file API) — resolved
+
+- **Default shell → `auto`**, resolved by `windows/shell.Resolve` (pwsh > powershell > SystemRoot fallback). Operator override via PTYRequest.command (e.g. `claude` direct).
+- **PTY data multiplexing → `PTYFrame` oneof.** Single QUIC stream per PTY; Input/Resize go up, Data/Exit/ReattachAck come down.
+- **PowerShell formatter narrow-width corruption → `remoteColsFor` with kHorizontalScrollCols = 120.** In wrap mode against a pwsh-like shell, the remote PTY is pegged at ≥ 120 cols even when the visible cell count is smaller, so Get-Process / Format-Table outputs are never truncated.
+- **OSC 9;9 cwd tracking** — body cap 4 KiB, BEL + ST terminators, chunk-boundary tolerance, body-truncated invalidation. State machine ported from peersh\.
+- **File-browser scope → session-scoped only.** No operator-configured roots, no bookmarks: peersh's narrower threat model intentionally restricts file access to the cwd a real user is typing in.
+- **`/metrics` exposure → token-gated.** `PEERSH_SIGNALING_METRICS_TOKEN` empty → 404 (fail-closed); set → `Authorization: Bearer <token>` + ConstantTimeCompare.
 
 ## Things that are likely to change
 

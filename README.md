@@ -17,17 +17,19 @@ The mobile app supports adding multiple signaling servers and switching between 
 
 ## Status
 
-**Phases 1–5 (server-side) are complete; mobile-app FlutterFire integration deferred to 5b.** Phases 1–3 shipped the data path (LAN PoC, signaling+PSK+SQLite, NAT hole punching). Phase 4 shipped the Android-side mobile UI plus the three peersh-parity features (wrap/scroll toggle, IME bottom sheet, built-in text viewer). Phase 5 adds the Firebase / official-hosted-server side: `core/auth/firebase` verifies Google-issued ID tokens, `core/store/firestore` stores users / devices / pairings / sessions in Cloud Firestore, the signaling server's `[auth_provider]` / `[store_backend]` config switches between `psk + sqlite` (self-host default) and `firebase + firestore` (official hosted), and `firebase/` ships the Cloud Function that triggers FCM wake-up when a session document is created. Mobile-side FlutterFire (Google sign-in, FCM token registration, App Check) and iOS-on-macOS device validation are the remaining items.
+**Phases 1–6b + 8 are shipped (Android + server). iOS device validation + Phase 5b mobile FlutterFire integration remain.** Phases 1–3 shipped the data path (LAN PoC, signaling+PSK+SQLite, NAT hole punching). Phase 4 shipped the Android-side mobile UI plus three peersh-parity features. Phase 5 added the Firebase / official-hosted-server side server-side. Phase 6 + 6b shipped server-side session reattach for the legacy Exec model **and** full PTY persistence with a 256 KiB scrollback ring buffer + multi-tab UI. Phase 8 replaced the one-shot Exec path with an interactive ConPTY-backed terminal (`xterm.dart`), an OSC 9;9 cwd-tracking shell wrapper, and a session-scoped file browser + syntax-highlighted text viewer. The signaling server's `/metrics` endpoint is gated behind a bearer token (fail-closed). Mobile-side FlutterFire (Google sign-in, FCM token registration, App Check) and iOS-on-macOS device validation are the remaining items.
 
-The seven planned phases are:
+Phase progress:
 
 1. Same-LAN PoC (Go service + CLI client over LAN) — **done**
 2. Signaling server with PSK auth (self-host path) — **done**
 3. NAT hole punching (P2P across home networks / mobile data) — **done**
 4. Flutter mobile app + `gomobile` integration — **Android done; iOS xcframework + real-device run deferred**
 5. Firebase Auth + FCM wake-up (official hosted path) — **server-side done; mobile FlutterFire deferred (5b)**
-6. Background persistence + session resumption — **server-side reattach done; ring-buffer replay + Foreground Service + iOS BG Modes deferred (6b)**
-7. Polish, public release, and beyond — **incremental: Windows Service + Logon Task install, Prometheus /metrics, SECURITY/CONTRIBUTING, Render/Fly deploy templates done; MSI / store submission / OIDC / logo / xterm.dart deferred**
+6. Background persistence + session resumption (Exec) — **done**
+6b. Multi-tab terminal + PTY persistence + reattach — **done; auto-reconnect + Foreground Service / iOS BG Modes deferred**
+7. Polish, public release, and beyond — **incremental: Windows Service + Logon Task install, Prometheus /metrics (now token-gated), SECURITY/CONTRIBUTING, Render/Fly/Cloud Run deploy templates done; MSI / store submission / OIDC / logo deferred**
+8. Interactive PTY terminal + session-scoped file API — **done (Tier 1: ConPTY + xterm.dart; Tier 2: OSC 9;9 cwd tracking + file browser + syntax-highlighted viewer)**
 
 Each phase is a separate work session. AI agents working in this repository default to Plan Mode at the start of each phase — see `AGENTS.md` and `docs/plan/ai-implementation-guide.md`.
 

@@ -65,14 +65,41 @@ These are checked at every phase, not just the one that introduces them.
 - **`docs/deploy/firebase.md` exists.** A user hosting their own Firebase project can follow the doc and reach a working setup.
 - **Per-connection Firestore budget holds.** Instrumented dev test confirms ≤ ~5 reads + ~2 writes per connection lifecycle.
 
-## Phase 6 — Background Persistence + Session Resumption
+## Phase 6 — Background Persistence + Session Resumption (Exec)
 
-- **Reattach works.** A client disconnects mid-session and reconnects later within the idle window, presenting a `session_id`. The Windows host reattaches the existing `pwsh` process. cwd and variables are intact. The user sees a replay of output emitted during the disconnect.
-- **Idle timeout is enforced.** After the configured idle period without a connected client, the host discards the `pwsh` process. A subsequent reattach attempt with the expired `session_id` cleanly results in a new session, not a confusing reuse.
-- **Output ring buffer behavior is defined and documented.** When the buffer fills during a long disconnect, behavior follows the documented policy (truncate-oldest is the likely default; final policy is whatever Phase 6 decides).
-- **Android Foreground Service.** The app, when configured for persistence, posts the persistent notification with `connectedDevice` type. Backgrounding the app does not drop the connection until OS limits are reached.
-- **iOS background persistence works.** With the chosen Background Modes setup, backgrounding does not immediately drop the connection. App Store review implications have been documented.
-- **QUIC keepalive and reconnect.** Keepalive at ~15s refreshes NAT mappings. Reconnect uses exponential backoff and ultimately gives up with a clear message.
+- **Reattach works (Exec model).** A client disconnects mid-session and reconnects later within the idle window, presenting a `session_id`. The Windows host reattaches the existing `pwsh` process via `pwsh.SessionManager`. cwd and variables are intact.
+- **Idle timeout is enforced.** After 30 minutes without a connected client, `Sweep` discards the `pwsh` process. A subsequent reattach with the expired id transparently produces a fresh session.
+
+## Phase 6b — Multi-tab Terminal + PTY Persistence
+
+- **Multi-tab works.** `TerminalTabsScreen` hosts multiple PTYs against one QUIC connection; tabs are kept alive across switches via `IndexedStack`; new tab can spawn or reattach.
+- **Server-side PTY persistence works.** `windows/ptyhost.Manager` keeps the ConPTY alive past the QUIC stream that opened it. Closing a tab detaches; the host runs the child until the 30-minute idle TTL elapses.
+- **Scrollback ring buffer replays on reattach.** A persisted PTY emits the last ≤ 256 KiB of output as `PTYData` frames before live data resumes.
+- **Reattach UI works.** On connect / "+ tab", the user is offered any reattachable PTYs in a bottom-sheet picker. Long-pressing a tab offers "Close (keep alive)" or "Kill PTY".
+- **Reattach handles persist locally.** Mobile stores the server-issued handle via `flutter_secure_storage` so the user can leave + reopen the app and rebind.
+- **`KillPTY` is reachable from the UI.** Long-press → Kill PTY actually drops the ring buffer + child process.
+
+Remaining Phase 6b acceptance criteria (deferred):
+
+- **Android Foreground Service.** Posts the `connectedDevice` notification; backgrounding does not drop the connection.
+- **iOS background persistence.** Background Modes wired up; App Store review implications documented.
+- **Mobile auto-reconnect.** Exponential backoff with a clear give-up state.
+- **"Session resumed" banner.** Surfaces `reattached = true` in the terminal screen.
+
+## Phase 8 — Interactive PTY Terminal + Session-scoped File API
+
+- **Interactive CLIs work.** `claude`, `codex`, and PowerShell readline all behave correctly on a real Android device: arrow keys / Ctrl+C / Tab completion / resize / Unicode characters all flow end-to-end.
+- **PowerShell wrap mode does not corrupt formatting.** When the visible cell count is below 120, the remote PTY is pegged at 120 cols (`remoteColsFor`) so `Get-Process` / `Format-Table` output is not truncated.
+- **Scroll mode pins both ends at 120 cols.** xterm's `autoResize: false` + horizontal `SingleChildScrollView` matches the host PTY width exactly.
+- **`/.well-known/peersh.json` advertises capabilities.** `pty.v1` and `files.v1` appear; pre-Phase-8 clients still negotiate `protocol_version=2` and never see a PTY frame.
+- **OSC 9;9 cwd tracking is robust.** `windows/session.CWDTracker` survives chunk boundaries up to 4 KiB; runaway OSC bodies are truncated and discarded; ST + BEL terminators both work; quoted paths decode.
+- **File browser is session-scoped only.** Paths resolve relative to `Session.CWD`; absolute paths or `..` escapes are rejected by `resolveSessionPath`.
+- **Text viewer parity.** Search with match navigation; copy-all; syntax highlight toggle (with `flutter_highlighting`); encoding + size + truncated-badge meta line.
+
+## Security hardening (cross-cutting)
+
+- **`/metrics` is fail-closed.** Without `PEERSH_SIGNALING_METRICS_TOKEN`, the endpoint returns 404 — peersh-signaling refuses to leak telemetry to the public internet by default. With the token, `Authorization: Bearer <token>` is required (constant-time compare).
+- **PSK secrets stay raw on disk.** Operators are advised to host the SQLite file on disk-encrypted storage (`docs/deploy/self-hosting.md`).
 
 ## Phase 7 — Polish, Public Release, and Beyond
 

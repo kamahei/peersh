@@ -136,10 +136,23 @@ Every TOML field has a matching `PEERSH_SIGNALING_*` env var. Env vars override 
 | `PEERSH_SIGNALING_FIREBASE_PROJECT_ID` | `firebase.project_id` |
 | `PEERSH_SIGNALING_FIREBASE_CREDENTIALS` | `firebase.credentials_path` |
 | `PEERSH_SIGNALING_BOOTSTRAP_PSK` | seed PSKs at startup (`user:hex[:label],...`) |
+| `PEERSH_SIGNALING_METRICS_TOKEN` | bearer token gating the `/metrics` endpoint (empty = endpoint disabled, fail-closed) |
 
 ## Metrics (Phase 7)
 
-`peersh-signaling` exposes Prometheus metrics at `/metrics`:
+`peersh-signaling` can expose Prometheus metrics at `/metrics`. The endpoint is **fail-closed**: it returns `404` until you configure `PEERSH_SIGNALING_METRICS_TOKEN` (or `metrics_token` in TOML), so a misconfigured public deploy never silently leaks operational telemetry.
+
+Once configured, scrape with:
+
+```sh
+METRICS_TOKEN=$(openssl rand -hex 32)   # generate
+# Set PEERSH_SIGNALING_METRICS_TOKEN=$METRICS_TOKEN on the server.
+curl -H "Authorization: Bearer $METRICS_TOKEN" https://signaling.example.com/metrics
+```
+
+Reverse-proxy operators should also include the path in their proxy config — see the Caddy snippet earlier; remember the upstream binary still requires the bearer token, so put it in your Prometheus `bearer_token_file` or equivalent.
+
+Counters and gauges:
 
 - `peersh_ws_upgrade_accepted_total` — successful WebSocket upgrades.
 - `peersh_ws_upgrade_rejected_total{reason}` — pre-upgrade rejections.
@@ -149,7 +162,7 @@ Every TOML field has a matching `PEERSH_SIGNALING_*` env var. Env vars override 
 - `peersh_ws_connect_rejected_total{reason}` — Connect routing rejections.
 - `peersh_ws_active_connections` — gauge of currently-registered WebSocket connections.
 
-Plus the standard Go runtime / process metrics from `prometheus/client_golang`. Scrape it like any Prometheus target.
+Plus the standard Go runtime / process metrics from `prometheus/client_golang`.
 
 ## Windows host service / logon task (Phase 7)
 

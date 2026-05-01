@@ -59,10 +59,14 @@ Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 36
 6. **Wire the PSK + discovery URL into the running service**:
 
    ```sh
+   # Generate a /metrics token so Prometheus telemetry is not exposed publicly.
+   METRICS_TOKEN=$(openssl rand -hex 32)
+
    gcloud run services update peersh-signaling \
      --region=asia-northeast1 \
      --update-env-vars=PEERSH_SIGNALING_DISCOVERY_WS_URL=wss://<host>/ws,\
-   PEERSH_SIGNALING_BOOTSTRAP_PSK=alice:<hex>:alice-laptop
+   PEERSH_SIGNALING_BOOTSTRAP_PSK=alice:<hex>:alice-laptop,\
+   PEERSH_SIGNALING_METRICS_TOKEN=$METRICS_TOKEN
    ```
 
    Replace `<host>` with the `*.run.app` host name from step 4 and `<hex>` with the secret from step 5.
@@ -70,10 +74,14 @@ Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 36
 7. **Verify**:
 
    ```sh
-   curl https://<host>/health                     # → ok  (Cloud Run reserves /healthz at the edge)
-   curl https://<host>/.well-known/peersh.json    # → JSON with the WS URL
-   curl https://<host>/metrics                    # → Prometheus exposition
+   curl https://<host>/health                                   # → ok  (Cloud Run reserves /healthz at the edge)
+   curl https://<host>/.well-known/peersh.json                  # → JSON with the WS URL
+   curl https://<host>/metrics                                  # → 404 without the token (fail-closed)
+   curl -H "Authorization: Bearer $METRICS_TOKEN" \
+        https://<host>/metrics                                  # → Prometheus exposition
    ```
+
+   If `PEERSH_SIGNALING_METRICS_TOKEN` is unset, `/metrics` returns 404 — peersh-signaling fails closed so a misconfigured deploy never silently leaks telemetry to the public internet.
 
 8. **Connect from peershd** on your Windows host:
 

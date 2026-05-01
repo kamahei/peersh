@@ -20,6 +20,7 @@ Render is the **simplest first-time hosting option**: connect a GitHub repo, hit
 3. **Copy the assigned hostname** (e.g. `peersh-signaling-xxxx.onrender.com`) and set:
 
    - `PEERSH_SIGNALING_DISCOVERY_WS_URL` = `wss://peersh-signaling-xxxx.onrender.com/ws`
+   - `PEERSH_SIGNALING_METRICS_TOKEN` = (paste a `openssl rand -hex 32` value) — gates `/metrics` behind a bearer token. Leave blank to disable `/metrics` entirely (fail-closed).
 
    Save → Render redeploys.
 

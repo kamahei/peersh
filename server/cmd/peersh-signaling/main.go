@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -21,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -148,7 +150,11 @@ func runServe(args []string) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.Handle("/metrics", promhttp.Handler())
+	// /metrics is fail-closed: an empty MetricsToken means the endpoint
+	// is disabled entirely (404). When configured, the handler requires
+	// `Authorization: Bearer <token>`. Constant-time comparison prevents
+	// trivial timing leaks.
+	mux.Handle("/metrics", metricsHandler(cfg.MetricsToken, promhttp.Handler()))
 	mux.Handle("/.well-known/peersh.json", ws.DiscoveryHandler(ws.DiscoveryConfig{
 		Version:       1,
 		WSURL:         cfg.Discovery.WSURL,
@@ -237,6 +243,32 @@ func buildAuth(ctx context.Context, cfg config.Config, st store.Store) (auth.Pro
 // different secret is overwritten with the env-var value. Operators
 // using a persistent backend (sqlite + disk, firestore) can leave the
 // list empty.
+// metricsHandler wraps inner with a bearer-token check. When token is
+// empty, the wrapper returns 404 unconditionally so a misconfigured
+// deploy fails closed instead of leaking Prometheus telemetry.
+func metricsHandler(token string, inner http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token == "" {
+			http.NotFound(w, r)
+			return
+		}
+		got := r.Header.Get("Authorization")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(got, prefix) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="peersh-metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		supplied := got[len(prefix):]
+		if subtle.ConstantTimeCompare([]byte(supplied), []byte(token)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="peersh-metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+}
+
 func applyBootstrapPSKs(ctx context.Context, st store.Store, entries []config.BootstrapPSK, logger *slog.Logger) error {
 	if len(entries) == 0 {
 		return nil

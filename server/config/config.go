@@ -45,6 +45,14 @@ type Config struct {
 	// survive cold starts. Configured via TOML or via the
 	// PEERSH_SIGNALING_BOOTSTRAP_PSK env var.
 	BootstrapPSKs []BootstrapPSK `toml:"bootstrap_psk"`
+
+	// MetricsToken, when non-empty, gates the /metrics endpoint behind
+	// `Authorization: Bearer <token>`. Empty (the default) disables
+	// /metrics entirely (fail-closed) so a misconfigured deploy does
+	// not silently leak Prometheus telemetry to the public internet.
+	// Configured via TOML key `metrics_token` or the
+	// PEERSH_SIGNALING_METRICS_TOKEN env var.
+	MetricsToken string `toml:"metrics_token"`
 }
 
 // BootstrapPSK is one (user_id, secret) pair to seed at startup.
@@ -213,6 +221,9 @@ func applyEnv(cfg *Config) {
 		if parsed, err := parseBootstrapPSKs(v); err == nil {
 			cfg.BootstrapPSKs = append(cfg.BootstrapPSKs, parsed...)
 		}
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_METRICS_TOKEN"); v != "" {
+		cfg.MetricsToken = v
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
