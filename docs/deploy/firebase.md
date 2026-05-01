@@ -89,9 +89,84 @@ This is straightforward to wire and is a Phase 5b deliverable once the FlutterFi
 
 ## What is NOT in Phase 5
 
-- FlutterFire integration in the mobile app (Google sign-in, FCM token registration). The mobile app currently ships PSK-only; pulling in `firebase_core` + plugins requires a `google-services.json` per Flutter project, which is operator-specific. Phase 5b adds an opt-in Firebase build flavor.
+- FlutterFire integration in the mobile app (Google sign-in, FCM token registration). The mobile app currently ships PSK-only; pulling in `firebase_core` + plugins requires a `google-services.json` per Flutter project, which is operator-specific. Phase 5b adds an opt-in Firebase build flavor — the scaffolding is already in place under `app/lib/services/{auth_service,device_discovery_service,fcm_service,flavor}.dart`.
 - Full App Check enforcement (server rejects on missing/invalid token). Mocked here; the wiring is one-line once FlutterFire ships.
 - Auto-disable-on-budget-breach Cloud Function (cost guardrail). Documented above; implementation lands in Phase 7 polish if real-cost data warrants.
+
+## Phase 5b mobile setup (when you're ready)
+
+The default APK ships PSK-only. To turn it into a Firebase-enabled build that signs in with Google and reads its device list from your Firestore project:
+
+### 1. Wire your Firebase project into the Flutter app
+
+```sh
+# Once, on the dev machine:
+dart pub global activate flutterfire_cli
+cd app
+flutterfire configure --project=<your-firebase-project-id>
+```
+
+`flutterfire configure` writes:
+
+- `app/android/app/google-services.json`
+- `app/ios/Runner/GoogleService-Info.plist`
+- `app/lib/firebase_options.dart`
+
+It also adds the `com.google.gms.google-services` Gradle plugin to your Android module.
+
+### 2. Add the FlutterFire packages
+
+```sh
+cd app
+flutter pub add firebase_core firebase_auth cloud_firestore firebase_messaging firebase_app_check
+```
+
+### 3. Flip the flavor flag
+
+`app/lib/services/flavor.dart` currently exports `const bool kFirebaseEnabled = false;`. Replace its body with:
+
+```dart
+const bool kFirebaseEnabled =
+    bool.fromEnvironment('PEERSH_FIREBASE', defaultValue: false);
+```
+
+Then build the Firebase flavor:
+
+```sh
+flutter build apk --debug --dart-define=PEERSH_FIREBASE=true
+```
+
+The default `flutter build apk --debug` (no `--dart-define`) keeps the PSK-only path so you can ship both APKs side by side.
+
+### 4. Plug in the real Firebase services
+
+`app/lib/services/{auth_service,device_discovery_service,fcm_service}.dart` already define the interfaces and PSK / no-op implementations. Add a sibling file (e.g. `auth_service_firebase.dart`) that imports `firebase_auth`, then have a Riverpod provider pick between the two:
+
+```dart
+final authServiceProvider = Provider<AuthService>((ref) {
+  if (kFirebaseEnabled) {
+    return FirebaseAuthService(ref.watch(firebaseAuthProvider));
+  }
+  return const PskAuthService();
+});
+```
+
+Same pattern for `DeviceDiscoveryService` (Firestore-backed) and `FcmService` (firebase_messaging-backed).
+
+### 5. Server-side App Check enforcement
+
+When the mobile app starts attaching App Check tokens, flip the server config:
+
+```toml
+[firebase]
+require_app_check = true
+```
+
+(That config key lands together with the FlutterFire integration.)
+
+### 6. Hand out PSK only as a fallback
+
+In Firebase mode the `psk` subcommands return a clear error. Operators who want to keep one PSK-only "service account" alongside Firebase clients should run a second `peersh-signaling` instance with `auth_provider = "psk"` on a separate hostname.
 
 ## Trade-offs
 
