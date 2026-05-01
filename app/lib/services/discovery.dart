@@ -26,22 +26,36 @@ class DiscoveryDoc {
       );
 }
 
+/// Outcome of a discovery attempt. Either [DiscoveryDoc] on success or a
+/// short human-readable [error] string the editor can show to the user.
+class DiscoveryResult {
+  const DiscoveryResult({this.doc, this.error});
+  final DiscoveryDoc? doc;
+  final String? error;
+  bool get isOk => doc != null;
+}
+
 /// Fetches the discovery document.
 ///
 /// Accepts either a bare hostname ("signaling.example.com"), an
-/// https://... URL, or http://... URL with explicit port. Returns null
-/// if discovery fails (caller falls back to manually-entered values).
-Future<DiscoveryDoc?> fetchDiscovery(String input,
-    {Duration timeout = const Duration(seconds: 5)}) async {
+/// https://... URL, or http://... URL with explicit port. On failure the
+/// returned result holds a short [error] string explaining why.
+Future<DiscoveryResult> fetchDiscovery(String input,
+    {Duration timeout = const Duration(seconds: 10)}) async {
   final url = _resolveDiscoveryUrl(input);
-  if (url == null) return null;
+  if (url == null) {
+    return const DiscoveryResult(error: 'Invalid hostname or URL.');
+  }
   try {
     final resp = await http.get(url).timeout(timeout);
-    if (resp.statusCode != 200) return null;
+    if (resp.statusCode != 200) {
+      return DiscoveryResult(
+          error: 'HTTP ${resp.statusCode} from ${url.host}${url.path}');
+    }
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
-    return DiscoveryDoc.fromJson(body);
-  } catch (_) {
-    return null;
+    return DiscoveryResult(doc: DiscoveryDoc.fromJson(body));
+  } catch (e) {
+    return DiscoveryResult(error: 'Lookup failed: $e');
   }
 }
 

@@ -60,12 +60,13 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
       _busy = true;
       _discoveryStatus = 'Looking up /.well-known/peersh.json…';
     });
-    final doc = await fetchDiscovery(input);
+    final result = await fetchDiscovery(input);
     if (!mounted) return;
     setState(() {
       _busy = false;
+      final doc = result.doc;
       if (doc == null) {
-        _discoveryStatus = 'No discovery doc returned. Fill ws_url manually.';
+        _discoveryStatus = result.error ?? 'No discovery doc returned. Fill ws_url manually.';
         return;
       }
       if (doc.wsUrl.isNotEmpty) _wsUrl.text = doc.wsUrl;

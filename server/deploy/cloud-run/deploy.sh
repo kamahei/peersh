@@ -67,6 +67,10 @@ gcloud builds submit \
 # Deploy to Cloud Run. --allow-unauthenticated lets the WebSocket
 # endpoint be reachable from any client; auth is at the application layer
 # (PSK / Firebase ID token).
+#
+# --update-env-vars is intentional: it preserves operator-set env vars
+# like PEERSH_SIGNALING_BOOTSTRAP_PSK and PEERSH_SIGNALING_DISCOVERY_WS_URL
+# across redeploys. --set-env-vars would wipe them on every deploy.
 echo ">> deploying to Cloud Run service $SERVICE"
 gcloud run deploy "$SERVICE" \
   --image="$IMAGE" \
@@ -80,7 +84,7 @@ gcloud run deploy "$SERVICE" \
   --max-instances=2 \
   --concurrency=80 \
   --timeout=3600 \
-  --set-env-vars=PEERSH_SIGNALING_LOG_LEVEL=info \
+  --update-env-vars=PEERSH_SIGNALING_LOG_LEVEL=info \
   --project="$PROJECT_ID"
 
 URL=$(gcloud run services describe "$SERVICE" \
