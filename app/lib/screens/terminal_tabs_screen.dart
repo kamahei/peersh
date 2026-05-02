@@ -36,9 +36,19 @@ import 'terminal_pane.dart';
 import 'text_viewer_screen.dart';
 
 class TerminalTabsScreen extends ConsumerStatefulWidget {
-  const TerminalTabsScreen({super.key, required this.server});
+  const TerminalTabsScreen({
+    super.key,
+    required this.server,
+    this.pendingTabLabel = '',
+  });
 
   final ServerEntry server;
+
+  /// Tab label that arrived via FCM tap deep-link. Once the session is
+  /// established and tabs are populated, the screen tries to focus the
+  /// tab whose label matches; empty string (the default) means "no
+  /// preference, leave the active tab as-is".
+  final String pendingTabLabel;
 
   @override
   ConsumerState<TerminalTabsScreen> createState() =>
@@ -162,10 +172,47 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
       if (mounted && _tabs.isEmpty) {
         await _maybeOfferReattach(persisted);
       }
+      if (!isReconnect && widget.pendingTabLabel.isNotEmpty) {
+        _scheduleDeepLinkSelect();
+      }
     } catch (e) {
       if (!mounted) return;
       _scheduleReconnectOrFail('$e');
     }
+  }
+
+  /// After a tap-deep-link cold/warm start, the matching tab's label is
+  /// only set once the per-tab cwd probe runs (~2 s after PTY open).
+  /// Poll briefly so we can switch focus once the label settles. Bails
+  /// out after [_deepLinkSelectAttempts] attempts to avoid hanging on a
+  /// tab that simply isn't there.
+  static const _deepLinkSelectAttempts = 16;
+  static const _deepLinkSelectInterval = Duration(milliseconds: 500);
+  Timer? _deepLinkSelectTimer;
+  int _deepLinkSelectTries = 0;
+
+  void _scheduleDeepLinkSelect() {
+    _deepLinkSelectTimer?.cancel();
+    _deepLinkSelectTries = 0;
+    _deepLinkSelectTimer = Timer.periodic(_deepLinkSelectInterval, (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      _deepLinkSelectTries++;
+      final target = widget.pendingTabLabel;
+      final idx = _tabs.indexWhere((m) => m.label == target);
+      if (idx >= 0) {
+        t.cancel();
+        if (_activeIndex != idx) {
+          setState(() => _activeIndex = idx);
+        }
+        return;
+      }
+      if (_deepLinkSelectTries >= _deepLinkSelectAttempts) {
+        t.cancel();
+      }
+    });
   }
 
   /// On a connect failure, schedule the next backoff attempt unless we
@@ -330,6 +377,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   void dispose() {
     _reconnectTimer?.cancel();
     _resumedBannerTimer?.cancel();
+    _deepLinkSelectTimer?.cancel();
     _ptyExitWatcher?.cancel();
     final bridge = ref.read(bridgeProvider);
     unawaited(bridge.stopForegroundService());

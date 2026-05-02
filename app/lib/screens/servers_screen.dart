@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/server_entry.dart';
 import '../services/flavor.dart' as flavor;
+import '../services/notification_router.dart';
 import '../state/servers.dart';
 import 'device_picker_sheet.dart';
 import 'firebase_signin.dart';
@@ -11,11 +12,79 @@ import 'settings_screen.dart';
 import 'signin_screen.dart';
 import 'terminal_tabs_screen.dart';
 
-class ServersScreen extends ConsumerWidget {
+class ServersScreen extends ConsumerStatefulWidget {
   const ServersScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ServersScreen> createState() => _ServersScreenState();
+}
+
+class _ServersScreenState extends ConsumerState<ServersScreen> {
+  bool _coldTapHandled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Cold-start tap was seeded into the router by main.dart; consume
+    // it after first frame so navigation happens once the screen is
+    // mounted.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _coldTapHandled) return;
+      _coldTapHandled = true;
+      _maybeRoute();
+    });
+  }
+
+  Future<void> _maybeRoute() async {
+    final pending = ref.read(notificationRouterProvider.notifier).consume();
+    if (pending == null || !mounted) return;
+    // Wait for the server list to load so we can match the host id.
+    final serversAsync = await ref.read(serversProvider.future);
+    if (!mounted) return;
+    final match = serversAsync.firstWhere(
+      (s) => s.targetDeviceId == pending.hostDeviceId,
+      orElse: () => const ServerEntry(
+        id: '',
+        name: '',
+        wsUrl: '',
+        userId: '',
+        pskHex: '',
+        targetDeviceId: '',
+      ),
+    );
+    if (match.id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(
+          'Notification target host ${pending.hostDeviceId} '
+          'is not in your server list.',
+        )),
+      );
+      return;
+    }
+    // Pop any deeper screens first so the user lands on the correct
+    // server in a clean stack — otherwise tapping a notification while
+    // already inside an unrelated TerminalTabsScreen would just stack
+    // another one on top.
+    await Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => TerminalTabsScreen(
+          server: match,
+          pendingTabLabel: pending.tabLabel,
+        ),
+      ),
+      (route) => route.isFirst,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Listen for warm taps that arrive while the home screen is in the
+    // foreground (e.g. user taps the notification while the app is
+    // already on top). Cold-start case is handled in initState above.
+    ref.listen<PendingNotification?>(notificationRouterProvider, (_, next) {
+      if (next == null) return;
+      _maybeRoute();
+    });
     final serversAsync = ref.watch(serversProvider);
     return Scaffold(
       appBar: AppBar(

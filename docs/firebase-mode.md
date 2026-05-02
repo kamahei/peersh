@@ -179,6 +179,10 @@ Android (works today):
 - Settings → "Notification defaults" sets the values used for tabs that
   haven't been customized. Per-tab overrides survive reattach + restart
   via SecureStore (`notify_config.v1`, keyed by serverId|handle).
+- Tapping the OS notification opens the originating server. The matching
+  tab (by `tab_label`) is selected automatically once labels settle from
+  the cwd probe (a few seconds after reattach). Cold starts capture the
+  tap via `getInitialMessage`; warm taps via `onMessageOpenedApp`.
 
 iOS (deferred — Dart code is iOS-ready, operator-side bring-up required):
 - `flutterfire configure --platforms=ios` to generate `GoogleService-Info.plist`.

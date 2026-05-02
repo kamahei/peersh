@@ -21,9 +21,12 @@ import 'firebase_options.dart';
 import 'services/fcm_service.dart';
 import 'services/flavor_runtime.dart';
 import 'services/mobile_device_registry.dart';
+import 'services/notification_router.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  PendingNotification? coldStartTap;
+  FirebaseFcmService? fcm;
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
@@ -46,7 +49,7 @@ Future<void> main() async {
     // under users/{uid}/devices/{mobileDeviceId} so the host can
     // address us. This block is fire-and-forget; failures degrade
     // gracefully (no notifications, but the rest of the app works).
-    final fcm = FirebaseFcmService();
+    fcm = FirebaseFcmService();
     unawaited(fcm.ensurePermission());
     final registry = MobileDeviceRegistry(fcm: fcm);
     FirebaseAuth.instance.authStateChanges().listen((user) {
@@ -56,9 +59,35 @@ Future<void> main() async {
       }
       unawaited(registry.register(user.uid));
     });
+    // Capture cold-start tap before runApp so the router has it ready
+    // when ServersScreen first renders.
+    try {
+      final initial = await fcm.getInitialMessage();
+      coldStartTap = PendingNotification.fromMessage(initial);
+    } catch (e) {
+      debugPrint('peersh: getInitialMessage failed: $e');
+    }
   } catch (e) {
     firebaseInitialized = false;
     debugPrint('peersh: Firebase initialization skipped (PSK-only mode): $e');
   }
-  runApp(const ProviderScope(child: PeershApp()));
+  runApp(ProviderScope(
+    overrides: [
+      if (coldStartTap != null)
+        notificationRouterProvider.overrideWith(() {
+          return _SeededRouter(coldStartTap!);
+        }),
+    ],
+    child: PeershApp(fcm: fcm),
+  ));
+}
+
+/// One-shot Notifier preloaded with the cold-start tap so the very
+/// first ServersScreen build sees it.
+class _SeededRouter extends NotificationRouter {
+  _SeededRouter(this._seed);
+  final PendingNotification _seed;
+
+  @override
+  PendingNotification? build() => _seed;
 }
