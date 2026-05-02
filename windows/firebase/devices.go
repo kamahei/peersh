@@ -17,6 +17,7 @@ package firebase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -89,7 +90,21 @@ type Runtime struct {
 // listener attached to ctx. The returned Runtime owns both
 // resources; call Close to stop the listener (the http.Client used
 // by *Client is stateless and needs no explicit cleanup).
-func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSource, uid, deviceID string) (*Runtime, error) {
+//
+// uid is resolved from src by minting a Firebase ID token. The
+// RefreshAuthSource constructed from a persisted refresh token (the
+// "peershd.exe" without -firebase-login path) has an empty UID()
+// until the first Token() call, so this materialization step is
+// mandatory — relying on src.UID() before this would silently
+// produce empty "/users//..." paths that fail RTDB rules with 401.
+func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSource, deviceID string) (*Runtime, error) {
+	if _, err := src.Token(ctx); err != nil {
+		return nil, fmt.Errorf("firebase: mint id token: %w", err)
+	}
+	uid := src.UID()
+	if uid == "" {
+		return nil, errors.New("firebase: empty uid after token mint")
+	}
 	client, err := NewClient(projectID, region)
 	if err != nil {
 		return nil, err

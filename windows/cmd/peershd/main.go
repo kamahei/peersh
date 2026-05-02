@@ -356,7 +356,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			if err != nil {
 				return err
 			}
-			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, src.UID(), deviceID)
+			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, deviceID)
 			if err != nil {
 				return fmt.Errorf("start wake runtime: %w", err)
 			}
