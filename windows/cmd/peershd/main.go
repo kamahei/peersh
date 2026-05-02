@@ -18,8 +18,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/ed25519"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -41,7 +39,7 @@ import (
 	"github.com/peersh/peersh/core/punching"
 	"github.com/peersh/peersh/core/signaling"
 	"github.com/peersh/peersh/core/transport"
-	"github.com/peersh/peersh/core/transport/devtls"
+	"github.com/peersh/peersh/core/transport/peertls"
 	"github.com/peersh/peersh/core/wire"
 	"sync"
 
@@ -220,16 +218,17 @@ func run(serviceCtx context.Context, opts runOpts) error {
 	}
 	defer stop()
 
-	cert, err := devtls.LoadOrGenerate(certDir)
+	priv, err := peertls.LoadOrGenerateKey(certDir)
 	if err != nil {
-		return fmt.Errorf("load cert: %w", err)
+		return fmt.Errorf("load device key: %w", err)
 	}
-	pub, err := publicKeyFromCert(cert)
+	pub := priv.Public().(ed25519.PublicKey)
+	cert, err := peertls.CertFromEd25519(priv)
 	if err != nil {
-		return fmt.Errorf("extract public key: %w", err)
+		return fmt.Errorf("build cert: %w", err)
 	}
 	deviceID := devid.Derive(pub)
-	slog.Info("dev cert ready", "dir", certDir, "device_id", deviceID, "self_signed_only", devtls.DevSelfSignedOnly)
+	slog.Info("device key ready", "dir", certDir, "device_id", deviceID)
 
 	udpAddr, err := net.ResolveUDPAddr("udp", listen)
 	if err != nil {
@@ -257,7 +256,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 		}
 	}
 
-	tr := transport.New(pc, devtls.ServerTLSConfig(cert))
+	tr := transport.New(pc, peertls.ServerTLSConfig(cert))
 	defer tr.Close()
 	listener, err := tr.Listen(ctx)
 	if err != nil {
@@ -481,22 +480,6 @@ func runSignalingFirebase(ctx context.Context, url string, src fbpeershd.TokenSo
 		}
 		log.Info("sent local candidates", "to", from, "count", len(cands))
 	}
-}
-
-// publicKeyFromCert pulls the ed25519 public key out of a self-signed dev cert.
-func publicKeyFromCert(cert tls.Certificate) (ed25519.PublicKey, error) {
-	if len(cert.Certificate) == 0 {
-		return nil, errors.New("empty certificate chain")
-	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return nil, err
-	}
-	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("expected ed25519 public key, got %T", leaf.PublicKey)
-	}
-	return pub, nil
 }
 
 // readPSKFile reads a hex-encoded PSK from disk. Whitespace is trimmed.
