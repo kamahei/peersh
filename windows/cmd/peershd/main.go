@@ -345,7 +345,21 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			if err != nil {
 				return err
 			}
-			go runSignalingFirebase(ctx, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
+			// service-account mode is the only path that can use the Go
+			// Firestore client (it requires GCP IAM credentials, not
+			// Firebase ID tokens). Pair-code / browser-login hosts fall
+			// back to the persistent-WS path.
+			if opts.firebaseCredentials != "" {
+				rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseCredentials, src.UID(), deviceID)
+				if err != nil {
+					return fmt.Errorf("start wake runtime: %w", err)
+				}
+				defer rt.Close()
+				go runHeartbeat(ctx, rt)
+				go runWakePump(ctx, rt, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
+			} else {
+				go runSignalingFirebase(ctx, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
+			}
 		} else {
 			if userID == "" || pskFile == "" {
 				return errors.New("-signaling requires -user and -psk-file (PSK mode), or -pair-code + -firebase-project + -firebase-api-key (Firebase pairing mode)")
@@ -553,6 +567,163 @@ func runSignalingFirebase(ctx context.Context, url string, src fbpeershd.TokenSo
 			continue
 		}
 		log.Info("sent local candidates", "to", from, "count", len(cands))
+	}
+}
+
+// Wake-pump tunables. SHORT_TTL caps how long a freshly opened WS waits
+// for the first Connect; DRAIN_TTL is the grace window after each
+// Connect during which we keep the WS open for additional wakes and
+// for the QUIC handshake to complete.
+const (
+	wakeShortTTL = 15 * time.Second
+	wakeDrainTTL = 5 * time.Second
+	heartbeatEvery = 5 * time.Minute
+)
+
+// runHeartbeat refreshes users/{uid}/devices/{deviceId}.last_seen_at on
+// a fixed interval so mobile clients can decide the host is reachable
+// before issuing a wake request.
+func runHeartbeat(ctx context.Context, rt *fbpeershd.Runtime) {
+	t := time.NewTicker(heartbeatEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := rt.Heartbeat(ctx); err != nil {
+				slog.Warn("device heartbeat failed", "err", err)
+			}
+		}
+	}
+}
+
+// runWakePump consumes wake events from the Firestore listener and,
+// for each batch of events, opens a short-lived signaling WS to receive
+// the matching Connect frames. The WS closes after wakeShortTTL of idle
+// (no Connect arriving) or wakeDrainTTL after the last Connect, leaving
+// peershd in IDLE state with only the listener stream open.
+//
+// Service-account-mode only: pair-code mode keeps runSignalingFirebase
+// for compatibility.
+func runWakePump(
+	ctx context.Context,
+	rt *fbpeershd.Runtime,
+	signalingURL string,
+	src fbpeershd.TokenSource,
+	deviceID string,
+	pub ed25519.PublicKey,
+	displayName string,
+	listenAddr *net.UDPAddr,
+	srflx *net.UDPAddr,
+	pc net.PacketConn,
+	authz *peerauth.Authz,
+) {
+	log := slog.With("component", "wake-pump", "uid", src.UID(), "device", deviceID)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-rt.Events():
+			if !ok {
+				return
+			}
+			if err := handleWakeBatch(ctx, ev, rt, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz, log); err != nil {
+				log.Warn("wake batch failed", "err", err, "request", ev.RequestID)
+			}
+			drainWakeChannel(rt.Events())
+		}
+	}
+}
+
+func handleWakeBatch(
+	ctx context.Context,
+	first fbpeershd.WakeEvent,
+	rt *fbpeershd.Runtime,
+	signalingURL string,
+	src fbpeershd.TokenSource,
+	deviceID string,
+	pub ed25519.PublicKey,
+	displayName string,
+	listenAddr *net.UDPAddr,
+	srflx *net.UDPAddr,
+	pc net.PacketConn,
+	authz *peerauth.Authz,
+	log *slog.Logger,
+) error {
+	log.Info("wake received; opening signaling WS", "request", first.RequestID, "from", first.MobileDeviceID)
+	idToken, err := src.Token(ctx)
+	if err != nil {
+		return fmt.Errorf("mint id token: %w", err)
+	}
+	sc, err := signaling.Dial(ctx, signaling.DialOptions{
+		URL:             signalingURL,
+		FirebaseIDToken: idToken,
+		DeviceID:        deviceID,
+		PublicKey:       pub,
+		Kind:            signalv1.DeviceKind_DEVICE_KIND_WINDOWS_HOST,
+		DisplayName:     displayName,
+		ClientID:        "peershd/0.1+firebase-wake",
+	})
+	if err != nil {
+		return fmt.Errorf("signaling dial: %w", err)
+	}
+	defer sc.Close()
+	log.Info("registered with signaling server", "server_id", sc.ServerID())
+
+	deadline := time.Now().Add(wakeShortTTL)
+	for {
+		timeout := time.Until(deadline)
+		if timeout <= 0 {
+			log.Info("wake window expired; closing WS")
+			break
+		}
+		rctx, cancel := context.WithTimeout(ctx, timeout)
+		conn, recvErr := sc.Recv(rctx)
+		cancel()
+		if recvErr != nil {
+			if errors.Is(recvErr, context.DeadlineExceeded) {
+				log.Info("signaling idle; closing WS")
+				break
+			}
+			if errors.Is(recvErr, context.Canceled) {
+				return nil
+			}
+			return fmt.Errorf("signaling recv: %w", recvErr)
+		}
+		from := conn.GetFromDeviceId()
+		log.Info("connect request", "from", from, "candidates", len(conn.GetCandidates()))
+		if authz != nil {
+			authz.Allow(from)
+		}
+		peerCands := punching.SortCandidates(conn.GetCandidates())
+		if err := punching.Punch(ctx, pc, punching.CandidatesToUDPAddrs(peerCands), punching.Options{}); err != nil {
+			log.Warn("punch failed", "err", err)
+		}
+		cands := enumerateCandidates(listenAddr, srflx)
+		if err := sc.SendConnect(ctx, from, cands); err != nil {
+			log.Warn("send Connect reply", "err", err)
+			continue
+		}
+		log.Info("sent local candidates", "to", from, "count", len(cands))
+		if drain := time.Now().Add(wakeDrainTTL); drain.After(deadline) {
+			deadline = drain
+		}
+	}
+
+	if err := rt.MarkConsumed(ctx, first.RequestID); err != nil {
+		log.Warn("mark consumed failed", "err", err, "request", first.RequestID)
+	}
+	return nil
+}
+
+func drainWakeChannel(ch <-chan fbpeershd.WakeEvent) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
 	}
 }
 

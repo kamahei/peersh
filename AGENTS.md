@@ -43,7 +43,7 @@ These hold across all changes. Violating them is a regression even when the curr
 - **Pluggable interfaces don't change shape.** `auth.Provider` and `store.Store` are public surface. Adding a new provider/store means implementing the interface, not editing `core/`.
 - **External `net.PacketConn` for transport.** `core/transport/` accepts an externally-supplied `net.PacketConn` so hole-punching can reuse the socket.
 - **Protocol stability.** Breaking changes require bumping `protocol_version`. Optional features go through `capabilities` strings on the Hello messages.
-- **Cost discipline (Firebase mode).** ≤ ~5 Firestore reads + ~2 writes per connection lifecycle. No real-time listeners for signaling. Client-side caching for device info and public keys.
+- **Cost discipline (Firebase mode).** ≤ ~5 Firestore reads + ~2 writes per connection lifecycle. No real-time listeners for signaling messages (Hello/Register/Connect/etc.). Wake-event listener on `users/{uid}/wake_requests` is permitted only on the host (service-account mode), replacing the persistent signaling WebSocket — limit 1 listener per device, ~12 writes/hour heartbeat, ~1 read per wake delivery. Client-side caching for device info and public keys.
 - **Apache 2.0 only.** All first-party code is Apache 2.0. Don't pull in dependencies whose license is incompatible.
 
 ## Recurring themes
@@ -53,7 +53,7 @@ Worth re-reading at the start of any sizeable change:
 - **Open-source readiness.** All code is written assuming public review.
 - **Pluggability.** Auth and store interfaces stay in their final shape even when only some implementations ship.
 - **Privacy / threat model.** The signaling server operator cannot see command content. The current trust boundary assumes the signaling deployment is trusted for connection authorization; mTLS-derived identity prevents device-id spoofing, but hostile shared signaling needs a future host-side client allowlist.
-- **Cost discipline.** ≤ ~5 reads + ~2 writes per connection lifecycle. Client-side caching. No realtime listeners for signaling.
+- **Cost discipline.** ≤ ~5 reads + ~2 writes per connection lifecycle. Client-side caching. No realtime listeners for signaling messages; wake-event listener on `users/{uid}/wake_requests` is permitted only on the host (service-account mode).
 - **Protocol stability.** `protocol_version` for breaking changes; `capabilities` for additive changes.
 
 ## Output rules

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -42,6 +44,17 @@ class PeershSession {
         // the Register frame when enforced.
         debugPrint('peersh: App Check getToken failed: $e');
       }
+      // Trigger wake-mode hosts via Firestore in parallel with the
+      // signaling WS dial. service-account-mode peershd snapshots
+      // users/{uid}/wake_requests and opens its short-lived signaling
+      // WS in response. Pair-code-mode hosts ignore this doc (they
+      // already hold a persistent WS); mobile-core's SendConnect
+      // retry covers the cold-start race in either case.
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null && uid.isNotEmpty && server.targetDeviceId.isNotEmpty) {
+        unawaited(_fireWakeRequest(uid: uid, hostDeviceId: server.targetDeviceId));
+        unawaited(_logStalePresence(uid: uid, hostDeviceId: server.targetDeviceId));
+      }
       id = await bridge.openFirebaseSignalingSession(
         signaling: server.wsUrl,
         idToken: firebaseIdToken,
@@ -68,6 +81,59 @@ class PeershSession {
       }
     });
     return session;
+  }
+
+  // wake_requests TTL applied client-side; Firestore TTL policy on the
+  // expires_at field cleans up old docs.
+  static const _wakeRequestExpiry = Duration(seconds: 30);
+
+  // Heartbeat interval on the host is 5 min; allow 2x + 60s grace
+  // before declaring presence stale. Stale doesn't block the dial —
+  // it only logs a hint (the connection itself is best-effort with
+  // mobile-core's SendConnect retry).
+  static const _presenceStaleAfter = Duration(minutes: 11);
+
+  static Future<void> _fireWakeRequest({
+    required String uid,
+    required String hostDeviceId,
+  }) async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final col = db.collection('users').doc(uid).collection('wake_requests');
+      await col.doc().set({
+        'target_device_id': hostDeviceId,
+        'created_at': FieldValue.serverTimestamp(),
+        'expires_at': Timestamp.fromDate(
+            DateTime.now().toUtc().add(_wakeRequestExpiry)),
+        'consumed': false,
+      });
+    } catch (e) {
+      debugPrint('peersh: wake_request write failed: $e');
+    }
+  }
+
+  static Future<void> _logStalePresence({
+    required String uid,
+    required String hostDeviceId,
+  }) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('devices')
+          .doc(hostDeviceId)
+          .get();
+      if (!snap.exists) return;
+      final ts = snap.data()?['last_seen_at'];
+      if (ts is! Timestamp) return;
+      final age = DateTime.now().toUtc().difference(ts.toDate().toUtc());
+      if (age > _presenceStaleAfter) {
+        debugPrint(
+            'peersh: host last_seen_at is ${age.inMinutes}min stale; attempting connect anyway');
+      }
+    } catch (e) {
+      debugPrint('peersh: presence read failed: $e');
+    }
   }
 
   /// Open a direct (Phase 1 / spike) session at [addr].

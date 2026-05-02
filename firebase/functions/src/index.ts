@@ -41,6 +41,12 @@ setGlobalOptions({
   memory: '256MiB',
 });
 
+// onSessionCreated is currently dead code: no client writes
+// users/{uid}/sessions/{sid}. The wake path used by service-account-mode
+// peershd reads users/{uid}/wake_requests/{rid} (written directly by the
+// mobile client, see app/lib/services/peersh_session.dart). This trigger
+// is kept for a future v2 that may centralize wake fan-out and budget
+// enforcement on the server side.
 export const onSessionCreated = onDocumentCreated(
   'users/{userId}/sessions/{sessionId}',
   async (event) => {

@@ -195,7 +195,10 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 		return nil, errors.New("targetDeviceID is required in signaling mode")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 35s budget gives a wake-mode host (which only opens its WS after
+	// receiving the wake_request) a few hundred ms of slack on top of
+	// the original 30s allowance for STUN + Punch + QUIC handshake.
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 
 	// One ed25519 keypair drives both the signaling Register frame
@@ -233,42 +236,21 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 	// handshake before any application bytes flow.
 	tr := transport.New(pc, peertls.ClientTLSConfig(clientCert, targetDeviceID))
 
-	sc, err := signaling.Dial(ctx, signaling.DialOptions{
-		URL:                   signalingURL,
-		UserID:                userID,
-		Secret:                secret,
-		FirebaseIDToken:       firebaseIDToken,
-		FirebaseAppCheckToken: firebaseAppCheckToken,
-		DeviceID:              deviceID,
-		PublicKey:             pub,
-		Kind:                  signalv1.DeviceKind_DEVICE_KIND_MOBILE_CLIENT,
-		DisplayName:           "peersh-mobile",
-		ClientID:              "mobile-core/0.3",
-	})
-	if err != nil {
-		_ = tr.Close()
-		_ = pc.Close()
-		return nil, fmt.Errorf("signaling.Dial: %w", err)
-	}
-	defer sc.Close()
-
 	cands := localCandidates(pc.LocalAddr().(*net.UDPAddr), srflx)
-	if err := sc.SendConnect(ctx, targetDeviceID, cands); err != nil {
-		_ = tr.Close()
-		_ = pc.Close()
-		return nil, fmt.Errorf("SendConnect: %w", err)
-	}
-	reply, err := sc.Recv(ctx)
+
+	// Negotiate Connect via signaling, retrying if the host has not
+	// finished registering yet (typical for service-account-mode hosts
+	// dialed up by the wake_request the mobile side just wrote in
+	// parallel). The WS is closed inside negotiateConnect so the
+	// slow operations below (Punch, QUIC dial, Hello) run with no
+	// Cloud Run WebSocket time billed.
+	reply, err := negotiateConnectWithRetry(ctx, signalingURL, userID, secret, firebaseIDToken, firebaseAppCheckToken, deviceID, pub, targetDeviceID, cands)
 	if err != nil {
 		_ = tr.Close()
 		_ = pc.Close()
-		return nil, fmt.Errorf("recv reply: %w", err)
+		return nil, err
 	}
-	if reply.GetFromDeviceId() != targetDeviceID {
-		_ = tr.Close()
-		_ = pc.Close()
-		return nil, fmt.Errorf("got Connect from %q, expected %q", reply.GetFromDeviceId(), targetDeviceID)
-	}
+
 	sortedPeer := punching.SortCandidates(reply.GetCandidates())
 	peerAddrs := punching.CandidatesToUDPAddrs(sortedPeer)
 	if len(peerAddrs) == 0 {
@@ -303,6 +285,93 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 
 	sCtx, sCancel := context.WithCancel(context.Background())
 	return &Session{pc: pc, tr: tr, conn: conn, ctx: sCtx, cancel: sCancel}, nil
+}
+
+// negotiateConnectWithRetry runs negotiateConnect with up to 5 attempts
+// (200/400/800/1600 ms backoff between them) so a wake-mode host that
+// is still bringing its WS up can register before the mobile gives up.
+func negotiateConnectWithRetry(
+	ctx context.Context,
+	signalingURL, userID string,
+	secret []byte,
+	firebaseIDToken, firebaseAppCheckToken string,
+	deviceID string,
+	pub ed25519.PublicKey,
+	targetDeviceID string,
+	cands []*signalv1.EndpointCandidate,
+) (*signalv1.Connect, error) {
+	backoff := 200 * time.Millisecond
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		reply, err := negotiateConnect(ctx, signalingURL, userID, secret, firebaseIDToken, firebaseAppCheckToken, deviceID, pub, targetDeviceID, cands)
+		if err == nil {
+			return reply, nil
+		}
+		lastErr = err
+		if !isRetryableConnectError(err) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("signaling: %w", ctx.Err())
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return nil, lastErr
+}
+
+// negotiateConnect opens a signaling WS, registers, sends Connect to
+// targetDeviceID, waits for the host's reply Connect, then closes the
+// WS. Returns the reply Connect or an error.
+func negotiateConnect(
+	ctx context.Context,
+	signalingURL, userID string,
+	secret []byte,
+	firebaseIDToken, firebaseAppCheckToken string,
+	deviceID string,
+	pub ed25519.PublicKey,
+	targetDeviceID string,
+	cands []*signalv1.EndpointCandidate,
+) (*signalv1.Connect, error) {
+	sc, err := signaling.Dial(ctx, signaling.DialOptions{
+		URL:                   signalingURL,
+		UserID:                userID,
+		Secret:                secret,
+		FirebaseIDToken:       firebaseIDToken,
+		FirebaseAppCheckToken: firebaseAppCheckToken,
+		DeviceID:              deviceID,
+		PublicKey:             pub,
+		Kind:                  signalv1.DeviceKind_DEVICE_KIND_MOBILE_CLIENT,
+		DisplayName:           "peersh-mobile",
+		ClientID:              "mobile-core/0.3",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("signaling.Dial: %w", err)
+	}
+	defer sc.Close()
+
+	if err := sc.SendConnect(ctx, targetDeviceID, cands); err != nil {
+		return nil, fmt.Errorf("SendConnect: %w", err)
+	}
+	reply, err := sc.Recv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("recv reply: %w", err)
+	}
+	if reply.GetFromDeviceId() != targetDeviceID {
+		return nil, fmt.Errorf("got Connect from %q, expected %q", reply.GetFromDeviceId(), targetDeviceID)
+	}
+	return reply, nil
+}
+
+// isRetryableConnectError matches server-side ServerError frames whose
+// code suggests the host is not yet registered. The signaling client
+// surfaces these via Recv as a string-formatted error.
+func isRetryableConnectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "target_unknown")
 }
 
 // Exec runs command on the session and streams output to handler. The
