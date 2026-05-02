@@ -19,7 +19,7 @@ import (
 	"github.com/peersh/peersh/core/punching"
 	"github.com/peersh/peersh/core/signaling"
 	"github.com/peersh/peersh/core/transport"
-	"github.com/peersh/peersh/core/transport/devtls"
+	"github.com/peersh/peersh/core/transport/peertls"
 	"github.com/peersh/peersh/core/wire"
 )
 
@@ -67,7 +67,10 @@ type Session struct {
 }
 
 // OpenDirectSession dials addr (host:port) over QUIC and runs Hello. No
-// signaling, no auth. Used by the spike screen and dev workflows.
+// signaling, no target device_id pin. Used by the spike screen and dev
+// workflows. peershd requires a client cert (mTLS) so we still present
+// one, but we cannot verify the server's identity without an expected
+// device_id supplied through some other channel.
 func OpenDirectSession(addr string) (*Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -79,7 +82,17 @@ func OpenDirectSession(addr string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ListenUDP: %w", err)
 	}
-	tr := transport.New(pc, devtls.DevClientTLSConfig())
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		_ = pc.Close()
+		return nil, fmt.Errorf("generate device key: %w", err)
+	}
+	cert, err := peertls.CertFromEd25519(priv)
+	if err != nil {
+		_ = pc.Close()
+		return nil, fmt.Errorf("build client cert: %w", err)
+	}
+	tr := transport.New(pc, peertls.ClientTLSConfig(cert, ""))
 	conn, err := tr.Dial(ctx, uaddr)
 	if err != nil {
 		_ = tr.Close()
@@ -125,11 +138,18 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	// One ed25519 keypair drives both the signaling Register frame
+	// (via devid.Derive on the pubkey) and the QUIC mTLS client cert,
+	// so the host sees a single identity on both channels.
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate device key: %w", err)
 	}
 	deviceID := devid.Derive(pub)
+	clientCert, err := peertls.CertFromEd25519(priv)
+	if err != nil {
+		return nil, fmt.Errorf("build client cert: %w", err)
+	}
 
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
@@ -143,7 +163,10 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 		stunCancel()
 	}
 
-	tr := transport.New(pc, devtls.DevClientTLSConfig())
+	// Pin the host's expected device_id at the TLS layer; a server
+	// presenting a cert that hashes to a different ID will fail the
+	// handshake before any application bytes flow.
+	tr := transport.New(pc, peertls.ClientTLSConfig(clientCert, targetDeviceID))
 
 	sc, err := signaling.Dial(ctx, signaling.DialOptions{
 		URL:                   signalingURL,
