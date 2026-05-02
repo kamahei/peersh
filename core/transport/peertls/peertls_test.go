@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"strings"
@@ -42,6 +44,31 @@ func TestLoadOrGenerateKey_ReusesAcrossCalls(t *testing.T) {
 func TestCertFromEd25519_RejectsWrongSize(t *testing.T) {
 	if _, err := peertls.CertFromEd25519(make(ed25519.PrivateKey, 8)); err == nil {
 		t.Fatal("expected error for short key")
+	}
+}
+
+func TestPeerDeviceID_FromConnectionState(t *testing.T) {
+	priv := mustKey(t)
+	pub := priv.Public().(ed25519.PublicKey)
+	want := devid.Derive(pub)
+
+	cert, err := peertls.CertFromEd25519(priv)
+	if err != nil {
+		t.Fatalf("CertFromEd25519: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}
+	if got := peertls.PeerDeviceID(state); got != want {
+		t.Fatalf("PeerDeviceID: got %q want %q", got, want)
+	}
+}
+
+func TestPeerDeviceID_EmptyOnNoPeerCert(t *testing.T) {
+	if got := peertls.PeerDeviceID(tls.ConnectionState{}); got != "" {
+		t.Fatalf("PeerDeviceID with no cert: got %q want empty", got)
 	}
 }
 
