@@ -135,6 +135,14 @@ func OpenSignalingSession(signalingURL, userID, pskHex, targetDeviceID, stunServ
 }
 
 func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer string) (*Session, error) {
+	// targetDeviceID drives the QUIC mTLS pin; an empty string would
+	// silently fall through to "no pin" and undo the protection mTLS is
+	// supposed to provide. Reject at the API boundary so a misbehaving
+	// caller cannot accidentally open an unauthenticated session.
+	if targetDeviceID == "" {
+		return nil, errors.New("targetDeviceID is required in signaling mode")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
