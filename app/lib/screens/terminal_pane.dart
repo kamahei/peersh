@@ -103,7 +103,12 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     widget.tab.terminal.onOutput = _handleOutput;
     widget.tab.terminal.onResize = (cols, rows, _, __) => _onResize(cols, rows);
     if (widget.tab.ptyId == null) {
-      _maybeOpenPty();
+      // _maybeOpenPty reads MediaQuery, which is illegal during
+      // initState. Defer to the first post-frame so the widget is
+      // mounted in the tree and inherited widgets are reachable.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _maybeOpenPty();
+      });
     } else {
       // Tab was already initialised previously (e.g. user switched away
       // and back). Re-attach the event listener; PTY id is unchanged.
