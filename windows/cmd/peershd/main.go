@@ -34,8 +34,8 @@ import (
 	"time"
 
 	"github.com/peersh/peersh/core/devid"
-	v1 "github.com/peersh/peersh/core/protocol/peersh/v1"
 	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
+	v1 "github.com/peersh/peersh/core/protocol/peersh/v1"
 	"github.com/peersh/peersh/core/punching"
 	"github.com/peersh/peersh/core/signaling"
 	"github.com/peersh/peersh/core/transport"
@@ -50,6 +50,11 @@ import (
 )
 
 const protocolVersion = 2
+
+const (
+	defaultDirectListen    = "127.0.0.1:7777"
+	defaultSignalingListen = ":7777"
+)
 
 // supportedCapabilities is the capability list peershd advertises in
 // ServerHello. "pty.v1" tells the client it may open StreamRequest{pty: ...}
@@ -107,7 +112,7 @@ func main() {
 // (with a context that the SCM cancels at Stop time).
 func runWithCtx(serviceCtx context.Context, args []string) error {
 	fs := flag.NewFlagSet("peershd", flag.ExitOnError)
-	listen := fs.String("listen", "127.0.0.1:7777", "UDP address to listen on for QUIC; defaults to loopback so an unconfigured peershd is not reachable from the network")
+	listen := fs.String("listen", defaultDirectListen, "UDP address to listen on for QUIC; defaults to loopback without signaling, or :7777 when -signaling is set")
 	insecureDirect := fs.Bool("insecure-direct", false, "explicitly allow binding a non-loopback -listen without -signaling; without this flag, non-loopback binds require signaling to be enabled so peershd is not a public no-auth shell")
 	certDir := fs.String("cert-dir", "", "directory for self-signed dev cert (default: platform-specific app data dir)")
 	debug := fs.Bool("debug", false, "enable debug logging")
@@ -144,9 +149,16 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	if *certDir == "" {
 		*certDir = defaultCertDir()
 	}
+	listenExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "listen" {
+			listenExplicit = true
+		}
+	})
 
 	return run(serviceCtx, runOpts{
 		listen:              *listen,
+		listenExplicit:      listenExplicit,
 		insecureDirect:      *insecureDirect,
 		certDir:             *certDir,
 		signalingURL:        *signalingURL,
@@ -169,21 +181,28 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 }
 
 type runOpts struct {
-	listen, certDir, signalingURL string
-	insecureDirect                bool
-	userID, pskFile               string
-	displayName, stunServer       string
-	firebaseProjectID             string
-	firebaseCredentials           string
-	firebaseEmail                 string
-	firebaseUID                   string
-	firebaseAPIKey                string
-	firebaseRegion                string
-	firebasePairCode              string
-	firebaseTokenFile             string
-	firebaseLogin                 bool
-	googleClientID                string
-	googleClientSecret            string
+	listen, certDir, signalingURL  string
+	listenExplicit, insecureDirect bool
+	userID, pskFile                string
+	displayName, stunServer        string
+	firebaseProjectID              string
+	firebaseCredentials            string
+	firebaseEmail                  string
+	firebaseUID                    string
+	firebaseAPIKey                 string
+	firebaseRegion                 string
+	firebasePairCode               string
+	firebaseTokenFile              string
+	firebaseLogin                  bool
+	googleClientID                 string
+	googleClientSecret             string
+}
+
+func effectiveListen(listen, signalingURL string, listenExplicit bool) string {
+	if signalingURL != "" && !listenExplicit && listen == defaultDirectListen {
+		return defaultSignalingListen
+	}
+	return listen
 }
 
 // isLoopbackBind returns true when udpAddr resolves to a loopback IP.
@@ -235,6 +254,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 		ctx, stop = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	}
 	defer stop()
+	listen = effectiveListen(listen, signalingURL, opts.listenExplicit)
 
 	priv, err := peertls.LoadOrGenerateKey(certDir)
 	if err != nil {
@@ -424,13 +444,13 @@ func runSignaling(ctx context.Context, url, userID string, secret []byte, device
 // buildFirebaseTokenSource picks the right Firebase auth backend for the
 // invocation flags:
 //
-//   1. -firebase-login given: open browser, run OAuth 2.0 + signInWithIdp,
-//      persist refresh token. One-shot bootstrap (desktop only).
-//   2. -pair-code given: claim it, exchange for refresh token, persist.
-//      One-shot bootstrap (works on headless hosts).
-//   3. -firebase-credentials given: legacy service-account-JSON path.
-//   4. Otherwise: load the persisted refresh token (path defaults to
-//      LOCALAPPDATA\peersh\firebase-refresh-token.txt).
+//  1. -firebase-login given: open browser, run OAuth 2.0 + signInWithIdp,
+//     persist refresh token. One-shot bootstrap (desktop only).
+//  2. -pair-code given: claim it, exchange for refresh token, persist.
+//     One-shot bootstrap (works on headless hosts).
+//  3. -firebase-credentials given: legacy service-account-JSON path.
+//  4. Otherwise: load the persisted refresh token (path defaults to
+//     LOCALAPPDATA\peersh\firebase-refresh-token.txt).
 //
 // All Firebase paths require -firebase-project and -firebase-api-key.
 func buildFirebaseTokenSource(ctx context.Context, opts runOpts) (fbpeershd.TokenSource, error) {
@@ -691,9 +711,9 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 	rows := uint16(req.GetRows())
 
 	var (
-		sess     *ptyhost.Session
-		handle   ptyhost.ManagedHandle
-		replay   []byte
+		sess   *ptyhost.Session
+		handle ptyhost.ManagedHandle
+		replay []byte
 	)
 
 	if h := req.GetReattachHandle(); h != "" {

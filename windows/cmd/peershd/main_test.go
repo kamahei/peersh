@@ -27,3 +27,46 @@ func TestIsLoopbackBind(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveListen(t *testing.T) {
+	cases := []struct {
+		name           string
+		listen         string
+		signalingURL   string
+		listenExplicit bool
+		want           string
+	}{
+		{
+			name:   "default direct stays loopback",
+			listen: defaultDirectListen,
+			want:   defaultDirectListen,
+		},
+		{
+			name:         "default signaling binds externally",
+			listen:       defaultDirectListen,
+			signalingURL: "wss://example.com/ws",
+			want:         defaultSignalingListen,
+		},
+		{
+			name:           "explicit loopback with signaling is respected",
+			listen:         defaultDirectListen,
+			signalingURL:   "wss://example.com/ws",
+			listenExplicit: true,
+			want:           defaultDirectListen,
+		},
+		{
+			name:           "explicit non-loopback is respected",
+			listen:         ":9999",
+			signalingURL:   "wss://example.com/ws",
+			listenExplicit: true,
+			want:           ":9999",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := effectiveListen(c.listen, c.signalingURL, c.listenExplicit); got != c.want {
+				t.Fatalf("effectiveListen() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

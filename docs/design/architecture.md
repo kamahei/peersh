@@ -73,7 +73,7 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 ## Transport
 
 - **QUIC over UDP** via `github.com/quic-go/quic-go`. QUIC mandates TLS 1.3, which gives end-to-end encryption for free.
-- **mTLS bound to device IDs.** Both ends authenticate to each other using their long-lived ed25519 keypair — the same keypair that produces the device ID (see "Device identity"). Production code uses `core/transport/peertls`: each peer presents a self-signed cert whose private key is its device key, the server requires a client cert (`tls.RequireAnyClientCert`), and the client side pins the server's expected `device_id` so a host that presents a different key fails the TLS handshake.
+- **mTLS bound to device IDs.** Both ends authenticate to each other using an ed25519 keypair — the same keypair that produces the device ID (see "Device identity"). Production code uses `core/transport/peertls`: each peer presents a self-signed cert whose private key is its device key, the server requires a client cert (`tls.RequireAnyClientCert`), and the client side pins the server's expected `device_id` so a host that presents a different key fails the TLS handshake.
 - **External `net.PacketConn` requirement.** The QUIC wrapper in `core/transport/` accepts an externally-supplied `net.PacketConn` so the punched UDP socket can be reused as the underlying transport for QUIC. A regression test (`TestExternalPacketConnContract`) exercises the path with `quic.Transport`.
 - **`devtls` is now test-only.** `core/transport/devtls` still generates self-signed certs and a client config with `InsecureSkipVerify`, marked as dev-only via the grep-able `DevSelfSignedOnly` constant. Production code paths no longer import it; new code should use `peertls` instead.
 
@@ -156,9 +156,9 @@ The full schema is in `proto/peersh/signal/v1/`. Implementation lives in `server
 
 ## Threat model summary
 
-- **Adversary types we care about**: a malicious or curious signaling server operator; a passive network observer; an attacker who has compromised one device and is trying to impersonate another.
+- **Adversary types we care about**: a passive network observer; a curious signaling server operator; an attacker who has compromised one device and is trying to impersonate another.
 - **Confidentiality.** The signaling server cannot read command contents. QUIC's TLS 1.3 protects in-flight traffic from any network observer.
-- **Authentication.** Connections use mTLS with keypair-derived device identities. The trusted directory (the configured store) maps device IDs to users; an attacker without the matching private key cannot impersonate a device, even if they control the signaling server.
+- **Authentication.** Connections use mTLS with keypair-derived device identities. The trusted directory (the configured store) maps device IDs to users and prevents a client from registering someone else's `device_id`. Connection authorization is still delegated to signaling: `peershd` accepts a QUIC peer whose authenticated `device_id` matches the recent `Connect.from_device_id` grant. A hostile shared signaling deployment requires a future host-side client allowlist; self-hosted deployments assume the signaling operator and host operator are the same trust domain.
 - **Out of model (initially).** Endpoint compromise (malware on a paired phone or PC). Side channels in QUIC implementations. Long-term key rotation strategy. These are tracked but not addressed in early phases.
 - **A dedicated `docs/security.md`** is deferred until real-user scale demands it; for now the threat-model summary lives here and security disclosure is in `SECURITY.md`.
 

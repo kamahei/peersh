@@ -23,7 +23,7 @@ The mobile app supports multiple servers side by side, mixing PSK and Firebase e
 
 ## Quick start
 
-### Local LAN demo (no signaling, no auth — fastest)
+### Local direct demo (no signaling, no auth — fastest)
 
 Build the host and a test client:
 
@@ -35,15 +35,17 @@ go build -o bin/peersh-cli.exe ./cli/cmd/peersh-cli
 Run the host on the Windows PC:
 
 ```sh
-./bin/peershd.exe -listen :7777
+./bin/peershd.exe
 ```
 
-From any machine on the same LAN:
+From the same machine:
 
 ```sh
-./bin/peersh-cli.exe -addr <host-ip>:7777
+./bin/peersh-cli.exe -addr 127.0.0.1:7777
 peersh> Get-Process | Select-Object -First 5 | Out-String
 ```
+
+For a LAN direct test, start `peershd` with `-listen :7777 -insecure-direct` and pass the host's LAN address to `peersh-cli`. Do not expose direct mode to untrusted networks; signaling mode is the normal remote path.
 
 ### Self-hosted PSK signaling + mobile app
 
