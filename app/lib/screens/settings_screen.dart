@@ -41,6 +41,53 @@ class SettingsScreen extends ConsumerWidget {
               trailing: Text(s.fontSize.toStringAsFixed(0)),
             ),
             const Divider(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                'Notification defaults',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            ListTile(
+              title: const Text('Default command-finished threshold'),
+              subtitle: Slider(
+                value: s.defaultNotifyThresholdSec.toDouble(),
+                min: 1,
+                max: 120,
+                divisions: 119,
+                label: '${s.defaultNotifyThresholdSec}s',
+                onChanged: (v) => ref
+                    .read(settingsProvider.notifier)
+                    .setDefaultNotifyThresholdSec(v.round()),
+              ),
+              trailing: Text('${s.defaultNotifyThresholdSec}s'),
+            ),
+            ListTile(
+              title: const Text('Default idle-silence window'),
+              subtitle: Slider(
+                value: s.defaultNotifyIdleSec.toDouble(),
+                min: 0,
+                max: 60,
+                divisions: 60,
+                label: s.defaultNotifyIdleSec == 0
+                    ? 'off'
+                    : '${s.defaultNotifyIdleSec}s',
+                onChanged: (v) => ref
+                    .read(settingsProvider.notifier)
+                    .setDefaultNotifyIdleSec(v.round()),
+              ),
+              trailing: Text(s.defaultNotifyIdleSec == 0
+                  ? 'off'
+                  : '${s.defaultNotifyIdleSec}s'),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'Long-press the bell on a tab to override these per tab.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            const Divider(),
             if (flavor.kFirebaseInitialized)
               ListTile(
                 leading: const Icon(Icons.qr_code_2_outlined),

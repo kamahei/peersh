@@ -171,8 +171,14 @@ users/{uid}/notifications/{auto-id}      ← host writes, function deletes
 
 Android (works today):
 - New Cloud Function `onNotificationCreated` deployed (`firebase deploy --only functions`).
+  RTDB v2 triggers must run in the same region as the database — pinned
+  to `asia-southeast1` regardless of the rest of the codebase.
 - mobile APK rebuilt against this commit so `firebase_messaging` is wired up.
 - User taps the bell icon on any terminal tab to opt that tab in.
+- Long-press the bell to edit threshold + idle window for that one tab.
+- Settings → "Notification defaults" sets the values used for tabs that
+  haven't been customized. Per-tab overrides survive reattach + restart
+  via SecureStore (`notify_config.v1`, keyed by serverId|handle).
 
 iOS (deferred — Dart code is iOS-ready, operator-side bring-up required):
 - `flutterfire configure --platforms=ios` to generate `GoogleService-Info.plist`.

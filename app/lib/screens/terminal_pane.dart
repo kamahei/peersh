@@ -12,9 +12,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
 
 import '../models/pty_event.dart';
+import '../services/mobile_device_registry.dart';
 import '../services/peersh_session.dart';
-import '../state/settings.dart';
+import '../state/persisted_notify_config.dart';
 import '../state/persisted_pty_handles.dart';
+import '../state/settings.dart';
 import '../terminal/resize_policy.dart';
 import '../terminal/viewport_estimate.dart';
 
@@ -185,6 +187,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
               handle: result.handle,
             );
       }
+      await _restoreNotifyConfig(result.ptyId, result.handle);
       setState(() {});
       _scheduleCwdRefresh();
     } catch (e) {
@@ -193,6 +196,50 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
           .write('\r\n\x1b[31mfailed to open PTY: $e\x1b[0m\r\n');
     } finally {
       _opening = false;
+    }
+  }
+
+  /// Apply persisted v2-B notify settings (or app-wide defaults) to this
+  /// tab right after the PTY is opened. When a previously enabled tab
+  /// reattaches, also push the config back to the host so notifications
+  /// resume without the user having to re-toggle the bell.
+  Future<void> _restoreNotifyConfig(int ptyId, String handle) async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    final defaultThreshold = settings?.defaultNotifyThresholdSec ?? 10;
+    final defaultIdle = settings?.defaultNotifyIdleSec ?? 0;
+
+    NotifyConfig? persisted;
+    if (handle.isNotEmpty) {
+      try {
+        final cfgs =
+            await ref.read(persistedNotifyConfigsProvider.future);
+        persisted = cfgs.lookup(widget.session.serverId, handle);
+      } catch (e) {
+        debugPrint('peersh: notify config lookup failed: $e');
+      }
+    }
+
+    final thresholdSec = persisted?.thresholdSec ?? defaultThreshold;
+    final idleSec = persisted?.idleSec ?? defaultIdle;
+    final enabled = persisted?.enabled ?? false;
+
+    widget.tab.notifyThreshold = Duration(seconds: thresholdSec);
+    widget.tab.notifyIdleWindow = Duration(seconds: idleSec);
+    widget.tab.notifyOnPromptReady = enabled;
+
+    if (!enabled) return;
+    try {
+      final mobileId = await readOrCreateMobileDeviceId();
+      await ref.read(bridgeProvider).ptyNotificationConfig(
+            ptyId: ptyId,
+            enabled: true,
+            thresholdSeconds: thresholdSec,
+            idleSeconds: idleSec,
+            tabLabel: widget.tab.label,
+            mobileDeviceId: mobileId,
+          );
+    } catch (e) {
+      debugPrint('peersh: ptyNotificationConfig restore failed: $e');
     }
   }
 

@@ -22,6 +22,7 @@ import '../models/server_entry.dart';
 import '../services/flavor.dart' as flavor;
 import '../services/mobile_device_registry.dart';
 import '../services/peersh_session.dart';
+import '../state/persisted_notify_config.dart';
 import '../state/persisted_pty_handles.dart';
 import '../state/servers.dart';
 import '../state/settings.dart';
@@ -467,11 +468,68 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
             tabLabel: tab.label,
             mobileDeviceId: mobileId,
           );
+      await _persistNotify(tab, enabled: newEnabled);
     } catch (e) {
       debugPrint('peersh: ptyNotificationConfig failed: $e');
       if (!mounted) return;
       // revert local state on failure so the bell reflects truth
       setState(() => tab.notifyOnPromptReady = !newEnabled);
+    }
+  }
+
+  /// Long-press on the bell — let the user override threshold + idle
+  /// window for this tab. Saves the new values, re-pushes config to the
+  /// host (only if the tab already has the bell on), and persists.
+  Future<void> _editNotifySettings(int idx) async {
+    if (idx < 0 || idx >= _tabs.length) return;
+    final tab = _tabs[idx];
+    final result = await showDialog<_NotifyEditResult>(
+      context: context,
+      builder: (ctx) => _NotifyEditDialog(
+        initialThresholdSec: tab.notifyThreshold.inSeconds,
+        initialIdleSec: tab.notifyIdleWindow.inSeconds,
+        tabLabel: tab.label,
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      tab.notifyThreshold = Duration(seconds: result.thresholdSec);
+      tab.notifyIdleWindow = Duration(seconds: result.idleSec);
+    });
+    final ptyId = tab.ptyId;
+    if (ptyId != null && tab.notifyOnPromptReady) {
+      try {
+        final mobileId = await readOrCreateMobileDeviceId();
+        await ref.read(bridgeProvider).ptyNotificationConfig(
+              ptyId: ptyId,
+              enabled: true,
+              thresholdSeconds: result.thresholdSec,
+              idleSeconds: result.idleSec,
+              tabLabel: tab.label,
+              mobileDeviceId: mobileId,
+            );
+      } catch (e) {
+        debugPrint('peersh: ptyNotificationConfig (edit) failed: $e');
+      }
+    }
+    await _persistNotify(tab, enabled: tab.notifyOnPromptReady);
+  }
+
+  Future<void> _persistNotify(TerminalTabModel tab,
+      {required bool enabled}) async {
+    if (tab.reattachHandle.isEmpty) return;
+    try {
+      await ref.read(persistedNotifyConfigsProvider.notifier).upsert(
+            serverId: widget.server.id,
+            handle: tab.reattachHandle,
+            config: NotifyConfig(
+              enabled: enabled,
+              thresholdSec: tab.notifyThreshold.inSeconds,
+              idleSec: tab.notifyIdleWindow.inSeconds,
+            ),
+          );
+    } catch (e) {
+      debugPrint('peersh: persist notify config failed: $e');
     }
   }
 
@@ -642,6 +700,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                     onClose: _closeTab,
                     onKill: _killTabPty,
                     onToggleNotify: _toggleNotify,
+                    onEditNotify: _editNotifySettings,
                   ),
                   Expanded(
                     child: _tabs.isEmpty
@@ -755,6 +814,7 @@ class _TabBar extends StatelessWidget {
     required this.onClose,
     required this.onKill,
     required this.onToggleNotify,
+    required this.onEditNotify,
   });
 
   final List<TerminalTabModel> tabs;
@@ -763,6 +823,7 @@ class _TabBar extends StatelessWidget {
   final ValueChanged<int> onClose;
   final ValueChanged<int> onKill;
   final ValueChanged<int> onToggleNotify;
+  final ValueChanged<int> onEditNotify;
 
   @override
   Widget build(BuildContext context) {
@@ -786,6 +847,7 @@ class _TabBar extends StatelessWidget {
                 onTap: () => onTap(i),
                 onClose: () => onClose(i),
                 onToggleNotify: () => onToggleNotify(i),
+                onLongPressNotify: () => onEditNotify(i),
                 onLongPress: () async {
                   final action = await showModalBottomSheet<String>(
                     context: context,
@@ -832,6 +894,7 @@ class _TabChip extends StatelessWidget {
     required this.onClose,
     required this.onLongPress,
     required this.onToggleNotify,
+    required this.onLongPressNotify,
   });
 
   final String label;
@@ -841,6 +904,7 @@ class _TabChip extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onLongPress;
   final VoidCallback onToggleNotify;
+  final VoidCallback onLongPressNotify;
 
   @override
   Widget build(BuildContext context) {
@@ -869,21 +933,29 @@ class _TabChip extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(width: 4),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-                onPressed: onToggleNotify,
-                icon: Icon(
-                  notifyEnabled
-                      ? Icons.notifications_active
-                      : Icons.notifications_none,
-                  size: 16,
-                  color: fg,
+              // Tap toggles bell on/off; long-press opens the threshold +
+              // idle-window editor. IconButton has no onLongPress so we
+              // wrap it in an InkWell that captures both gestures.
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: InkWell(
+                  onTap: onToggleNotify,
+                  onLongPress: onLongPressNotify,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Tooltip(
+                    message: notifyEnabled
+                        ? 'Notifications on — tap to turn off, long-press to edit'
+                        : 'Notify when this tab\'s next command finishes — long-press to edit',
+                    child: Icon(
+                      notifyEnabled
+                          ? Icons.notifications_active
+                          : Icons.notifications_none,
+                      size: 16,
+                      color: fg,
+                    ),
+                  ),
                 ),
-                tooltip: notifyEnabled
-                    ? 'Notifications on (tap to turn off)'
-                    : 'Notify when this tab\'s next command finishes',
               ),
               IconButton(
                 visualDensity: VisualDensity.compact,
@@ -897,6 +969,88 @@ class _TabChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Result returned by the bell long-press editor dialog.
+class _NotifyEditResult {
+  const _NotifyEditResult({required this.thresholdSec, required this.idleSec});
+  final int thresholdSec;
+  final int idleSec;
+}
+
+class _NotifyEditDialog extends StatefulWidget {
+  const _NotifyEditDialog({
+    required this.initialThresholdSec,
+    required this.initialIdleSec,
+    required this.tabLabel,
+  });
+
+  final int initialThresholdSec;
+  final int initialIdleSec;
+  final String tabLabel;
+
+  @override
+  State<_NotifyEditDialog> createState() => _NotifyEditDialogState();
+}
+
+class _NotifyEditDialogState extends State<_NotifyEditDialog> {
+  late int _thresholdSec = widget.initialThresholdSec.clamp(1, 600);
+  late int _idleSec = widget.initialIdleSec.clamp(0, 300);
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Notification settings — ${widget.tabLabel}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Min command duration before firing: ${_thresholdSec}s'),
+          Slider(
+            value: _thresholdSec.toDouble(),
+            min: 1,
+            max: 120,
+            divisions: 119,
+            label: '${_thresholdSec}s',
+            onChanged: (v) => setState(() => _thresholdSec = v.round()),
+          ),
+          const SizedBox(height: 8),
+          Text(_idleSec == 0
+              ? 'Idle-silence trigger: disabled'
+              : 'Idle-silence trigger: ${_idleSec}s'),
+          Slider(
+            value: _idleSec.toDouble(),
+            min: 0,
+            max: 60,
+            divisions: 60,
+            label: _idleSec == 0 ? 'off' : '${_idleSec}s',
+            onChanged: (v) => setState(() => _idleSec = v.round()),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Idle silence is for tools that don\'t print prompts (Claude, Codex). Leave at 0 for shells.',
+            style: TextStyle(fontSize: 12),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(
+            context,
+            _NotifyEditResult(
+              thresholdSec: _thresholdSec,
+              idleSec: _idleSec,
+            ),
+          ),
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }
