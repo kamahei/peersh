@@ -32,6 +32,19 @@ also qualify if they would let an attacker run up an operator's bill.
 
 - **Endpoint compromise.** Malware on a paired phone or PC is outside
   peersh's threat model; the user's device is the trust anchor.
+- **Compromise of the operator's own signaling server.** peersh is a
+  self-hosted OSS project: the `peersh-signaling` deployment, its
+  Firebase project, and the host that runs `peershd` are all assumed
+  to be administered by the same operator. Once that operator's
+  signaling server is taken over, the signaling server can forge
+  `Connect.from_device_id` for any device key, the matching client
+  cert can be presented, and `peershd` will accept the session — the
+  signaling-issued grant is the only thing `peershd` checks against
+  the QUIC peer's authenticated `device_id`. Defending against an
+  attacker who controls the signaling deployment requires a host-side
+  client allowlist; that is a planned opt-in hardening but is not part
+  of the documented trust boundary today, and findings that assume an
+  attacker-controlled signaling server are out of scope.
 - **Brute-force PSK guessing on a self-host operator's deployment.** The
   rate limiter discourages this but is not a substitute for choosing a
   high-entropy PSK. We document this in `docs/deploy/self-hosting.md`.
@@ -42,6 +55,13 @@ also qualify if they would let an attacker run up an operator's bill.
 
 ## Trust model snapshot
 
+- The signaling server, `peershd` host, and any Firebase/cloud
+  resources are inside the trust boundary of a single operator.
+  Confidentiality of command content is preserved against the signaling
+  operator (peer-to-peer QUIC) but authorization to *initiate* a
+  session is delegated to signaling: `peershd` accepts a QUIC peer
+  whose authenticated mTLS `device_id` matches a `Connect.from_device_id`
+  grant the signaling server just issued. See "What's out of scope".
 - Signaling servers cannot read PowerShell command content. All command
   bytes flow peer-to-peer over QUIC with TLS 1.3, and the QUIC handshake
   is mutually authenticated (mTLS): both peers present a self-signed
@@ -55,6 +75,12 @@ also qualify if they would let an attacker run up an operator's bill.
   public key. The same ed25519 key drives both signaling Register and
   the QUIC mTLS cert, so the host sees one consistent identity on both
   channels.
+- Direct (no-signaling) `peershd` is a developer-only mode: the QUIC
+  accept loop has no signaling channel to issue grants, so it cannot
+  authorize a peer beyond proving the cert is pubkey-bound. To make
+  this footgun explicit, `peershd -listen` defaults to `127.0.0.1:7777`
+  and refuses to bind a non-loopback address without `-signaling`
+  unless the operator passes `-insecure-direct`.
 - The `peersh-signaling` operator can see who is connected to whom and
   when (signaling metadata) but not the commands or their output.
 - PSK secrets are stored as raw bytes in the SQLite store. Operators
