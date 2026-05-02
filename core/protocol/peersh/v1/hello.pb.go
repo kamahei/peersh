@@ -30,7 +30,7 @@ const (
 type ClientHello struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// protocol_version is bumped only for breaking wire-format changes.
-	// Phase 1 ships protocol_version = 1 and that value is locked.
+	// The current QUIC application protocol version is 2.
 	ProtocolVersion uint32 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	// capabilities advertise optional, additive features. Examples that may
 	// appear in later phases: "session_resume", "ipv6". Empty in Phase 1.

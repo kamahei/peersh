@@ -129,11 +129,11 @@ Implications:
 
 The wire protocol carries a version from day one. Immediately after the QUIC handshake completes, the client opens a dedicated **control stream** (the first client-initiated bidirectional stream) and exchanges `ClientHello` / `ServerHello` once per connection. Subsequent application streams (e.g. per-command exec streams) skip the Hello; the negotiated capabilities apply to the whole connection. Both Hello messages contain:
 
-- `protocol_version` (`uint32`, currently `1`)
+- `protocol_version` (`uint32`, currently `2` for the QUIC application protocol)
 - `capabilities` (`repeated string`, e.g. `["session_resume", "ipv6"]`)
 - A free-form client/server identifier string
 
-**Mismatched major versions must fail cleanly with an actionable error.** Capability strings allow optional features to be negotiated without bumping the version. Bumping `protocol_version` is the only way to make a breaking change.
+**Mismatched versions must fail cleanly with an actionable error.** Capability strings allow optional features to be negotiated without bumping the version. Bumping `protocol_version` is the only way to make a breaking change.
 
 ## Wire formats
 
@@ -147,7 +147,7 @@ The signaling channel runs on WebSocket and is connection-setup-only — it neve
 
 Per-connection state machine:
 
-1. **`ClientHello` → `ServerHello`** — version + capabilities negotiation. `protocol_version = 1` is locked.
+1. **`ClientHello` → `ServerHello`** — version + capabilities negotiation. The signaling channel has its own `protocol_version = 1`, separate from the QUIC application protocol version.
 2. **`Register` → `RegisterAck`** — PSK-signed identity assertion. The server verifies the HMAC-SHA256 signature against `core/auth/psk` and records (or refreshes) the device under the authenticated user_id.
 3. **`Connect` (in either direction)** — the initiator sends `Connect{target_device_id, candidates}`; the server fills `from_device_id` (clients cannot spoof it) and forwards to the target if and only if the target is registered under the same user_id. Cross-user routing is rejected with a `ServerError` carrying `target_unknown` (the target is invisible to the sender's lookup) or `cross_user_forbidden`.
 4. **`ServerError`** — anything that went wrong; close semantics depend on the code.

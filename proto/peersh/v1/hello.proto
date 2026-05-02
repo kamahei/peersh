@@ -9,7 +9,7 @@ package peersh.v1;
 // ClientHello is sent by the client right after opening the control stream.
 message ClientHello {
   // protocol_version is bumped only for breaking wire-format changes.
-  // Phase 1 ships protocol_version = 1 and that value is locked.
+  // The current QUIC application protocol version is 2.
   uint32 protocol_version = 1;
 
   // capabilities advertise optional, additive features. Examples that may

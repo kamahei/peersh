@@ -7,7 +7,7 @@ Terms used across the peersh documentation and code. Stays alphabetical so it's 
 - **Background Modes.** iOS app capability that lets an app keep running (within constraints) when backgrounded. (Not yet wired in peersh; Android uses a foreground service instead.)
 - **Capability string.** A short label inside a `ClientHello` / `ServerHello` capability list, advertising support for an optional protocol feature (e.g. `pty.v1`, `files.v1`). Lets clients and servers negotiate optional behavior without bumping `protocol_version`.
 - **CGNAT.** Carrier-grade NAT. The network operator NATs many subscribers behind a shared public IP, often in a way that prevents UDP hole punching. CGNAT-on-both-sides is the canonical case where peersh's "no relay" policy means the connection cannot be made.
-- **`ClientHello` / `ServerHello`.** The first protobuf messages exchanged on the QUIC control stream. Carry `protocol_version`, `capabilities`, optional `session_id` (for reattach), and a free-form identifier. Mismatched major versions fail cleanly.
+- **`ClientHello` / `ServerHello`.** The first protobuf messages exchanged on the QUIC control stream. Carry `protocol_version`, `capabilities`, optional `session_id` (for reattach), and a free-form identifier. Mismatched versions fail cleanly.
 - **Cloud Function.** Firebase/GCP serverless compute. peersh uses `onSessionCreated` (FCM wake-up), `mintPairingCode` / `claimPairingCode` (peershd pairing), and `budgetGuard` (cost guardrail).
 - **ConPTY.** Windows pseudo-console API. peersh's interactive PTY backend on the host side.
 - **`cwd`.** Current working directory. Preserved across reattach. Tracked through OSC 9;9 emitted by the prompt wrapper.
