@@ -133,6 +133,55 @@ fingerprints() {
   echo -e "${sha1:-<unset>}\t${sha256:-<unset>}"
 }
 
+# Helper: cache one `gradlew signingReport` run and emit "<SHA-1>\t<SHA-256>"
+# for the requested variant ("debug" or "release"). Slow on the first
+# call (~5-10s) but reliable when keytool isn't findable from this
+# bash environment.
+GRADLE_REPORT_CACHE=""
+gradle_signing_report() {
+  if [[ -n "$GRADLE_REPORT_CACHE" ]]; then return; fi
+  if [[ ! -d app/android ]]; then GRADLE_REPORT_CACHE="<no-app-android>"; return; fi
+  local gw="app/android/gradlew"
+  [[ -f "$gw.bat" ]] && gw="$gw.bat"
+  if [[ ! -x "$gw" && ! -f "$gw" ]]; then
+    GRADLE_REPORT_CACHE="<no-gradlew>"
+    return
+  fi
+  echo "  (running gradlew signingReport — this takes a few seconds...)" >&2
+  local out
+  out=$( (cd app/android && ./gradlew --quiet --console=plain signingReport) 2>&1 || true)
+  if [[ -z "$out" ]]; then GRADLE_REPORT_CACHE="<empty>"; return; fi
+  GRADLE_REPORT_CACHE="$out"
+}
+
+fingerprints_via_gradle() {
+  local variant="$1"  # debug | release
+  gradle_signing_report
+  case "$GRADLE_REPORT_CACHE" in
+    "<"*">") echo -e "<unset>\t<unset>"; return ;;
+  esac
+  # signingReport blocks look like:
+  #   Variant: debug
+  #   Config: debug
+  #   Store: ...
+  #   Alias: ...
+  #   ...
+  #   SHA1: AB:CD:...
+  #   SHA-256: 12:34:...
+  # Walk the output, isolate the variant block, grab fingerprints.
+  local block
+  block=$(printf '%s\n' "$GRADLE_REPORT_CACHE" | awk -v v="$variant" '
+    $0 ~ "^Variant: "v"$" { capture=1; next }
+    /^Variant: / && capture { exit }
+    capture { print }
+  ')
+  if [[ -z "$block" ]]; then echo -e "<unset>\t<unset>"; return; fi
+  local sha1 sha256
+  sha1=$(printf '%s\n' "$block" | awk -F': ' '/^\s*SHA1:/ { print $2; exit }')
+  sha256=$(printf '%s\n' "$block" | awk -F': ' '/^\s*SHA-?256:/ { print $2; exit }')
+  echo -e "${sha1:-<unset>}\t${sha256:-<unset>}"
+}
+
 # ---- gather values --------------------------------------------------
 
 PROJECT_ID=""
@@ -168,6 +217,11 @@ DEBUG_KS="${HOME}/.android/debug.keystore"
 DEBUG_FP=$(fingerprints "$DEBUG_KS" androiddebugkey android)
 DEBUG_SHA1=${DEBUG_FP%	*}
 DEBUG_SHA256=${DEBUG_FP#*	}
+if [[ "$DEBUG_SHA1" == "<unset>" ]]; then
+  DEBUG_FP=$(fingerprints_via_gradle debug)
+  DEBUG_SHA1=${DEBUG_FP%	*}
+  DEBUG_SHA256=${DEBUG_FP#*	}
+fi
 
 # Release keystore (from key.properties).
 RELEASE_SHA1="<unset>"
@@ -190,6 +244,15 @@ if [[ -f app/android/key.properties ]]; then
       RELEASE_SHA256=${RELEASE_FP#*	}
     fi
   fi
+fi
+# Even without key.properties, gradle's signingReport surfaces the
+# "release" variant when the build.gradle has a release signingConfig
+# wired (we always do — fallback to debug keystore). Try gradle when
+# the direct keytool path didn't yield a result.
+if [[ "$RELEASE_SHA1" == "<unset>" ]]; then
+  RELEASE_FP=$(fingerprints_via_gradle release)
+  RELEASE_SHA1=${RELEASE_FP%	*}
+  RELEASE_SHA256=${RELEASE_FP#*	}
 fi
 
 # peershd device id (from %LOCALAPPDATA%\peersh\dev\dev-cert.pem if present).
