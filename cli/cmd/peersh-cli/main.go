@@ -35,7 +35,7 @@ import (
 	"github.com/peersh/peersh/core/punching"
 	"github.com/peersh/peersh/core/signaling"
 	"github.com/peersh/peersh/core/transport"
-	"github.com/peersh/peersh/core/transport/devtls"
+	"github.com/peersh/peersh/core/transport/peertls"
 	"github.com/peersh/peersh/core/wire"
 )
 
@@ -97,7 +97,30 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 		}
 	}
 
-	tr := transport.New(pc, devtls.DevClientTLSConfig())
+	// Generate the CLI's ephemeral ed25519 keypair. The same key drives
+	// both the signaling Register frame (via devid.Derive on the pubkey)
+	// and the mTLS client cert presented to peershd, so the server sees
+	// a consistent identity on the QUIC and signaling sides.
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate device key: %w", err)
+	}
+	deviceID := devid.Derive(pub)
+	clientCert, err := peertls.CertFromEd25519(priv)
+	if err != nil {
+		return fmt.Errorf("build client cert: %w", err)
+	}
+
+	// Signaling mode pins the target's device_id at the TLS layer.
+	// Direct mode (-addr) cannot pin: the operator typically doesn't know
+	// the host's device_id ahead of time, so we accept any pubkey-bound
+	// server cert. Both modes still present a client cert; peershd now
+	// requires one regardless.
+	pin := target
+	if signalingURL == "" {
+		pin = ""
+	}
+	tr := transport.New(pc, peertls.ClientTLSConfig(clientCert, pin))
 	defer tr.Close()
 
 	if signalingURL != "" {
@@ -108,7 +131,7 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 		if err != nil {
 			return fmt.Errorf("read psk: %w", err)
 		}
-		conn, err := rendezvousAndDial(ctx, tr, pc, signalingURL, userID, secret, target, pc.LocalAddr().(*net.UDPAddr), srflx)
+		conn, err := rendezvousAndDial(ctx, tr, pc, signalingURL, userID, secret, target, pc.LocalAddr().(*net.UDPAddr), srflx, pub, deviceID)
 		if err != nil {
 			return err
 		}
@@ -147,15 +170,13 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 // punch the peer's candidates to install local NAT mappings, and dial each
 // candidate in preferred order until one succeeds.
 //
+// pub / deviceID come from the same ed25519 keypair the caller already
+// installed in the QUIC mTLS client cert, so signaling Register and the
+// TLS handshake advertise a consistent identity.
+//
 // Returns punching.ErrTraversalFailed if every candidate dial attempt
 // fails.
-func rendezvousAndDial(ctx context.Context, tr *transport.Transport, pc net.PacketConn, url, userID string, secret []byte, targetDeviceID string, localAddr, srflx *net.UDPAddr) (*transport.Conn, error) {
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate device key: %w", err)
-	}
-	deviceID := devid.Derive(pub)
-
+func rendezvousAndDial(ctx context.Context, tr *transport.Transport, pc net.PacketConn, url, userID string, secret []byte, targetDeviceID string, localAddr, srflx *net.UDPAddr, pub ed25519.PublicKey, deviceID string) (*transport.Conn, error) {
 	sc, err := signaling.Dial(ctx, signaling.DialOptions{
 		URL:         url,
 		UserID:      userID,
