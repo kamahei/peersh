@@ -73,7 +73,8 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 ## Transport
 
 - **QUIC over UDP** via `github.com/quic-go/quic-go`. QUIC mandates TLS 1.3, which gives end-to-end encryption for free.
-- **mTLS.** Both ends authenticate to each other using their device keypairs. The same keypair that produces the device ID (see "Device identity") is used as the TLS credential.
+- **mTLS design target.** Both ends authenticate to each other using their device keypairs. The same keypair that produces the device ID (see "Device identity") is used as the TLS credential.
+- **Current implementation status.** The checked-in direct QUIC path still uses `core/transport/devtls` self-signed TLS helpers and does not yet complete production peer-certificate verification. Treat mTLS as an open implementation item, not shipped behavior.
 - **External `net.PacketConn` requirement.** The QUIC wrapper in `core/transport/` accepts an externally-supplied `net.PacketConn` so the punched UDP socket can be reused as the underlying transport for QUIC. A regression test (`TestExternalPacketConnContract`) exercises the path with `quic.Transport`.
 - **Self-signed certs in development.** `core/transport/devtls` generates self-signed certs and the client uses `InsecureSkipVerify`, clearly marked as dev-only via the grep-able `DevSelfSignedOnly` constant.
 
@@ -116,7 +117,7 @@ For domain entities, lifecycle, and per-backend mapping notes, see `data-model.m
 Device IDs are **derived from the device's public key**:
 
 ```
-device_id = base32(sha256(publicKey)[:16])  // 16-character ASCII ID
+device_id = base32(sha256(publicKey)[:10])  // 16-character ASCII ID
 ```
 
 Implications:

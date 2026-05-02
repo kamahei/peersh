@@ -110,7 +110,7 @@ git update-index --skip-worktree \
   app/firebase.json
 ```
 
-(All three have committed stubs so the build still succeeds when these are absent — the app just doesn't initialise Firebase.)
+(All three have committed stubs so the build still succeeds when they are not replaced — the app just doesn't initialise Firebase.)
 
 ### Build the gomobile AAR
 

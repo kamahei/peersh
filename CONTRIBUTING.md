@@ -75,7 +75,8 @@ in `AGENTS.md`:
 
 - No relay / TURN. NAT-traversal failure surfaces an actionable error.
 - The signaling server never sees PowerShell command content.
-- mTLS-derived identity. `device_id = base32(sha256(publicKey)[:16])`.
+- mTLS-derived identity. `device_id = base32(sha256(publicKey)[:10])`
+  (16 ASCII chars).
 - Pluggable interfaces stay in their final shape; adding a new
   provider/store means implementing the interface, not editing `core/`.
 - No Firebase types in `core/` outside `core/auth/firebase/` and

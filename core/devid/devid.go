@@ -9,11 +9,10 @@ import (
 
 // Length is the canonical peersh device-ID length, in characters.
 //
-// device_id = base32(sha256(publicKey)[:16])  // 16 ASCII characters
+// device_id = base32(sha256(publicKey)[:10])  // 16 ASCII characters
 //
-// 16 raw bytes through standard (RFC 4648) base32 yields 16 padded
-// characters. We strip the no-padding portion and rely on the fixed input
-// length to keep the output shape stable.
+// 10 raw bytes through standard (RFC 4648) base32 yields 16 unpadded
+// characters.
 const Length = 16
 
 // rawBytes is how many bytes of the SHA-256 digest we keep before encoding.

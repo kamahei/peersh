@@ -16,8 +16,6 @@ import 'package:flutter/material.dart';
 /// to the real viewport avoids the visible "PowerShell formatted for the
 /// wrong width" symptom — text wrapping at column 80 even though the
 /// phone screen is far narrower.
-///
-/// Lifted from peersh/mobile/lib/terminal/viewport_estimate.dart (MIT).
 ({int cols, int rows}) estimateViewportCells(
   BuildContext context, {
   required double fontSize,

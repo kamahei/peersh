@@ -14,6 +14,7 @@ import (
 	"github.com/peersh/peersh/core/auth"
 	fbauth "github.com/peersh/peersh/core/auth/firebase"
 	"github.com/peersh/peersh/core/auth/psk"
+	"github.com/peersh/peersh/core/devid"
 	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 	"github.com/peersh/peersh/core/store"
 	"github.com/peersh/peersh/server/ratelimit"
@@ -267,8 +268,20 @@ func (c *Connection) handshake(ctx context.Context) error {
 	if reg == nil {
 		return fmt.Errorf("expected Register, got %T", regFrame.GetBody())
 	}
-	if !c.server.UserLimit.Allow(reg.GetUserId()) {
+	userLimitKey := reg.GetUserId()
+	if userLimitKey == "" {
+		userLimitKey = reg.GetDeviceId()
+	}
+	if !c.server.UserLimit.Allow(userLimitKey) {
 		return fmt.Errorf("user rate limit")
+	}
+	if err := devid.Verify(reg.GetDeviceId(), reg.GetPublicKey()); err != nil {
+		_ = c.Send(hsCtx, &signalv1.Frame{
+			Body: &signalv1.Frame_RegisterAck{RegisterAck: &signalv1.RegisterAck{
+				Accepted: false, Reason: "device identity: " + err.Error(), ServerId: c.server.ServerID,
+			}},
+		})
+		return fmt.Errorf("device identity: %w", err)
 	}
 
 	if c.server.AppCheckVerifier != nil {

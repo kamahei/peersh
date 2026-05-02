@@ -6,12 +6,9 @@
 // terminal." Tapping a directory navigates into it; tapping a file
 // opens TextViewerScreen against the session.
 //
-// Differences vs the peersh equivalent:
-//   - peersh has no operator-configured "file roots" concept, so this
-//     screen is session-scoped only. No bookmarks, no root dropdown.
-//   - The view is bound to the live PTY (the user can multitask between
-//     the terminal and the file browser; the cwd updates as the user
-//     `cd`s in the live shell).
+// peersh has no operator-configured "file roots" concept, so this
+// screen is session-scoped only. The view is bound to the live PTY; the
+// cwd updates as the user changes directories in the shell.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -31,8 +28,7 @@ class FileBrowserScreen extends ConsumerStatefulWidget {
   final String? title;
 
   @override
-  ConsumerState<FileBrowserScreen> createState() =>
-      _FileBrowserScreenState();
+  ConsumerState<FileBrowserScreen> createState() => _FileBrowserScreenState();
 }
 
 class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen> {
@@ -215,7 +211,9 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen> {
               if (_entries.isEmpty && !_loading && _error == null)
                 Center(
                   child: Text(
-                    _path.isEmpty ? 'Empty directory.' : 'No entries at $_path.',
+                    _path.isEmpty
+                        ? 'Empty directory.'
+                        : 'No entries at $_path.',
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 )

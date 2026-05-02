@@ -11,7 +11,7 @@ Terms used across the peersh documentation and code. Stays alphabetical so it's 
 - **Cloud Function.** Firebase/GCP serverless compute. peersh uses `onSessionCreated` (FCM wake-up), `mintPairingCode` / `claimPairingCode` (peershd pairing), and `budgetGuard` (cost guardrail).
 - **ConPTY.** Windows pseudo-console API. peersh's interactive PTY backend on the host side.
 - **`cwd`.** Current working directory. Preserved across reattach. Tracked through OSC 9;9 emitted by the prompt wrapper.
-- **Device ID.** A 16-character ASCII string derived deterministically from a device's public key: `base32(sha256(publicKey)[:16])`. Same key serves as identity and as mTLS credential.
+- **Device ID.** A 16-character ASCII string derived deterministically from a device's public key: `base32(sha256(publicKey)[:10])`. Same key serves as identity and as mTLS credential.
 - **EventChannel.** Flutter mechanism for streaming a sequence of events from native code (Go via `gomobile bind`) into Dart.
 - **`ExecRequest` / `ExecResponse`.** Legacy one-shot protobuf exec path. Superseded by the PTY path; still used internally by the cwd / file-list helpers.
 - **FCM.** Firebase Cloud Messaging. Used in Firebase mode to wake up a sleeping Windows host when a session is initiated.

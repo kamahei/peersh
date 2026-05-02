@@ -37,7 +37,7 @@ These hold across all changes. Violating them is a regression even when the curr
 
 - **No relay/TURN, ever.** Signaling is connection-setup-only. NAT-traversal failure surfaces an actionable error; nothing relays data.
 - **Signaling never carries command data.** Command bytes never flow through the signaling server.
-- **mTLS-derived identity.** `device_id = base32(sha256(publicKey)[:16])`. The same key is identity and TLS credential.
+- **mTLS-derived identity.** `device_id = base32(sha256(publicKey)[:10])` (16 ASCII chars). The same key is identity and TLS credential.
 - **No Firebase types in `core/` outside `core/auth/firebase/` and `core/store/firestore/`.** Importing the Firebase SDK from anywhere else is a layering violation.
 - **No per-connection state in package globals.** State that varies per connection lives in structs you can construct and tear down.
 - **Pluggable interfaces don't change shape.** `auth.Provider` and `store.Store` are public surface. Adding a new provider/store means implementing the interface, not editing `core/`.

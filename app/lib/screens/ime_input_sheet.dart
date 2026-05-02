@@ -9,8 +9,7 @@ class ImeInputResult {
 
 /// Modal bottom sheet that lets the user compose multi-line input with
 /// the IME enabled (PowerShell-friendly), then commit the whole block as
-/// one terminal write. Mirrors `_ImeInputSheet` in
-/// `peersh/mobile/lib/screens/terminal_workspace.dart`.
+/// one terminal write.
 class ImeInputSheet extends StatefulWidget {
   const ImeInputSheet({super.key});
 
@@ -80,7 +79,8 @@ class _ImeInputSheetState extends State<ImeInputSheet> {
                 Row(
                   children: [
                     Expanded(
-                      child: Text('IME input', style: theme.textTheme.titleMedium),
+                      child:
+                          Text('IME input', style: theme.textTheme.titleMedium),
                     ),
                     IconButton(
                       icon: const Icon(Icons.close),

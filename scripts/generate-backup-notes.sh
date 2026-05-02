@@ -271,7 +271,7 @@ if not m:
 der = base64.b64decode(re.sub(r'\s+', '', m.group(1)))
 # Take the SubjectPublicKeyInfo: this is approximate (we just hash the
 # whole cert as a proxy). The mobile app actually uses
-# sha256(publicKey)[:16] but extracting the publicKey requires a real
+# sha256(publicKey)[:10] but extracting the publicKey requires a real
 # X.509 parser. We deliberately leave this as a placeholder so the
 # operator pastes the device_id from peershd's startup log.
 PY

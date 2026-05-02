@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/peersh/peersh/core/auth/psk"
+	"github.com/peersh/peersh/core/devid"
 	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 	"github.com/peersh/peersh/core/signaling"
 	"github.com/peersh/peersh/core/store"
@@ -57,45 +58,47 @@ func startTestServer(t *testing.T) (wsURL string, secret []byte, st store.Store,
 	return
 }
 
-func dialClient(t *testing.T, wsURL string, secret []byte, deviceID string, kind signalv1.DeviceKind) *signaling.Client {
+func dialClient(t *testing.T, wsURL string, secret []byte, label string, kind signalv1.DeviceKind) (*signaling.Client, string) {
 	t.Helper()
+	publicKey := []byte(label + "-pub")
+	deviceID := devid.Derive(publicKey)
 	c, err := signaling.Dial(context.Background(), signaling.DialOptions{
 		URL:         wsURL,
 		UserID:      "alice",
 		Secret:      secret,
 		DeviceID:    deviceID,
-		PublicKey:   []byte(deviceID + "-pub"),
+		PublicKey:   publicKey,
 		Kind:        kind,
-		DisplayName: deviceID,
+		DisplayName: label,
 		ClientID:    "test-client",
 	})
 	if err != nil {
 		t.Fatalf("signaling.Dial(%s): %v", deviceID, err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	return c
+	return c, deviceID
 }
 
 func TestRegisterAndForwardConnect(t *testing.T) {
 	wsURL, secret, _, cleanup := startTestServer(t)
 	defer cleanup()
 
-	host := dialClient(t, wsURL, secret, "HOST00000000000A", signalv1.DeviceKind_DEVICE_KIND_WINDOWS_HOST)
-	cli := dialClient(t, wsURL, secret, "CLI000000000000A", signalv1.DeviceKind_DEVICE_KIND_CLI)
+	host, hostID := dialClient(t, wsURL, secret, "host", signalv1.DeviceKind_DEVICE_KIND_WINDOWS_HOST)
+	cli, cliID := dialClient(t, wsURL, secret, "cli", signalv1.DeviceKind_DEVICE_KIND_CLI)
 
 	// Initiator → host.
 	cands := []*signalv1.EndpointCandidate{{Address: "192.168.1.5", Port: 7777, Type: signalv1.CandidateType_CANDIDATE_TYPE_HOST}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := cli.SendConnect(ctx, "HOST00000000000A", cands); err != nil {
+	if err := cli.SendConnect(ctx, hostID, cands); err != nil {
 		t.Fatalf("cli.SendConnect: %v", err)
 	}
 	got, err := host.Recv(ctx)
 	if err != nil {
 		t.Fatalf("host.Recv: %v", err)
 	}
-	if got.GetFromDeviceId() != "CLI000000000000A" {
+	if got.GetFromDeviceId() != cliID {
 		t.Fatalf("expected from=CLI, got %q", got.GetFromDeviceId())
 	}
 	if len(got.GetCandidates()) != 1 || got.GetCandidates()[0].GetAddress() != "192.168.1.5" {
@@ -104,14 +107,14 @@ func TestRegisterAndForwardConnect(t *testing.T) {
 
 	// Host → initiator.
 	hostCands := []*signalv1.EndpointCandidate{{Address: "10.0.0.7", Port: 7777, Type: signalv1.CandidateType_CANDIDATE_TYPE_HOST}}
-	if err := host.SendConnect(ctx, "CLI000000000000A", hostCands); err != nil {
+	if err := host.SendConnect(ctx, cliID, hostCands); err != nil {
 		t.Fatalf("host.SendConnect: %v", err)
 	}
 	back, err := cli.Recv(ctx)
 	if err != nil {
 		t.Fatalf("cli.Recv: %v", err)
 	}
-	if back.GetFromDeviceId() != "HOST00000000000A" {
+	if back.GetFromDeviceId() != hostID {
 		t.Fatalf("expected from=HOST, got %q", back.GetFromDeviceId())
 	}
 	if len(back.GetCandidates()) != 1 || back.GetCandidates()[0].GetAddress() != "10.0.0.7" {
@@ -149,18 +152,22 @@ func TestForwardCrossUserBlocked(t *testing.T) {
 	defer hs.Close()
 	wsURL := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 
+	alicePub := []byte("alice-pub")
+	aliceID := devid.Derive(alicePub)
 	alice, err := signaling.Dial(ctx, signaling.DialOptions{
-		URL: wsURL, UserID: "alice", Secret: secretA, DeviceID: "ALICE0000000000A",
-		Kind: signalv1.DeviceKind_DEVICE_KIND_CLI, ClientID: "alice",
+		URL: wsURL, UserID: "alice", Secret: secretA, DeviceID: aliceID,
+		PublicKey: alicePub, Kind: signalv1.DeviceKind_DEVICE_KIND_CLI, ClientID: "alice",
 	})
 	if err != nil {
 		t.Fatalf("alice dial: %v", err)
 	}
 	defer alice.Close()
 
+	bobPub := []byte("bob-pub")
+	bobID := devid.Derive(bobPub)
 	bobClient, err := signaling.Dial(ctx, signaling.DialOptions{
-		URL: wsURL, UserID: "bob", Secret: secretB, DeviceID: "BOB000000000000A",
-		Kind: signalv1.DeviceKind_DEVICE_KIND_WINDOWS_HOST, ClientID: "bob",
+		URL: wsURL, UserID: "bob", Secret: secretB, DeviceID: bobID,
+		PublicKey: bobPub, Kind: signalv1.DeviceKind_DEVICE_KIND_WINDOWS_HOST, ClientID: "bob",
 	})
 	if err != nil {
 		t.Fatalf("bob dial: %v", err)
@@ -170,7 +177,7 @@ func TestForwardCrossUserBlocked(t *testing.T) {
 	// Alice tries to reach Bob's device id — server's lookup is scoped to
 	// alice's user, so Bob is invisible: expect a ServerError → client
 	// closes with that as the close error.
-	if err := alice.SendConnect(ctx, "BOB000000000000A", nil); err != nil {
+	if err := alice.SendConnect(ctx, bobID, nil); err != nil {
 		t.Fatalf("alice send: %v", err)
 	}
 	rcvCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -178,6 +185,30 @@ func TestForwardCrossUserBlocked(t *testing.T) {
 	_, recvErr := alice.Recv(rcvCtx)
 	if recvErr == nil {
 		t.Fatal("expected error, got none")
+	}
+}
+
+func TestRegisterRejectsMismatchedDeviceIdentity(t *testing.T) {
+	wsURL, secret, _, cleanup := startTestServer(t)
+	defer cleanup()
+
+	publicKey := []byte("actual-public-key")
+	otherDeviceID := devid.Derive([]byte("different-public-key"))
+	_, err := signaling.Dial(context.Background(), signaling.DialOptions{
+		URL:         wsURL,
+		UserID:      "alice",
+		Secret:      secret,
+		DeviceID:    otherDeviceID,
+		PublicKey:   publicKey,
+		Kind:        signalv1.DeviceKind_DEVICE_KIND_CLI,
+		DisplayName: "bad-device",
+		ClientID:    "test-client",
+	})
+	if err == nil {
+		t.Fatal("expected register rejection")
+	}
+	if !strings.Contains(err.Error(), "device identity") {
+		t.Fatalf("expected device identity error, got %v", err)
 	}
 }
 

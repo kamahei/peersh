@@ -12,7 +12,7 @@ Represents a physical device participating in peersh: a Windows host running `pe
 
 - **Identifier.** `device_id`, derived deterministically from the device's public key:
   ```
-  device_id = base32(sha256(publicKey)[:16])  // 16-character ASCII
+  device_id = base32(sha256(publicKey)[:10])  // 16-character ASCII
   ```
   Reinstalling produces a new device ID — that is intentional, treat it as a new device.
 - **Fields.**

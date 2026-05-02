@@ -35,7 +35,7 @@ What is **not** in the repo (operator-specific, generated locally):
 
 - Your Firebase / GCP project id.
 - The `app/lib/firebase_options.dart` real values (the stub is committed; running `flutterfire configure` overwrites locally).
-- `app/android/app/google-services.json` — gitignored.
+- The `app/android/app/google-services.json` real values (a buildable stub is committed).
 - `app/ios/Runner/GoogleService-Info.plist` — gitignored.
 - `firebase/.firebaserc` — gitignored. Use `firebase/.firebaserc.example` as a template.
 - Service-account JSON for peershd — keep under `local/` (already in `.gitignore`).
@@ -208,15 +208,19 @@ To prevent your project values from showing up in `git diff` (they're operator-s
 
 ```sh
 git update-index --skip-worktree app/lib/firebase_options.dart
+git update-index --skip-worktree app/android/app/google-services.json
+git update-index --skip-worktree app/firebase.json
 ```
 
 To re-track later (e.g. when the stub format changes upstream):
 
 ```sh
 git update-index --no-skip-worktree app/lib/firebase_options.dart
+git update-index --no-skip-worktree app/android/app/google-services.json
+git update-index --no-skip-worktree app/firebase.json
 ```
 
-`google-services.json` is in `.gitignore`, so no `--skip-worktree` is needed for it.
+The Android and Dart Firebase config stubs are committed so the default OSS build still works. Use `skip-worktree` after replacing them locally with your project values.
 
 ### 2. Build the APK
 

@@ -1,26 +1,44 @@
 {
   "project_info": {
-    "project_number": "0",
-    "project_id": "peersh-placeholder",
-    "storage_bucket": "peersh-placeholder.appspot.com"
+    "project_number": "000000000000",
+    "project_id": "peersh-firebase-placeholder",
+    "storage_bucket": "peersh-firebase-placeholder.appspot.com"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:0:android:0",
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
         "android_client_info": {
           "package_name": "dev.peersh.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "000000000000-placeholder.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "dev.peersh.app",
+            "certificate_hash": "0000000000000000000000000000000000000000"
+          }
+        },
+        {
+          "client_id": "000000000000-placeholder.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
-          "current_key": "PLACEHOLDER_RUN_FLUTTERFIRE_CONFIGURE"
+          "current_key": "replace-with-your-firebase-api-key"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "000000000000-placeholder.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

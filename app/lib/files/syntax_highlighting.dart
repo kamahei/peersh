@@ -1,8 +1,6 @@
-// Lifted from peersh/mobile/lib/files/syntax_highlighting.dart (MIT
-// → Apache 2.0). Identical algorithm; the language extension table here
-// targets the same set the peersh text viewer is likely to encounter
-// against a Windows host (PowerShell scripts, JSON / YAML config, source
-// files in many languages).
+// Language mapping for files commonly inspected from a Windows shell:
+// PowerShell scripts, JSON / YAML config, and source files in common
+// project languages.
 
 import 'package:flutter/painting.dart';
 import 'package:highlighting/highlighting.dart';

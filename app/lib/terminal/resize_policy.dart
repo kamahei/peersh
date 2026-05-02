@@ -1,8 +1,4 @@
-// Policy helpers for sizing the remote pseudo-console relative to the
-// xterm grid the user is looking at.
-//
-// Lifted from peersh/mobile/lib/terminal/resize_policy.dart (MIT) and
-// kept narrow on purpose — peersh only spawns Windows shells (pwsh,
+// Keep this policy narrow: peersh spawns Windows shells (pwsh,
 // powershell, cmd) plus user-supplied executables. The PowerShell
 // formatter caches the initial console width on startup, so a too-narrow
 // PTY makes Get-Process / Format-Table / table output truncate every
@@ -23,7 +19,10 @@ bool isPowerShellShell(String shell) {
   final name = executable.endsWith('.exe')
       ? executable.substring(0, executable.length - 4)
       : executable;
-  return name == 'pwsh' || name == 'powershell' || name.isEmpty || name == 'auto';
+  return name == 'pwsh' ||
+      name == 'powershell' ||
+      name.isEmpty ||
+      name == 'auto';
 }
 
 /// Computes the remote PTY's `cols` given the local visible cell count

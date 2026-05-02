@@ -5,10 +5,8 @@ import 'package:flutter/material.dart';
 /// In wrap mode the text uses `softWrap: true` and the parent
 /// `SingleChildScrollView` only scrolls vertically.
 ///
-/// In scroll mode the text disables wrapping and is wrapped in BOTH a
-/// vertical and a horizontal `SingleChildScrollView` so long lines stay
-/// horizontally scrollable. This mirrors the pattern used in
-/// `peersh/mobile/lib/screens/terminal_workspace.dart::_TerminalBody`.
+/// In scroll mode the text disables wrapping and uses nested scroll
+/// views so long lines stay horizontally scrollable.
 class LogView extends StatelessWidget {
   const LogView({
     super.key,
