@@ -115,7 +115,7 @@ class _PairPcScreenState extends ConsumerState<PairPcScreen> {
             if (code == null)
               FilledButton.icon(
                 onPressed: _busy ? null : _generate,
-                icon: const Icon(Icons.qr_code_2),
+                icon: const Icon(Icons.dialpad),
                 label: Text(_busy ? 'Generating…' : 'Generate code'),
               )
             else ...[

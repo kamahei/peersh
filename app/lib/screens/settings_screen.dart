@@ -90,7 +90,7 @@ class SettingsScreen extends ConsumerWidget {
             const Divider(),
             if (flavor.kFirebaseInitialized)
               ListTile(
-                leading: const Icon(Icons.qr_code_2_outlined),
+                leading: const Icon(Icons.dialpad_outlined),
                 title: const Text('Pair PC'),
                 subtitle: const Text(
                     'Generate a one-time code so peershd can mint Firebase tokens for your account.'),
