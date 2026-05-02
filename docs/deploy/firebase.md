@@ -1,4 +1,4 @@
-# peersh Firebase mode (Phase 5b)
+# peersh Firebase mode
 
 Firebase mode replaces the PSK / SQLite self-hosting path with Google sign-in + Firestore + FCM wake-up. It is the recommended path for an "official-hosted" peersh-signaling deployment serving more than a handful of users.
 
@@ -311,7 +311,7 @@ If the refresh token is lost (file deleted, machine reset) or revoked (mobile ap
 
 ### Advanced: service-account JSON path
 
-For multi-host deployments where a single operator wants to provision dozens of peershds without each one touching the mobile app, peershd still accepts the Phase 5b legacy flow:
+For multi-host deployments where a single operator wants to provision dozens of peershds without each one touching the mobile app, peershd still accepts the service-account-JSON flow:
 
 ```sh
 gcloud iam service-accounts create peershd-host \
@@ -323,7 +323,7 @@ gcloud projects add-iam-policy-binding <your-project-id> \
   --role="roles/firebaseauth.admin"
 ```
 
-If your org enforces `constraints/iam.disableServiceAccountKeyCreation` (most do by default), override at the project level first (see Phase 5b history). Then:
+If your org enforces `constraints/iam.disableServiceAccountKeyCreation` (most do by default), override at the project level first via `gcloud resource-manager org-policies set-policy`. Then:
 
 ```sh
 gcloud iam service-accounts keys create local/peershd-sa.json \

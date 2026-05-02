@@ -16,9 +16,9 @@ People who run powerful Windows machines at home — gaming rigs, workstations, 
 ## Goals
 
 - Provide a working mobile → home Windows PowerShell execution path over the public internet without operating any data-plane relay infrastructure.
-- Ship two equally first-class deployment modes: an officially hosted signaling option (Firebase-backed) for casual users, and a self-hostable single-binary or Docker option for everyone else.
+- Ship two equally first-class deployment modes: a self-hostable single-binary / Docker signaling server for everyone, and an optional Firebase-backed mode (Google sign-in, FCM wake-up, multi-PC picker) for operators who want them.
 - Make the wire protocol stable, documented, and versioned from day one.
-- Keep the official hosted option's running cost near zero at low-thousands-of-users scale by carefully shaping signaling-server access patterns.
+- Keep the Firebase mode's running cost near zero at low-thousands-of-users scale by carefully shaping signaling-server access patterns.
 - Preserve a coherent shell experience: a reconnecting client should be able to attach back to the same `pwsh` session it left (cwd, variables intact).
 - Be releasable as Apache 2.0 open source, with package boundaries and design choices that hold up under public review.
 
@@ -32,9 +32,9 @@ People who run powerful Windows machines at home — gaming rigs, workstations, 
 
 ## Success signals
 
-- A user with a Windows PC and an Android or iOS phone can pair them once and execute PowerShell commands from the phone with no port forwarding or VPN.
+- A user with a Windows PC and an Android phone can pair them once and execute PowerShell commands from the phone with no port forwarding or VPN.
 - A user with a small VPS can `docker run` a peersh signaling server in under five minutes, point the mobile app at it, and use the system without any Firebase account.
-- The signaling server, in Firebase mode, costs effectively nothing to run for hundreds to low thousands of users.
+- A signaling server in Firebase mode costs effectively nothing to run for hundreds to low thousands of users.
 - The wire protocol survives at least one minor capability addition without a `protocol_version` bump.
 - The codebase is organized clearly enough that a new contributor can locate "where would I add a new auth provider" or "where would I add a new store backend" within a few minutes of reading.
 
@@ -55,19 +55,18 @@ People who run powerful Windows machines at home — gaming rigs, workstations, 
 - **Stack.** Go for all backend components (Windows host, signaling server, mobile network layer). Flutter (Dart) for mobile UI. The mobile network layer is shared Go compiled via `gomobile bind`.
 - **Transport.** QUIC over UDP, mandatory TLS 1.3.
 - **Identity.** Device IDs are derived from the device's public key, not assigned by the server. The same key serves both as identity and as the credential for mTLS.
-- **Protocol.** Versioned from day one (`protocol_version` plus `capabilities` strings on every Hello).
+- **Protocol.** Versioned (`protocol_version` plus `capabilities` strings on every Hello).
 
 ## Environment
 
 - **Dev machine.** Windows 10/11 with JetBrains Rider or VS Code.
 - **Target host.** Windows 10/11. PowerShell 7 (`pwsh`) preferred; falls back to `powershell.exe` if `pwsh` is not present on PATH.
 - **Go.** 1.22 or later.
-- **Flutter.** Latest stable (used from the Phase 4 onward; not required earlier).
-- **Testing topology.** Same-LAN testing is sufficient for Phase 1. Multiple-network testing begins at Phase 2 (cooperative endpoints) and full NAT traversal testing begins at Phase 3.
+- **Flutter.** Latest stable.
 
 ## Where to read next
 
 - `docs/design/product-spec.md` — capabilities, user journeys, NFRs, and explicit out-of-scope items.
 - `docs/design/architecture.md` — system shape, components, transport, NAT strategy, auth and storage interfaces, protocol versioning, repository layout.
-- `docs/plan/implementation-plan.md` — the seven-phase roadmap.
-- `docs/plan/ai-implementation-guide.md` — how AI agents should approach this codebase phase by phase.
+- `docs/build.md` — how to build everything from source.
+- `docs/deploy/` — operator-side deployment walkthroughs.

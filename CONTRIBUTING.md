@@ -12,8 +12,8 @@ welcomes patches, bug reports, and ideas.
 - `mobile-core/` — gomobile-friendly Go shim used by the mobile app.
 - `app/` — Flutter app (Dart).
 - `proto/` — protobuf source. Generated Go lands at `core/protocol/...`.
-- `firebase/` — Firebase project artifacts (Cloud Functions, Firestore rules) for the official-hosted-server option.
-- `docs/` — design + operator documentation. The top-level index is `docs/README.md`; the read order for AI agents is in `docs/plan/ai-implementation-guide.md`.
+- `firebase/` — Firebase project artefacts (Cloud Functions, Firestore rules).
+- `docs/` — design + operator + user documentation. Index: `docs/README.md`.
 
 `AGENTS.md` is the durable instruction file for AI agents working on
 the codebase. Humans benefit from reading it too — it spells out the
@@ -23,7 +23,6 @@ project's invariants (no relay/TURN, signaling never sees data, etc.).
 
 - Read `docs/design/project-overview.md` for the design principles.
 - Read the relevant `docs/design/architecture.md` section.
-- Read `docs/plan/open-questions.md` for items still in flux.
 - Run `go test -count=1 ./...` and `cd app && flutter analyze` to
   baseline before changes.
 
@@ -69,21 +68,21 @@ The mobile AAR is gitignored; CI rebuilds it.
   lives at the boundaries (`server/ws/e2e_test.go`,
   `server/ws/phase3_e2e_test.go`).
 
-## Cross-phase invariants
+## Project invariants
 
-These are non-negotiable. They appear in `docs/plan/acceptance-criteria.md`'s
-"Cross-phase invariants" section and apply to every change:
+These are non-negotiable and apply to every change. They're also captured
+in `AGENTS.md`:
 
 - No relay / TURN. NAT-traversal failure surfaces an actionable error.
 - The signaling server never sees PowerShell command content.
-- mTLS-derived identity. `device_id = base32(sha256(publicKey)[:10])`.
-- Pluggable interfaces in their final shape from the phase that
-  introduced them.
-- No Firebase types in `core/` — the Firebase deps live under
-  `core/auth/firebase/` and `core/store/firestore/` only.
+- mTLS-derived identity. `device_id = base32(sha256(publicKey)[:16])`.
+- Pluggable interfaces stay in their final shape; adding a new
+  provider/store means implementing the interface, not editing `core/`.
+- No Firebase types in `core/` outside `core/auth/firebase/` and
+  `core/store/firestore/`.
 - No per-connection state in package globals.
-- Protocol stability. Once `protocol_version=1` is shipped, breaking
-  changes require bumping it. Optional features go through `capabilities`.
+- Protocol stability. Breaking changes require bumping
+  `protocol_version`. Optional features go through `capabilities`.
 - Cost discipline (Firebase mode). ≤ ~5 reads + ~2 writes per
   connection lifecycle.
 - Apache 2.0 only. Don't add dependencies whose license is incompatible.
@@ -92,12 +91,11 @@ These are non-negotiable. They appear in `docs/plan/acceptance-criteria.md`'s
 
 1. Open or comment on an issue first if the change is non-trivial.
 2. Fork → feature branch.
-3. Keep commits small and reviewable. The phase-by-phase commit history
-   in this repo is the model.
+3. Keep commits small and reviewable.
 4. Run the test suite + linters locally.
-5. Open the PR with a clear description tying it to a phase / open
-   question / issue.
-6. CI will run the Go test matrix + `flutter analyze` (when it lands).
+5. Open the PR with a clear description.
+6. The Android / peershd build workflows under `.github/workflows/` can
+   be invoked manually if you want CI artefacts for the change.
 
 ## Reporting bugs
 
@@ -115,8 +113,9 @@ of a public issue.
 
 (Mostly relevant for maintainers.)
 
-1. Update `mobile-core.Build` constant if shipping a new mobile AAR.
-2. Run the full test suite plus `flutter build apk --debug`.
-3. Tag a release; CI publishes the binaries / APK.
-4. Update `firebase/` artifacts if any Function or rules changed
-   (`firebase deploy`).
+1. Run the full test suite plus `flutter build apk --release`.
+2. Tag a release as `v<semver>` and push the tag — `.github/workflows/release.yml`
+   builds peershd Windows binaries + Android APK + .sha256 sidecars and
+   attaches them to a GitHub Release.
+3. Update `firebase/` artefacts if any Cloud Function or rule changed
+   (`firebase deploy --only firestore:rules,functions`).

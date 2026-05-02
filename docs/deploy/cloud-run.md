@@ -100,7 +100,7 @@ Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 36
 PEERSH_SIGNALING_BOOTSTRAP_PSK="alice:abc...:alice-laptop,bob:def...:bob-phone"
 ```
 
-## Migrating to Phase 5 (Firestore + Firebase Auth)
+## Migrating to Firebase mode (Firestore + Firebase Auth)
 
 The same Cloud Run service can be flipped to Firebase mode by updating env vars (no rebuild required):
 
@@ -112,7 +112,7 @@ PEERSH_SIGNALING_STORE_BACKEND=firestore,\
 PEERSH_SIGNALING_FIREBASE_PROJECT_ID=<your-firebase-project-id>
 ```
 
-The bootstrap-PSK env var becomes a no-op in Firebase mode. See [`firebase.md`](firebase.md) for the full Phase 5 walkthrough.
+The bootstrap-PSK env var becomes a no-op in Firebase mode. See [`firebase.md`](firebase.md) for the full walkthrough (Cloud Functions, Firestore rules, mobile FlutterFire setup, peershd `-firebase-login` / `-pair-code`).
 
 ## Files in `server/deploy/cloud-run/`
 

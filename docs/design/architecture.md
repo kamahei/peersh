@@ -1,6 +1,6 @@
 # Architecture
 
-This file describes the technical shape of peersh: components, transport, NAT traversal, pluggable interfaces, protocol versioning, device identity, threat model, and the proposed repository layout. For product behavior see `product-spec.md`. For phase order see `implementation-plan.md`.
+This file describes the technical shape of peersh: components, transport, NAT traversal, pluggable interfaces, protocol versioning, device identity, threat model, and the repository layout. For product behavior see `product-spec.md`.
 
 ## High-level diagram
 
@@ -14,7 +14,7 @@ This file describes the technical shape of peersh: components, transport, NAT tr
 [Mobile App]
 ```
 
-The signaling server is **only used for connection setup**. All actual data flows P2P over QUIC. This is a load-bearing invariant: it keeps server costs near zero in the official hosted mode, gives strong privacy guarantees (server operator cannot see command content), and removes the entire class of bandwidth-cost concerns from the design.
+The signaling server is **only used for connection setup**. All actual data flows P2P over QUIC. This is a load-bearing invariant: it keeps server costs near zero in Firebase mode, gives strong privacy guarantees (server operator cannot see command content), and removes the entire class of bandwidth-cost concerns from the design.
 
 ## Components
 
@@ -25,17 +25,17 @@ The signaling server is **only used for connection setup**. All actual data flow
 - Dart and Go communicate via Method Channel and EventChannel.
 - Owns: pairing UX, server list, device list, terminal UI, secure storage of credentials, FCM token registration (when Firebase mode is enabled), background persistence (Android Foreground Service / iOS Background Modes).
 
-#### Mobile architecture (Phase 4)
+#### Mobile architecture
 
 The mobile track is implemented as:
 
-- `mobile-core/` — a Go package with a gomobile-friendly API surface. Phase 4a shipped `Version()` and `Echo()`. Phase 4b adds the `Session` lifecycle: `OpenDirectSession`, `OpenSignalingSession` (registration + STUN + Punch + sequential dial), `Exec(cmd, Output)` (streaming), `ReadFile(path)` (one-shot). `Output` is a gomobile callback interface (`OnStdout` / `OnStderr` / `OnDone`) implemented platform-side. Internally `mobile-core` reuses `core/transport`, `core/transport/devtls`, `core/wire`, `core/protocol/peersh/v1`, `core/punching`, and `core/signaling`.
-- `scripts/build-mobile-core.{sh,cmd}` — wraps `gomobile bind` to produce `app/android/app/libs/peersh.aar` (Android, Windows or macOS host) and `app/ios/Frameworks/peersh.xcframework` (iOS, macOS host only).
-- `app/` — Flutter project (`flutter create app --org dev.peersh`). Riverpod + flutter_secure_storage + http are pinned in `pubspec.yaml`.
-- **MethodChannel `dev.peersh/bridge`** carries control-plane calls (`version`, `echo`, `openDirectSession`, `openSignalingSession`, `exec`, `readFile`, `closeSession`).
-- **EventChannel `dev.peersh/session/events`** carries per-session output events as `{sessionId, type, data, error}`. Events from all sessions multiplex through the same channel; consumers filter by `sessionId`.
-- Native bridges: `app/android/.../MainActivity.kt` (Kotlin, full implementation) and `app/ios/Runner/AppDelegate.swift` (Swift, code-complete pending the macOS xcframework build) keep a session map keyed by an incrementing `sessionId` and run blocking Go calls on a worker thread.
-- Dart UI: `ServersScreen` → `ServerEditorScreen` (with discovery prefill via `/.well-known/peersh.json`) → `TerminalScreen` (with the wrap/scroll toggle, IME bottom sheet, and text viewer entry point) → `TextViewerScreen`. `SettingsScreen` carries the persisted line-wrap default + font size. Riverpod providers under `app/lib/state/` persist `ServerEntry` records and `AppSettings` via `flutter_secure_storage`.
+- `mobile-core/` — a Go package with a gomobile-friendly API surface: `OpenDirectSession`, `OpenSignalingSession` (PSK), `OpenFirebaseSignalingSession`, `Session.OpenPTY` / `OpenPTYReattach`, `Session.Exec`, `Session.ReadFile`, plus the `Output` and `PTYHandler` callback interfaces. Internally `mobile-core` reuses `core/transport`, `core/transport/devtls`, `core/wire`, `core/protocol/peersh/v1`, `core/punching`, and `core/signaling`.
+- `scripts/build-mobile-core.{sh,cmd}` — wraps `gomobile bind` to produce `app/android/app/libs/peersh.aar` and `app/ios/Frameworks/peersh.xcframework` (iOS host on macOS only).
+- `app/` — Flutter project (`flutter create app --org dev.peersh`). Riverpod + flutter_secure_storage + http + xterm + firebase plugins are pinned in `pubspec.yaml`.
+- **MethodChannel `dev.peersh/bridge`** carries control-plane calls (session lifecycle, PTY lifecycle, file API, foreground-service start/stop).
+- **EventChannel `dev.peersh/session/events`** carries per-session and per-PTY events tagged with `sessionId` / `ptyId`.
+- Native bridges: `app/android/.../MainActivity.kt` (Kotlin) keeps the session and PTY maps; `PeershForegroundService.kt` holds the OS off the app process while connected. `app/ios/Runner/AppDelegate.swift` is code-complete pending an iOS build pipeline.
+- Dart UI: `ServersScreen` → optional `DevicePickerSheet` (Firebase entries) → `TerminalTabsScreen` (multi-tab xterm with reattach + special-keys bar) → `FileBrowserScreen` / `TextViewerScreen`. Auto-reconnect with exponential backoff sits in `TerminalTabsScreen`; "Session resumed" banner fades after 4 s on a successful reconnect.
 - The AAR / xcframework are not committed; each developer or CI rebuilds them via the build script.
 
 #### Discovery: `/.well-known/peersh.json`
@@ -63,52 +63,51 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 
 ### Windows host (`peershd`)
 
-- Single Go binary. Phase 1 ships as a console app; Phase 7 adds Windows Service registration.
-- Owns: device keypair generation and persistence, signaling registration, NAT-punched UDP socket, QUIC server, PowerShell session host (`pwsh.exe -NoExit -Command -` with stdin/stdout/stderr piping), session manager (idle timeout, ring buffer, reattach), FCM wake-up listener (Phase 5+).
+- Single Go binary, runnable as a console app or a Windows Service / scheduled logon task (`peershd -install` / `-install-logon-task`).
+- Owns: device keypair generation and persistence, signaling registration, NAT-punched UDP socket, QUIC server, ConPTY-backed PowerShell host, session manager (idle timeout, ring buffer, reattach), FCM wake-up listener (Firebase mode), self-update subcommand.
 
 ### CLI client (`peersh-cli`)
 
-- Go binary. Used in Phase 1 for end-to-end testing before the mobile app exists, and useful afterwards as a developer/operator tool.
+- Go binary. Useful for end-to-end testing without the mobile app, and as a developer / operator tool.
 
 ## Transport
 
 - **QUIC over UDP** via `github.com/quic-go/quic-go`. QUIC mandates TLS 1.3, which gives end-to-end encryption for free.
 - **mTLS.** Both ends authenticate to each other using their device keypairs. The same keypair that produces the device ID (see "Device identity") is used as the TLS credential.
-- **External `net.PacketConn` requirement.** The QUIC wrapper in `core/transport/` must accept an externally-supplied `net.PacketConn`. This is non-negotiable: Phase 3 (NAT hole punching) requires reusing the punched UDP socket as the underlying transport for QUIC. A transport API that creates its own socket internally cannot be retrofitted for hole punching, and discovering this in Phase 3 would mean redoing Phase 1's transport code. Phase 1 includes a small test that exercises this path with `quic.Transport`.
-- **Self-signed certs in development.** Phase 1 generates self-signed certs and the client uses `InsecureSkipVerify`, clearly marked as dev-only. Production-mode certificate handling is part of mTLS work in later phases.
+- **External `net.PacketConn` requirement.** The QUIC wrapper in `core/transport/` accepts an externally-supplied `net.PacketConn` so the punched UDP socket can be reused as the underlying transport for QUIC. A regression test (`TestExternalPacketConnContract`) exercises the path with `quic.Transport`.
+- **Self-signed certs in development.** `core/transport/devtls` generates self-signed certs and the client uses `InsecureSkipVerify`, clearly marked as dev-only via the grep-able `DevSelfSignedOnly` constant.
 
 ## NAT traversal
 
 - **UDP hole punching** is the only traversal mechanism. There is no relay/TURN fallback.
-- **Endpoint discovery** uses `pion/stun` to learn reflexive addresses. Phase 3 ships this as `core/punching.Discover`. Default STUN server is `stun.l.google.com:19302`; both `peershd` and `peersh-cli` accept a `-stun` flag to override.
-- **IPv6-first, IPv4-fallback.** `core/punching.SortCandidates` orders candidates SRFLX→HOST and IPv6→IPv4. The sequential dialer in `peersh-cli` tries them in that order with a 2 s timeout per candidate.
-- **Reuse of the punched UDP socket.** STUN, punch packets, and QUIC all share one `*net.UDPConn`. STUN runs once at startup before `transport.New` takes over reads; subsequent `punching.Punch` calls write to the same socket while QUIC is alive (`net.PacketConn.WriteTo` is goroutine-safe). This is what the external `net.PacketConn` requirement on Phase 1 transport exists to enable.
+- **Endpoint discovery** uses `pion/stun` to learn reflexive addresses through `core/punching.Discover`. Default STUN server is `stun.l.google.com:19302`; both `peershd` and `peersh-cli` accept a `-stun` flag to override.
+- **IPv6-first, IPv4-fallback.** `core/punching.SortCandidates` orders candidates SRFLX→HOST and IPv6→IPv4. The sequential dialer tries them in that order with a 2 s timeout per candidate.
+- **Reuse of the punched UDP socket.** STUN, punch packets, and QUIC all share one `*net.UDPConn`. STUN runs once at startup before `transport.New` takes over reads; subsequent `punching.Punch` calls write to the same socket while QUIC is alive (`net.PacketConn.WriteTo` is goroutine-safe).
 - **Punch packet shape.** A 4-byte ASCII sentinel `pesh` plus a 12-byte random nonce — 16 bytes total. The first byte does not have QUIC's long-header bit set, so the peer's `quic-go` Transport drops these as non-QUIC. Each punch burst is 5 packets at 200 ms intervals (~1 s total).
 - **Bounded retry policy.** Per-candidate dial timeout 2 s, single attempt each. With 4 candidates the worst-case budget is ~10 s including punch. On full failure the caller surfaces `punching.ErrTraversalFailed` ("Direct connection not possible from this network.").
 - **CGNAT-both-sides** is the documented fail mode: symmetric NATs allocate a different external port per destination, so the srflx learned from STUN is wrong for the peer. `peersh-cli` exits cleanly with the actionable error; no relay path exists.
-- **Optional birthday-paradox port scan** for symmetric NAT cases. Deferred per `docs/plan/open-questions.md`.
 
 ## Pluggable authentication
 
-The signaling server accepts a configurable auth provider via the `auth.Provider` interface. Three implementations are planned:
+The signaling server accepts a configurable auth provider via the `auth.Provider` interface. Three implementations ship:
 
-- **`none`** — no authentication. For development, LAN-only deployments, and the initial PoC. Lives at `core/auth/none/`.
-- **`psk`** — pre-shared key. The server holds a list of `(user_id, secret_key)` pairs (initially in the configured store). Clients sign their registration request with HMAC-SHA256 over the payload + timestamp + nonce. Recommended for personal and small-group self-hosting. Lives at `core/auth/psk/`.
-- **`firebase`** — verifies Firebase Auth ID tokens. Used by the official hosted server and any user who hosts their own Firebase project. Lives at `core/auth/firebase/`.
+- **`none`** — no authentication. For development, LAN-only deployments, and the same-LAN PoC. Lives at `core/auth/none/`.
+- **`psk`** — pre-shared key. The server holds a list of `(user_id, secret_key)` pairs in the configured store. Clients sign their registration request with HMAC-SHA256 over the payload + timestamp + nonce. Recommended for personal and small-group self-hosting. Lives at `core/auth/psk/`.
+- **`firebase`** — verifies Firebase Auth ID tokens (and, optionally, App Check tokens). Used by Firebase-mode deployments. Lives at `core/auth/firebase/`.
 
-**Out of scope for the initial roadmap**: OIDC, OAuth2, generic SSO. The interface should make adding them straightforward later, but they are not part of the planned phases.
+OIDC, OAuth2, and generic SSO are out of scope today; the interface accommodates adding them.
 
-The `auth.Provider` interface lives in `core/auth/`. **Firebase types must not leak into `core/`**: when the firebase provider is built (Phase 5), its dependency on the Firebase SDK lives entirely under `core/auth/firebase/`, not in any shared package.
+The `auth.Provider` interface lives in `core/auth/`. **Firebase types must not leak into `core/`**: the Firebase SDK dependency lives entirely under `core/auth/firebase/`.
 
 ## Pluggable storage
 
-The signaling server accepts a configurable store via the `store.Store` interface. Three implementations are planned:
+The signaling server accepts a configurable store via the `store.Store` interface. Three implementations ship:
 
 - **In-memory** — for development, tests, and ephemeral signaling-only deployments. Lives at `core/store/memory/`.
-- **SQLite** — recommended self-hosting default. No external DB to run. Lives at `core/store/sqlite/`.
-- **Firestore** — for the official server and Firebase-mode users. Lives at `core/store/firestore/`.
+- **SQLite** — recommended PSK self-host default. No external DB to run. Lives at `core/store/sqlite/`.
+- **Firestore** — for Firebase-mode deployments. Lives at `core/store/firestore/`.
 
-The `store.Store` interface lives in `core/store/`. The same separation rule applies: Firebase/Firestore types must not leak into `core/`.
+The `store.Store` interface lives in `core/store/`. Firebase/Firestore types must not leak into `core/`.
 
 For domain entities, lifecycle, and per-backend mapping notes, see `data-model.md`.
 
@@ -136,8 +135,6 @@ The wire protocol carries a version from day one. Immediately after the QUIC han
 
 **Mismatched major versions must fail cleanly with an actionable error.** Capability strings allow optional features to be negotiated without bumping the version. Bumping `protocol_version` is the only way to make a breaking change.
 
-This contract goes public the moment Phase 1 ships. Plan changes carefully.
-
 ## Wire formats
 
 - **Protobuf** for all messages on the wire (`google.golang.org/protobuf`). The `proto/` directory is the single source of truth for message definitions; generated Go lives under `core/protocol/`.
@@ -163,63 +160,68 @@ The full schema is in `proto/peersh/signal/v1/`. Implementation lives in `server
 - **Confidentiality.** The signaling server cannot read command contents. QUIC's TLS 1.3 protects in-flight traffic from any network observer.
 - **Authentication.** Connections use mTLS with keypair-derived device identities. The trusted directory (the configured store) maps device IDs to users; an attacker without the matching private key cannot impersonate a device, even if they control the signaling server.
 - **Out of model (initially).** Endpoint compromise (malware on a paired phone or PC). Side channels in QUIC implementations. Long-term key rotation strategy. These are tracked but not addressed in early phases.
-- **A dedicated `docs/security.md`** is intentionally deferred per the project plan ("as the project grows"). When the project gains real users, that file is created and this section is consolidated into it.
+- **A dedicated `docs/security.md`** is deferred until real-user scale demands it; for now the threat-model summary lives here and security disclosure is in `SECURITY.md`.
 
-## Cost discipline (official hosted mode)
+## Cost discipline (Firebase mode)
 
-To keep the official hosted server within the Firebase/GCP free tier at low-thousands-of-users scale:
+To keep a Firebase-mode signaling server within the Firebase / GCP free tier at low-thousands-of-users scale:
 
 - Each connection lifecycle should consume **at most ~5 Firestore reads and ~2 writes**. Design Firestore access patterns and indexes against this budget.
 - Use **client-side caching** for device info and public keys. Don't read what the client already knows.
 - **No Firestore real-time listeners** for the signaling path. Signaling uses WebSocket with in-memory server-side state.
 - Batch operations where possible.
-- **Cost guardrails** at the project level (Phase 5+): Budget Alerts, App Engine Daily Spending Limit, auto-disable of the FCM Cloud Function when a budget breach occurs.
+- **Cost guardrails** at the project level: Cloud Billing budgets, the `budgetGuard` Cloud Function (which sets `ops/budget-state` and short-circuits `onSessionCreated`), and the App Check enforcement switch on Register frames.
 
-## Repository layout (proposed starting point)
-
-This is a **starting proposal**, not a frozen layout. Phase 1 planning is the appropriate moment to refine it.
+## Repository layout
 
 ```
 peersh/
 ├── core/                        # Shared Go packages
 │   ├── protocol/                # Generated protobuf message code
 │   ├── transport/               # QUIC wrapper around quic-go
-│   ├── punching/                # UDP hole punching (Phase 3)
-│   ├── signaling/               # Signaling client (Phase 2+)
+│   ├── punching/                # UDP hole punching
+│   ├── signaling/               # Signaling client
 │   ├── auth/                    # auth.Provider interface + implementations
 │   │   ├── none/
-│   │   ├── psk/                 # added in Phase 2
-│   │   └── firebase/            # added in Phase 5
+│   │   ├── psk/
+│   │   └── firebase/
 │   └── store/                   # store.Store interface + implementations
 │       ├── memory/
-│       ├── sqlite/              # added in Phase 2
-│       └── firestore/           # added in Phase 5
+│       ├── sqlite/
+│       └── firestore/
 ├── windows/                     # Windows-side binary
-│   ├── cmd/peershd/
+│   ├── cmd/peershd/             # peershd entry point + service / update
 │   ├── pwsh/                    # PowerShell session host
-│   └── service/                 # Windows Service registration (Phase 7)
+│   ├── pty/                     # ConPTY wrapper
+│   ├── ptyhost/                 # PTY persistence + ring buffer
+│   ├── firebase/                # Browser sign-in / pairing / refresh-token
+│   └── installer/               # WiX MSI definition
 ├── server/                      # Signaling server
 │   ├── cmd/peersh-signaling/
-│   ├── ws/                      # WebSocket handlers
-│   ├── room/                    # pairing/matching logic
-│   └── deploy/                  # Dockerfile, compose, etc.
-├── mobile-core/                 # gomobile bind wrappers (Phase 4)
-├── app/                         # Flutter project (Phase 4)
+│   ├── ws/                      # WebSocket handler
+│   ├── room/                    # pairing / matching logic
+│   ├── ratelimit/               # token-bucket rate limiter
+│   ├── admin/                   # admin endpoints (PSK CRUD)
+│   └── deploy/                  # Dockerfile, Cloud Run / Render / Fly templates
+├── cli/cmd/peersh-cli/          # peersh-cli REPL client
+├── mobile-core/                 # gomobile bind wrappers (Go API)
+├── app/                         # Flutter project
 │   ├── android/
 │   ├── ios/
 │   └── lib/
+├── firebase/                    # Firebase project artefacts (rules, functions)
 ├── proto/                       # .proto files (single source of truth)
-├── docs/                        # Architecture, self-hosting, protocol docs
+├── docs/                        # Design + deploy + user manual
 ├── scripts/                     # Build, codegen, deployment helpers
 ├── LICENSE                      # Apache 2.0
 └── README.md
 ```
 
-The repository uses a Go workspace (`go.work`) to manage the multiple Go modules. Module boundaries follow the directory structure: `core/` is one module, `server/` another, `windows/` another, `mobile-core/` another. Exact module count and boundaries are decided in Phase 1 planning.
+The repository uses a Go workspace (`go.work`) to manage the multiple Go modules: `core/`, `server/`, `windows/`, `mobile-core/`, `cli/`.
 
 ## Recurring architectural rules
 
 - **No Firebase types in `core/`.** All Firebase/Firestore symbols live under `core/auth/firebase/` or `core/store/firestore/`. Importing the Firebase SDK from anywhere else is a layering violation.
 - **No per-connection state in package globals.** The codebase must support hosting many concurrent connections. State that varies per connection is owned by structs you can construct and tear down, not by package-level variables.
-- **Pluggable interfaces from day one, even when only the trivial implementation ships.** Phase 1 ships only `auth/none` and `store/memory`, but the interfaces are in their final shape and the wiring is interface-driven.
-- **Protocol stability is a contract, not a goal.** The first time Phase 1 is shipped publicly, `protocol_version=1` is locked. Capability strings handle additive changes; only `protocol_version` bumps handle breaking changes.
+- **Pluggable interfaces in their final shape.** `auth.Provider` and `store.Store` are public surface; adding a new provider/store means implementing the interface, not editing `core/`.
+- **Protocol stability is a contract.** Once a `protocol_version` is shipped, breaking changes require a version bump. Capability strings on Hello messages handle additive changes.

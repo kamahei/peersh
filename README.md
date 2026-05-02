@@ -54,82 +54,6 @@ peersh> Get-Process | Select-Object -First 5 | Out-String
 
 For the Google-sign-in flow with multi-PC picker etc., follow [`docs/deploy/firebase.md`](docs/deploy/firebase.md). It includes the GCP / Firebase project setup, Cloud Run deploy, Cloud Functions, mobile FlutterFire config, and the peershd browser-sign-in / pair-code flows.
 
-## Status
-
-**Phases 1–6b + 8 are shipped (Android + server). iOS device validation + Phase 5b mobile FlutterFire integration remain.** Phases 1–3 shipped the data path (LAN PoC, signaling+PSK+SQLite, NAT hole punching). Phase 4 shipped the Android-side mobile UI plus three peersh-parity features. Phase 5 added the Firebase / official-hosted-server side server-side. Phase 6 + 6b shipped server-side session reattach for the legacy Exec model **and** full PTY persistence with a 256 KiB scrollback ring buffer + multi-tab UI. Phase 8 replaced the one-shot Exec path with an interactive ConPTY-backed terminal (`xterm.dart`), an OSC 9;9 cwd-tracking shell wrapper, and a session-scoped file browser + syntax-highlighted text viewer. The signaling server's `/metrics` endpoint is gated behind a bearer token (fail-closed). Mobile-side FlutterFire (Google sign-in, FCM token registration, App Check) and iOS-on-macOS device validation are the remaining items.
-
-Phase progress:
-
-1. Same-LAN PoC (Go service + CLI client over LAN) — **done**
-2. Signaling server with PSK auth (self-host path) — **done**
-3. NAT hole punching (P2P across home networks / mobile data) — **done**
-4. Flutter mobile app + `gomobile` integration — **Android done; iOS xcframework + real-device run deferred**
-5. Firebase Auth + FCM wake-up (official hosted path) — **server-side done; mobile FlutterFire deferred (5b)**
-6. Background persistence + session resumption (Exec) — **done**
-6b. Multi-tab terminal + PTY persistence + reattach — **done; auto-reconnect + Foreground Service / iOS BG Modes deferred**
-7. Polish, public release, and beyond — **incremental: Windows Service + Logon Task install, Prometheus /metrics (now token-gated), SECURITY/CONTRIBUTING, Render/Fly/Cloud Run deploy templates done; MSI / store submission / OIDC / logo deferred**
-8. Interactive PTY terminal + session-scoped file API — **done (Tier 1: ConPTY + xterm.dart; Tier 2: OSC 9;9 cwd tracking + file browser + syntax-highlighted viewer)**
-
-Each phase is a separate work session. AI agents working in this repository default to Plan Mode at the start of each phase — see `AGENTS.md` and `docs/plan/ai-implementation-guide.md`.
-
-## Build and verify Phase 1
-
-### Prerequisites
-
-- **Go 1.22+** on PATH.
-- **`buf` and `protoc-gen-go`** for regenerating protobuf code (only needed if you change `.proto` files):
-  ```sh
-  go install github.com/bufbuild/buf/cmd/buf@latest
-  go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-  ```
-- **Windows 10 / 11** with PowerShell 7 (`pwsh.exe`) preferred. Falls back to `powershell.exe` if `pwsh` is not on PATH.
-
-### Regenerate protobuf code (only if you edited `proto/`)
-
-```sh
-scripts/gen-proto.sh        # macOS / Linux / Git Bash
-scripts\gen-proto.cmd       # Windows cmd / PowerShell
-```
-
-Generated Go lands in `core/protocol/peersh/v1/` and is committed to the repository. You only need to regenerate after editing `.proto` files.
-
-### Build
-
-```sh
-go build -o bin/peershd.exe ./windows/cmd/peershd
-go build -o bin/peersh-cli.exe ./cli/cmd/peersh-cli
-```
-
-### Run the same-LAN demo
-
-In one terminal (Windows host):
-
-```sh
-./bin/peershd.exe -listen :7777
-```
-
-`peershd` generates a self-signed dev cert under `%LOCALAPPDATA%\peersh\dev\` on first run (override with `-cert-dir`). Subsequent runs reuse it.
-
-In another terminal (any machine that can reach the host on UDP 7777):
-
-```sh
-./bin/peersh-cli.exe -addr <host-ip>:7777
-peersh> Get-Process | Select-Object -First 5 | Out-String
-```
-
-You should see a real `Get-Process` table streamed back. Type `exit` or send EOF to quit.
-
-> The Phase 1 client uses `InsecureSkipVerify` against the self-signed cert. The grep-able constant `transport/devtls.DevSelfSignedOnly = true` makes that obvious in any audit. Real certificate verification arrives once signaling makes mutual auth meaningful (Phase 2+).
-
-### Run tests
-
-```sh
-go test ./core/...                # interfaces, framing, transport contract
-go test ./windows/...             # PowerShell session host (requires pwsh or powershell on PATH)
-```
-
-The load-bearing test for Phase 3 forward-compatibility is `TestExternalPacketConnContract` in `core/transport/`: it constructs `*net.UDPConn` for both server and client outside the transport package and runs a full QUIC stream through them. Phase 3's hole-punched socket will reuse this contract.
-
 ## Tech direction
 
 - **Backend (host, signaling, mobile network layer):** Go.
@@ -143,21 +67,16 @@ The load-bearing test for Phase 3 forward-compatibility is `TestExternalPacketCo
 
 ## Documentation map
 
-Project documentation lives under `docs/`. The top-level entry is [`docs/README.md`](docs/README.md), which lists read order for new contributors. Quick map:
+Top-level: [`docs/`](docs/). Quick links:
 
-- **Design** — `docs/design/`: project overview, product spec, architecture, data model, glossary.
-- **Plan** — `docs/plan/`: implementation plan (7-phase roadmap), task breakdown, acceptance criteria, open questions, AI-agent guide.
-- **Deploy** — `docs/deploy/`: hub + per-target walkthroughs (Cloud Run, Render.com, generic self-hosting, Phase 5 Firebase).
-
-For AI agents specifically, see `AGENTS.md` at the repository root for the short-form working instructions, and `docs/plan/ai-implementation-guide.md` for the full operating manual.
+- **For users:** [`docs/build.md`](docs/build.md) (build everything from source), [`docs/user-manual.md`](docs/user-manual.md) (mobile app), [`docs/backup.md`](docs/backup.md) (backing up local secrets).
+- **For operators:** [`docs/deploy/`](docs/deploy/) — Cloud Run, Render, generic self-hosting, Firebase mode.
+- **For contributors:** [`docs/design/`](docs/design/) — project overview, architecture, data model, glossary. Plus [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Environment
 
-- **Dev machine.** Windows 10 / 11 with JetBrains Rider or VS Code.
+- **Dev machine.** Windows / macOS / Linux. Go 1.22+, Flutter (latest stable), JDK 17 for Android, Xcode for iOS.
 - **Target host.** Windows 10 / 11. PowerShell 7 (`pwsh`) preferred; falls back to `powershell.exe` if `pwsh` is not on PATH.
-- **Go.** 1.22 or later.
-- **Flutter.** Latest stable (used from Phase 4 onward).
-- **Test topology.** Same-LAN testing for Phase 1. Multiple-network testing from Phase 2. Real NAT traversal from Phase 3.
 
 ## License
 

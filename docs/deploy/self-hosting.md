@@ -4,7 +4,7 @@ This guide covers the **target-agnostic operational knowledge**: TLS, PSK lifecy
 
 - [`cloud-run.md`](cloud-run.md) — GCP Cloud Run (pay-per-use, free tier covers personal use)
 - [`render-com.md`](render-com.md) — Render.com Blueprint (zero config, $7/mo Starter for persistence)
-- [`firebase.md`](firebase.md) — Phase 5 Firestore + Cloud Functions backend
+- [`firebase.md`](firebase.md) — Firebase mode (Firestore + Cloud Functions, Google sign-in)
 
 The signaling server is **only used for connection setup** — pairing devices and exchanging endpoint candidates. Actual PowerShell sessions flow peer-to-peer over QUIC and never touch the server. See `../design/architecture.md` for the full data-flow.
 
@@ -138,7 +138,7 @@ Every TOML field has a matching `PEERSH_SIGNALING_*` env var. Env vars override 
 | `PEERSH_SIGNALING_BOOTSTRAP_PSK` | seed PSKs at startup (`user:hex[:label],...`) |
 | `PEERSH_SIGNALING_METRICS_TOKEN` | bearer token gating the `/metrics` endpoint (empty = endpoint disabled, fail-closed) |
 
-## Metrics (Phase 7)
+## Metrics
 
 `peersh-signaling` can expose Prometheus metrics at `/metrics`. The endpoint is **fail-closed**: it returns `404` until you configure `PEERSH_SIGNALING_METRICS_TOKEN` (or `metrics_token` in TOML), so a misconfigured public deploy never silently leaks operational telemetry.
 
@@ -164,7 +164,7 @@ Counters and gauges:
 
 Plus the standard Go runtime / process metrics from `prometheus/client_golang`.
 
-## Windows host service / logon task (Phase 7)
+## Windows host service / logon task
 
 `peershd` runs in three modes:
 
@@ -197,7 +197,7 @@ For ephemeral filesystems (Cloud Run / Render Free), use the `PEERSH_SIGNALING_B
 
 ### PSK secret storage
 
-Phase 2 stores PSK secrets **as raw bytes** in SQLite. HMAC-SHA256 verification needs the secret server-side, so a hash-only scheme cannot work. Trade-off:
+peersh-signaling stores PSK secrets **as raw bytes** in SQLite. HMAC-SHA256 verification needs the secret server-side, so a hash-only scheme cannot work. Trade-off:
 
 - A breach of the SQLite file exposes every PSK directly. **Treat the file as sensitive material.**
 - Recommended: host the database on a disk-encrypted volume. On Linux, that's typically an LUKS-encrypted partition or a per-volume `cryptsetup` block device. On a public-cloud VPS, enable provider-side encryption.
@@ -218,11 +218,11 @@ The defaults (10 connections/min/IP, 10 registrations/min/user, 30 connects/min/
 
 ### Pairing model
 
-Phase 2 uses **implicit pairing**: any two devices that authenticate under the same PSK user_id can address each other. A separate explicit pairing token / QR code arrives in Phase 4 with the mobile app. Until then, give each user their own user_id (and PSK) and treat the PSK itself as the device-pair credential.
+PSK mode uses **implicit pairing**: any two devices that authenticate under the same PSK user_id can address each other. Give each user their own user_id (and PSK) and treat the PSK itself as the device-pair credential.
 
-### Mobile-app discovery (Phase 4a)
+### Mobile-app discovery
 
-The signaling server serves `/.well-known/peersh.json` at its HTTPS root so that the mobile app (Phase 4b) can find the WebSocket endpoint, recommended STUN servers, and supported auth providers from a hostname alone. Operators populate the `[discovery]` section of `signaling.toml` (or set `PEERSH_SIGNALING_DISCOVERY_WS_URL` via env var):
+The signaling server serves `/.well-known/peersh.json` at its HTTPS root so that the mobile app can find the WebSocket endpoint, recommended STUN servers, and supported auth providers from a hostname alone. Operators populate the `[discovery]` section of `signaling.toml` (or set `PEERSH_SIGNALING_DISCOVERY_WS_URL` via env var):
 
 ```toml
 [discovery]
@@ -232,7 +232,7 @@ stun_servers = ["stun.l.google.com:19302"]
 
 The endpoint accepts GET and HEAD only.
 
-### NAT traversal (Phase 3)
+### NAT traversal
 
 `peershd` and `peersh-cli` discover their public address via STUN (`stun.l.google.com:19302` by default; override with the `-stun` flag) and include it as a SERVER_REFLEXIVE candidate alongside their LAN addresses. After exchanging candidates through signaling, both sides fire a brief burst of UDP punch packets at the peer's reflexive address to install NAT mappings, then `peersh-cli` QUIC-dials the candidates in preferred order (IPv6-srflx → IPv4-srflx → IPv6-host → IPv4-host). When NAT traversal cannot succeed (typically symmetric CGNAT on both ends), `peersh-cli` exits with "Direct connection not possible from this network." — peersh **never** falls back to a relay.
 
@@ -320,7 +320,7 @@ Once everything is running:
 
 1. From the host: `peershd ... -listen :7777` should log `dev cert ready`, `listening for QUIC`, and `registered with signaling server` within a couple of seconds.
 2. From a client machine: `peersh-cli ... -target <device-id>` should log `registered with signaling`, `requesting connect`, `rendezvous complete`, `connected`, and `handshake complete`.
-3. At the `peersh>` prompt, run `Get-Process | Select-Object -First 3 | Out-String`. Output should stream back identically to the Phase 1 same-LAN demo.
+3. At the `peersh>` prompt, run `Get-Process | Select-Object -First 3 | Out-String`. Output should stream back identically to a same-LAN run.
 
 ## Troubleshooting
 
@@ -330,4 +330,4 @@ Once everything is running:
 | `signaling: register rejected by server: auth: psk: signature invalid` | Wrong PSK file content or the user ID does not match the PSK's user. Re-generate via `psk add` and re-distribute. |
 | `signaling: register rejected by server: auth: psk: signed_at outside acceptable skew` | The client's clock is skewed by more than 60 seconds. Sync NTP. |
 | `room: target device is not registered` (returned as a `ServerError`) | The target device id is wrong, or `peershd` isn't currently connected to the signaling server. Check the host's logs. |
-| `Dial QUIC: ... no route to host` | The host's advertised candidates aren't reachable from the client's network. Phase 2 assumes cooperative endpoints (same LAN, port forward, or VPN); real NAT traversal arrives in Phase 3. |
+| `Dial QUIC: ... no route to host` | The host's advertised candidates aren't reachable from the client's network. NAT traversal works for cone NATs; symmetric / CGNAT-on-both-sides cannot be punched. |

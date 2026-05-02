@@ -2,9 +2,7 @@
 
 This file defines the durable domain entities used by peersh: their identifiers, fields, invariants, lifecycle, and how each pluggable store backend (memory, SQLite, Firestore) maps to them. For the storage interface and pluggability rules, see `architecture.md`.
 
-The schema below is intentionally minimal for the early phases. Fields are added as they are needed, not preemptively. The Firestore schema in particular is **open** — see `open-questions.md` — and gets locked in during Phase 5 planning.
-
-**Phase 1 scope:** the `store.Store` interface ships with `Device` and `Session` only. `PSKRecord` and `Pairing` (described below) appear in the interface starting in Phase 2 as additive interface extensions; their entries below describe the full eventual shape so callers can see the trajectory.
+The schema is intentionally minimal. Fields are added as they are needed, not preemptively.
 
 ## Entities
 
@@ -25,7 +23,7 @@ Represents a physical device participating in peersh: a Windows host running `pe
   - `display_name` (string, user-supplied)
   - `created_at` (timestamp)
   - `last_seen_at` (timestamp; updated on each signaling registration)
-  - `fcm_token` (string, optional; used in Phase 5+ for wake-up)
+  - `fcm_token` (string, optional; used by Firebase mode for wake-up)
 - **Invariants.**
   - `device_id` is fully determined by `public_key`. Servers verify this on registration.
   - The same `public_key` cannot be registered to two different `owner_user_id`s.
@@ -41,7 +39,7 @@ Represents an account that owns devices.
 
 - **Identifier.** `user_id`. Provider-dependent:
   - In `firebase` mode: the Firebase UID.
-  - In `psk` mode: a server-assigned identifier; exact form is TBD (see `open-questions.md`).
+  - In `psk` mode: a server-assigned identifier set by the operator at PSK creation time.
   - In `none` mode: there is no real user; a fixed sentinel user is used.
 - **Fields.**
   - `user_id` (string, primary key)
@@ -68,7 +66,7 @@ Represents the act of associating a mobile device with a Windows host under the 
   - Both devices must exist and have `owner_user_id == user_id`.
   - A device pair belongs to exactly one user; cross-user pairing is not supported.
 - **Lifecycle.**
-  - Created during the pairing flow (Phase 2+).
+  - Created during the pairing flow.
   - Updated each time the pair is used to set up a connection.
   - Deleted when the user removes either device or explicitly unpairs.
 
@@ -92,9 +90,9 @@ Represents an active or recently-active connection between a paired mobile devic
 - **Lifecycle.**
   - Created when a client establishes a connection.
   - `state` transitions: `setting_up → connected → disconnected → connected → ... → expired | closed`.
-  - Output emitted while disconnected is captured in a host-side ring buffer keyed by `session_id` (Phase 6).
-  - Idle timeout default is on the order of 30 minutes; configurability per user/server is open.
-- **Storage scope.** Sessions are typically tracked in memory on the host (`peershd`) for the active shell process plus its buffered output. The signaling server may also persist a minimal session record (for FCM wake-up routing in Phase 5+).
+  - Output emitted while disconnected is captured in a host-side 256 KiB ring buffer keyed by `session_id`.
+  - Idle timeout defaults to 30 minutes.
+- **Storage scope.** Sessions are tracked in memory on the host (`peershd`) for the active shell process plus its buffered output. The signaling server also persists a minimal session record under `users/{uid}/sessions/{sessionId}` in Firebase mode so the `onSessionCreated` Cloud Function can fire FCM wake-up.
 
 ### PSKRecord
 
@@ -108,14 +106,14 @@ Represents a `(user_id, secret_key)` pair for the `psk` auth provider.
   - `created_at` (timestamp)
   - `revoked_at` (timestamp, optional)
 - **Invariants.**
-  - `secret_key` is high-entropy (≥ 32 bytes recommended). Generation is the operator's responsibility; tooling for generation is part of Phase 2.
+  - `secret_key` is high-entropy (≥ 32 bytes recommended). `peersh-signaling psk add` generates one for you.
   - A revoked PSK must not authenticate.
 - **Lifecycle.**
-  - Created by the server operator (CLI or admin tool, Phase 2).
+  - Created by the server operator via the `peersh-signaling psk add` admin command.
   - Distributed out-of-band to the user.
   - Revoked by the operator when needed.
 - **Storage scope.** Lives only in stores that have a real backing for the `psk` provider — typically SQLite for self-hosting. Not present in `memory` (or only ephemerally for tests) and not used in Firebase mode.
-- **Storage shape (Phase 2 resolution).** The `secret` is stored as **raw bytes**, not as a hash. HMAC-SHA256 verification needs the secret server-side, so a hash-only scheme cannot work. Trade-off: a server breach exposes every PSK directly. Mitigation: host the SQLite file on disk-encrypted storage; see `docs/deploy/self-hosting.md`. Future SCRAM-SHA-256 derivation is possible if there is real demand.
+- **Storage shape.** The `secret` is stored as **raw bytes**, not as a hash. HMAC-SHA256 verification needs the secret server-side, so a hash-only scheme cannot work. Trade-off: a server breach exposes every PSK directly. Mitigation: host the SQLite file on disk-encrypted storage; see `docs/deploy/self-hosting.md`.
 
 ## Per-backend mapping
 
@@ -126,25 +124,23 @@ Represents a `(user_id, secret_key)` pair for the `psk` auth provider.
 
 ### `sqlite`
 
-- Single-file database (path configurable). Recommended self-hosting default.
-- Tables map roughly 1:1 to entities above (`devices`, `users`, `pairings`, `psk_records`). Sessions may live entirely in memory on `peershd` and not be persisted by the signaling server unless wake-up routing requires it.
-- Schema migrations are handled by a small embedded migration runner. The Phase 2 plan defines the initial schema.
+- Single-file database (path configurable). Recommended PSK self-host default.
+- Tables map roughly 1:1 to entities above (`devices`, `users`, `pairings`, `psk_records`). Sessions live entirely in memory on `peershd`.
+- Schema migrations are handled by a small embedded migration runner.
 
 ### `firestore`
 
-- Used by the official hosted server.
-- Document collections roughly mirror the entities; access patterns are designed to fit within the cost budget (≤ ~5 reads + ~2 writes per connection lifecycle).
-- Security rules enforce per-user isolation: a user can only read/write documents under their own `user_id`.
-- The exact Firestore schema is **open**; it gets locked in during Phase 5 planning. See `open-questions.md`.
+- Used by Firebase mode.
+- Document layout: `users/{uid}` doc; `users/{uid}/devices/{deviceId}` (device + fcm_token); `users/{uid}/sessions/{sessionId}` (triggers `onSessionCreated`); `users/{uid}/pairings/{pairingId}` (legacy). Plus admin-only `pairing_codes/{code}` (mobile pairing flow) and `ops/budget-state` (cost guardrail).
+- Access patterns fit within the cost budget (≤ ~5 reads + ~2 writes per connection lifecycle).
+- Security rules enforce per-user isolation: a user can only read/write documents under their own `user_id`. Admin-only paths deny all client access.
 
 ## What is not in the data model
 
 - **Command output history.** Buffered output during disconnects lives only in a host-side ring buffer for the duration of the session. It is not persisted.
 - **Audit logs.** Out of scope for the initial roadmap. May be added later under a clear opt-in.
-- **Telemetry / metrics.** Out of scope until Phase 7's optional Prometheus endpoint on the signaling server.
+- **Telemetry / metrics.** The signaling server exposes Prometheus counters at `/metrics` (token-gated; see `docs/deploy/self-hosting.md`).
 
 ## Cross-references
 
 - `architecture.md` — interface design (`store.Store`), pluggability rules.
-- `implementation-plan.md` — which entities and backends land in which phase.
-- `open-questions.md` — exact Firestore schema, PSK distribution UX, idle timeout configurability.

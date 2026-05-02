@@ -66,9 +66,8 @@ It **does not see** PowerShell commands, output, file contents, or
 the QUIC payload bytes. Those flow peer-to-peer.
 
 If you self-host, you control the retention policy on your own logs.
-The official hosted instance (Phase 5+) keeps signaling logs for a
-maximum of 30 days for abuse-investigation purposes and discards them
-afterwards.
+Operators of public-facing instances should set their own retention
+policy (the project recommends ≤ 30 days for abuse-investigation).
 
 ### The Windows host (`peershd`)
 
