@@ -76,9 +76,10 @@ class FirebaseDeviceDiscoveryService implements DeviceDiscoveryService {
 
   /// Server-side `core/proto/peersh/signal/v1.DeviceKind` enum:
   ///   0 = unspecified
-  ///   1 = mobile client
-  ///   2 = windows host
-  static const int _kindWindowsHost = 2;
+  ///   1 = windows host
+  ///   2 = mobile client
+  ///   3 = cli
+  static const int _kindWindowsHost = 1;
 
   @override
   Future<List<DiscoveredDevice>> list(ServerEntry server) async {
