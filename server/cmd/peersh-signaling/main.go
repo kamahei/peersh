@@ -150,6 +150,7 @@ func runServe(args []string) error {
 		DeviceLimit:      ratelimit.New(config.PerSecond(cfg.RateLimit.DevicePerMinute), cfg.RateLimit.DeviceBurst),
 		Logger:           logger,
 		Metrics:          metrics,
+		IdleTimeout:      cfg.IdleTimeout.Duration,
 	})
 
 	mux := http.NewServeMux()

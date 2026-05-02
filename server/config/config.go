@@ -39,6 +39,15 @@ type Config struct {
 	Discovery DiscoveryConfig `toml:"discovery"`
 	Firebase  FirebaseConfig  `toml:"firebase"`
 
+	// IdleTimeout caps how long a registered WebSocket may sit
+	// without sending any frame. The server then closes it with a
+	// ServerError("idle_timeout"). Wake-listener-mode hosts hold the
+	// WS for under 20 seconds, so 60 s is comfortable defense.
+	// Set to "0s" to use the default; negative ("-1s") disables.
+	// Configured via TOML key `idle_timeout` or env var
+	// PEERSH_SIGNALING_IDLE_TIMEOUT.
+	IdleTimeout Duration `toml:"idle_timeout"`
+
 	// BootstrapPSKs is the list of PSK records to ensure-exist on every
 	// server startup. Useful on platforms with ephemeral filesystems
 	// (Cloud Run, Render Free, etc.) where the SQLite store does not
@@ -234,6 +243,11 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_METRICS_TOKEN"); v != "" {
 		cfg.MetricsToken = v
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_IDLE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.IdleTimeout = Duration{d}
+		}
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v

@@ -19,6 +19,12 @@ type Metrics struct {
 	ConnectsRejected  *prometheus.CounterVec // reason in { "target_unknown", "cross_user_forbidden", "self_target", "rate_limit" }
 
 	ActiveConnections prometheus.Gauge
+
+	// IdleClosed counts connections the server tore down because the
+	// client stopped sending frames within Server.IdleTimeout. A
+	// non-zero rate hints at a misbehaving / frozen client (or a
+	// timeout setting that's too aggressive).
+	IdleClosed prometheus.Counter
 }
 
 // NewMetrics builds the Prometheus collectors. NewMetrics does NOT
@@ -54,6 +60,10 @@ func NewMetrics() *Metrics {
 			Name: "peersh_ws_active_connections",
 			Help: "Number of currently-registered WebSocket connections.",
 		}),
+		IdleClosed: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "peersh_ws_idle_closed_total",
+			Help: "Connections the server closed because no frame arrived within IdleTimeout.",
+		}),
 	}
 	return m
 }
@@ -69,6 +79,7 @@ func (m *Metrics) Register(reg prometheus.Registerer) error {
 		m.ConnectsForwarded,
 		m.ConnectsRejected,
 		m.ActiveConnections,
+		m.IdleClosed,
 	} {
 		if err := reg.Register(c); err != nil {
 			return err
@@ -126,4 +137,11 @@ func (m *Metrics) observeConnectionClosed() {
 		return
 	}
 	m.ActiveConnections.Dec()
+}
+
+func (m *Metrics) observeConnectionIdleClosed() {
+	if m == nil {
+		return
+	}
+	m.IdleClosed.Inc()
 }

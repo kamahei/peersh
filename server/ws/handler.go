@@ -65,6 +65,19 @@ type Server struct {
 	DeviceLimit *ratelimit.Bucket // per device_id at Connect
 	Logger      *slog.Logger
 
+	// IdleTimeout caps how long a registered connection may sit
+	// without sending any frame before the server closes it with a
+	// ServerError("idle_timeout"). This bounds Cloud Run billing
+	// when a client (host or mobile) freezes mid-session and stops
+	// sending Connects without closing the WS. The wake-listener
+	// path in v2-A typically holds the WS for under 20 seconds, so
+	// 60 s is comfortably above normal operation.
+	//
+	// 0 means use the default (60 s). Negative values disable the
+	// idle close entirely; tests use a small positive value so they
+	// don't wait the full minute.
+	IdleTimeout time.Duration
+
 	// Metrics is optional. Nil disables collection (the helper methods
 	// on *Metrics are nil-safe).
 	Metrics *Metrics
@@ -98,6 +111,9 @@ func New(s *Server) *Server {
 	}
 	if s.ServerID == "" {
 		s.ServerID = "peersh-signaling/0.1"
+	}
+	if s.IdleTimeout == 0 {
+		s.IdleTimeout = 60 * time.Second
 	}
 	return s
 }
@@ -220,8 +236,14 @@ func (c *Connection) run(ctx context.Context) {
 	c.log.Info("ws: registered", "user", c.userID, "device", c.deviceID)
 
 	for {
-		f, err := c.readFrame(ctx)
+		f, err := c.readFrameWithIdleTimeout(ctx)
 		if err != nil {
+			if errors.Is(err, errIdleTimeout) {
+				c.log.Info("ws: idle timeout", "after", c.server.IdleTimeout)
+				_ = c.sendServerError(ctx, "idle_timeout", "no frame received within deadline")
+				c.server.Metrics.observeConnectionIdleClosed()
+				return
+			}
 			if !isCloseErr(err) {
 				c.log.Info("ws: read error", "err", err)
 			}
@@ -231,6 +253,53 @@ func (c *Connection) run(ctx context.Context) {
 			c.log.Info("ws: dispatch error", "err", err)
 			_ = c.sendServerError(ctx, "dispatch_error", err.Error())
 			return
+		}
+	}
+}
+
+// errIdleTimeout marks an idle-close exit so run() can distinguish it
+// from generic read errors and emit the right ServerError code.
+var errIdleTimeout = errors.New("idle timeout")
+
+// readFrameWithIdleTimeout returns a frame, an idle-close signal, or
+// the underlying read error. A negative IdleTimeout disables the
+// deadline entirely.
+//
+// We can't simply pass a per-read context with a timeout because
+// nhooyr.io/websocket tears down the entire WebSocket when its read
+// context fires — which then prevents us from writing the
+// ServerError("idle_timeout") frame the caller expects. Instead we
+// run the read in a goroutine and race it against a timer; on
+// timeout we leave the goroutine blocked (it will unblock when the
+// caller's defer closes the WS) and signal errIdleTimeout. The
+// channel is buffered so the orphaned goroutine does not leak.
+func (c *Connection) readFrameWithIdleTimeout(parent context.Context) (*signalv1.Frame, error) {
+	if c.server.IdleTimeout < 0 {
+		return c.readFrame(parent)
+	}
+	type result struct {
+		f   *signalv1.Frame
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		f, err := c.readFrame(parent)
+		ch <- result{f, err}
+	}()
+	timer := time.NewTimer(c.server.IdleTimeout)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		return r.f, r.err
+	case <-timer.C:
+		return nil, errIdleTimeout
+	case <-parent.Done():
+		// Drain or return promptly; parent cancellation overrides idle.
+		select {
+		case r := <-ch:
+			return r.f, r.err
+		default:
+			return nil, parent.Err()
 		}
 	}
 }
