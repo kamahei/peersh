@@ -686,9 +686,9 @@ func (x *PTYExit) GetError() string {
 }
 
 // PTYFrame multiplexes the direction-specific message types onto the
-// single QUIC stream. Client → server frames use the input / resize
-// fields; server → client frames use the data / exit / reattach_ack
-// fields.
+// single QUIC stream. Client → server frames use the input / resize /
+// notification_config fields; server → client frames use the data /
+// exit / reattach_ack fields.
 type PTYFrame struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Kind:
@@ -698,6 +698,7 @@ type PTYFrame struct {
 	//	*PTYFrame_Data
 	//	*PTYFrame_Exit
 	//	*PTYFrame_ReattachAck
+	//	*PTYFrame_NotificationConfig
 	Kind          isPTYFrame_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -785,6 +786,15 @@ func (x *PTYFrame) GetReattachAck() *PTYReattachAck {
 	return nil
 }
 
+func (x *PTYFrame) GetNotificationConfig() *PTYNotificationConfig {
+	if x != nil {
+		if x, ok := x.Kind.(*PTYFrame_NotificationConfig); ok {
+			return x.NotificationConfig
+		}
+	}
+	return nil
+}
+
 type isPTYFrame_Kind interface {
 	isPTYFrame_Kind()
 }
@@ -809,6 +819,10 @@ type PTYFrame_ReattachAck struct {
 	ReattachAck *PTYReattachAck `protobuf:"bytes,5,opt,name=reattach_ack,json=reattachAck,proto3,oneof"`
 }
 
+type PTYFrame_NotificationConfig struct {
+	NotificationConfig *PTYNotificationConfig `protobuf:"bytes,6,opt,name=notification_config,json=notificationConfig,proto3,oneof"`
+}
+
 func (*PTYFrame_Input) isPTYFrame_Kind() {}
 
 func (*PTYFrame_Resize) isPTYFrame_Kind() {}
@@ -818,6 +832,108 @@ func (*PTYFrame_Data) isPTYFrame_Kind() {}
 func (*PTYFrame_Exit) isPTYFrame_Kind() {}
 
 func (*PTYFrame_ReattachAck) isPTYFrame_Kind() {}
+
+func (*PTYFrame_NotificationConfig) isPTYFrame_Kind() {}
+
+// PTYNotificationConfig (client → server) toggles per-PTY push-
+// notification behavior on the host. v2-B uses this to opt the
+// individual terminal tab into command-completion alerts.
+type PTYNotificationConfig struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// enabled gates all notifications from this PTY. When false, the
+	// host does not write any RTDB notification doc regardless of
+	// OSC 9;9 detection or idle silence.
+	Enabled bool `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	// threshold_seconds is the minimum elapsed time between a user-
+	// typed command starting and the next prompt OSC 9;9 firing
+	// before a notification is dispatched. Default 10 s; commands
+	// shorter than this don't notify.
+	ThresholdSeconds uint32 `protobuf:"varint,2,opt,name=threshold_seconds,json=thresholdSeconds,proto3" json:"threshold_seconds,omitempty"`
+	// idle_seconds enables the output-silence heuristic for non-shell
+	// tools (Claude / Codex / etc.) that don't emit OSC 9;9 prompt
+	// markers. When the PTY's stdout has been silent for this many
+	// seconds AND a command is still considered running, the host
+	// dispatches a single notification. 0 disables the heuristic
+	// entirely.
+	IdleSeconds uint32 `protobuf:"varint,3,opt,name=idle_seconds,json=idleSeconds,proto3" json:"idle_seconds,omitempty"`
+	// tab_label is the human-readable label the mobile client uses
+	// for this PTY tab. The host echoes it into the notification body
+	// so the user sees which tab finished.
+	TabLabel string `protobuf:"bytes,4,opt,name=tab_label,json=tabLabel,proto3" json:"tab_label,omitempty"`
+	// mobile_device_id is the UUID the mobile app generated and
+	// registered against RTDB at users/{uid}/devices/{mobile_device_id}/
+	// fcm_token. The host writes this into the RTDB notification doc;
+	// the Cloud Function uses it to look up the FCM token to dispatch
+	// to. Must be present for notifications to fire.
+	MobileDeviceId string `protobuf:"bytes,5,opt,name=mobile_device_id,json=mobileDeviceId,proto3" json:"mobile_device_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PTYNotificationConfig) Reset() {
+	*x = PTYNotificationConfig{}
+	mi := &file_peersh_v1_exec_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PTYNotificationConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PTYNotificationConfig) ProtoMessage() {}
+
+func (x *PTYNotificationConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_peersh_v1_exec_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PTYNotificationConfig.ProtoReflect.Descriptor instead.
+func (*PTYNotificationConfig) Descriptor() ([]byte, []int) {
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *PTYNotificationConfig) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *PTYNotificationConfig) GetThresholdSeconds() uint32 {
+	if x != nil {
+		return x.ThresholdSeconds
+	}
+	return 0
+}
+
+func (x *PTYNotificationConfig) GetIdleSeconds() uint32 {
+	if x != nil {
+		return x.IdleSeconds
+	}
+	return 0
+}
+
+func (x *PTYNotificationConfig) GetTabLabel() string {
+	if x != nil {
+		return x.TabLabel
+	}
+	return ""
+}
+
+func (x *PTYNotificationConfig) GetMobileDeviceId() string {
+	if x != nil {
+		return x.MobileDeviceId
+	}
+	return ""
+}
 
 type FilesRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -835,7 +951,7 @@ type FilesRequest struct {
 
 func (x *FilesRequest) Reset() {
 	*x = FilesRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[10]
+	mi := &file_peersh_v1_exec_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -847,7 +963,7 @@ func (x *FilesRequest) String() string {
 func (*FilesRequest) ProtoMessage() {}
 
 func (x *FilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[10]
+	mi := &file_peersh_v1_exec_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -860,7 +976,7 @@ func (x *FilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilesRequest.ProtoReflect.Descriptor instead.
 func (*FilesRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{10}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *FilesRequest) GetKind() isFilesRequest_Kind {
@@ -968,7 +1084,7 @@ type FilesResponse struct {
 
 func (x *FilesResponse) Reset() {
 	*x = FilesResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[11]
+	mi := &file_peersh_v1_exec_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -980,7 +1096,7 @@ func (x *FilesResponse) String() string {
 func (*FilesResponse) ProtoMessage() {}
 
 func (x *FilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[11]
+	mi := &file_peersh_v1_exec_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -993,7 +1109,7 @@ func (x *FilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilesResponse.ProtoReflect.Descriptor instead.
 func (*FilesResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{11}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *FilesResponse) GetError() string {
@@ -1102,7 +1218,7 @@ type KillPTYRequest struct {
 
 func (x *KillPTYRequest) Reset() {
 	*x = KillPTYRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[12]
+	mi := &file_peersh_v1_exec_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1114,7 +1230,7 @@ func (x *KillPTYRequest) String() string {
 func (*KillPTYRequest) ProtoMessage() {}
 
 func (x *KillPTYRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[12]
+	mi := &file_peersh_v1_exec_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1127,7 +1243,7 @@ func (x *KillPTYRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillPTYRequest.ProtoReflect.Descriptor instead.
 func (*KillPTYRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{12}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *KillPTYRequest) GetHandle() string {
@@ -1146,7 +1262,7 @@ type KillPTYResponse struct {
 
 func (x *KillPTYResponse) Reset() {
 	*x = KillPTYResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[13]
+	mi := &file_peersh_v1_exec_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1158,7 +1274,7 @@ func (x *KillPTYResponse) String() string {
 func (*KillPTYResponse) ProtoMessage() {}
 
 func (x *KillPTYResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[13]
+	mi := &file_peersh_v1_exec_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1171,7 +1287,7 @@ func (x *KillPTYResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillPTYResponse.ProtoReflect.Descriptor instead.
 func (*KillPTYResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{13}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *KillPTYResponse) GetOk() bool {
@@ -1193,7 +1309,7 @@ type ListPTYsRequest struct {
 
 func (x *ListPTYsRequest) Reset() {
 	*x = ListPTYsRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[14]
+	mi := &file_peersh_v1_exec_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1205,7 +1321,7 @@ func (x *ListPTYsRequest) String() string {
 func (*ListPTYsRequest) ProtoMessage() {}
 
 func (x *ListPTYsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[14]
+	mi := &file_peersh_v1_exec_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1218,7 +1334,7 @@ func (x *ListPTYsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPTYsRequest.ProtoReflect.Descriptor instead.
 func (*ListPTYsRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{14}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{15}
 }
 
 type PTYHandle struct {
@@ -1244,7 +1360,7 @@ type PTYHandle struct {
 
 func (x *PTYHandle) Reset() {
 	*x = PTYHandle{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[15]
+	mi := &file_peersh_v1_exec_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1256,7 +1372,7 @@ func (x *PTYHandle) String() string {
 func (*PTYHandle) ProtoMessage() {}
 
 func (x *PTYHandle) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[15]
+	mi := &file_peersh_v1_exec_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1269,7 +1385,7 @@ func (x *PTYHandle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PTYHandle.ProtoReflect.Descriptor instead.
 func (*PTYHandle) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{15}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PTYHandle) GetHandle() string {
@@ -1316,7 +1432,7 @@ type ListPTYsResponse struct {
 
 func (x *ListPTYsResponse) Reset() {
 	*x = ListPTYsResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[16]
+	mi := &file_peersh_v1_exec_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1444,7 @@ func (x *ListPTYsResponse) String() string {
 func (*ListPTYsResponse) ProtoMessage() {}
 
 func (x *ListPTYsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[16]
+	mi := &file_peersh_v1_exec_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1457,7 @@ func (x *ListPTYsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPTYsResponse.ProtoReflect.Descriptor instead.
 func (*ListPTYsResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{16}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ListPTYsResponse) GetPtys() []*PTYHandle {
@@ -1361,7 +1477,7 @@ type GetSessionRequest struct {
 
 func (x *GetSessionRequest) Reset() {
 	*x = GetSessionRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[17]
+	mi := &file_peersh_v1_exec_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1373,7 +1489,7 @@ func (x *GetSessionRequest) String() string {
 func (*GetSessionRequest) ProtoMessage() {}
 
 func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[17]
+	mi := &file_peersh_v1_exec_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1386,7 +1502,7 @@ func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{17}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetSessionRequest) GetPtyId() int64 {
@@ -1407,7 +1523,7 @@ type GetSessionResponse struct {
 
 func (x *GetSessionResponse) Reset() {
 	*x = GetSessionResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[18]
+	mi := &file_peersh_v1_exec_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1419,7 +1535,7 @@ func (x *GetSessionResponse) String() string {
 func (*GetSessionResponse) ProtoMessage() {}
 
 func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[18]
+	mi := &file_peersh_v1_exec_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1432,7 +1548,7 @@ func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{18}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GetSessionResponse) GetCwd() string {
@@ -1454,7 +1570,7 @@ type ListSessionFilesRequest struct {
 
 func (x *ListSessionFilesRequest) Reset() {
 	*x = ListSessionFilesRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[19]
+	mi := &file_peersh_v1_exec_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1466,7 +1582,7 @@ func (x *ListSessionFilesRequest) String() string {
 func (*ListSessionFilesRequest) ProtoMessage() {}
 
 func (x *ListSessionFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[19]
+	mi := &file_peersh_v1_exec_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1479,7 +1595,7 @@ func (x *ListSessionFilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionFilesRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionFilesRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{19}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ListSessionFilesRequest) GetPtyId() int64 {
@@ -1512,7 +1628,7 @@ type FileEntry struct {
 
 func (x *FileEntry) Reset() {
 	*x = FileEntry{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[20]
+	mi := &file_peersh_v1_exec_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1524,7 +1640,7 @@ func (x *FileEntry) String() string {
 func (*FileEntry) ProtoMessage() {}
 
 func (x *FileEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[20]
+	mi := &file_peersh_v1_exec_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1537,7 +1653,7 @@ func (x *FileEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileEntry.ProtoReflect.Descriptor instead.
 func (*FileEntry) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{20}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *FileEntry) GetName() string {
@@ -1587,7 +1703,7 @@ type ListSessionFilesResponse struct {
 
 func (x *ListSessionFilesResponse) Reset() {
 	*x = ListSessionFilesResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[21]
+	mi := &file_peersh_v1_exec_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1599,7 +1715,7 @@ func (x *ListSessionFilesResponse) String() string {
 func (*ListSessionFilesResponse) ProtoMessage() {}
 
 func (x *ListSessionFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[21]
+	mi := &file_peersh_v1_exec_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1612,7 +1728,7 @@ func (x *ListSessionFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionFilesResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionFilesResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{21}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListSessionFilesResponse) GetResolvedPath() string {
@@ -1641,7 +1757,7 @@ type ReadSessionFileRequest struct {
 
 func (x *ReadSessionFileRequest) Reset() {
 	*x = ReadSessionFileRequest{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[22]
+	mi := &file_peersh_v1_exec_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1653,7 +1769,7 @@ func (x *ReadSessionFileRequest) String() string {
 func (*ReadSessionFileRequest) ProtoMessage() {}
 
 func (x *ReadSessionFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[22]
+	mi := &file_peersh_v1_exec_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1666,7 +1782,7 @@ func (x *ReadSessionFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadSessionFileRequest.ProtoReflect.Descriptor instead.
 func (*ReadSessionFileRequest) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{22}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ReadSessionFileRequest) GetPtyId() int64 {
@@ -1702,7 +1818,7 @@ type ReadSessionFileResponse struct {
 
 func (x *ReadSessionFileResponse) Reset() {
 	*x = ReadSessionFileResponse{}
-	mi := &file_peersh_v1_exec_proto_msgTypes[23]
+	mi := &file_peersh_v1_exec_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1714,7 +1830,7 @@ func (x *ReadSessionFileResponse) String() string {
 func (*ReadSessionFileResponse) ProtoMessage() {}
 
 func (x *ReadSessionFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_peersh_v1_exec_proto_msgTypes[23]
+	mi := &file_peersh_v1_exec_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1727,7 +1843,7 @@ func (x *ReadSessionFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadSessionFileResponse.ProtoReflect.Descriptor instead.
 func (*ReadSessionFileResponse) Descriptor() ([]byte, []int) {
-	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{23}
+	return file_peersh_v1_exec_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ReadSessionFileResponse) GetContent() []byte {
@@ -1802,14 +1918,21 @@ const file_peersh_v1_exec_proto_rawDesc = "" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"<\n" +
 	"\aPTYExit\x12\x1b\n" +
 	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x83\x02\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xd8\x02\n" +
 	"\bPTYFrame\x12+\n" +
 	"\x05input\x18\x01 \x01(\v2\x13.peersh.v1.PTYInputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x02 \x01(\v2\x14.peersh.v1.PTYResizeH\x00R\x06resize\x12(\n" +
 	"\x04data\x18\x03 \x01(\v2\x12.peersh.v1.PTYDataH\x00R\x04data\x12(\n" +
 	"\x04exit\x18\x04 \x01(\v2\x12.peersh.v1.PTYExitH\x00R\x04exit\x12>\n" +
-	"\freattach_ack\x18\x05 \x01(\v2\x19.peersh.v1.PTYReattachAckH\x00R\vreattachAckB\x06\n" +
-	"\x04kind\"\xd1\x02\n" +
+	"\freattach_ack\x18\x05 \x01(\v2\x19.peersh.v1.PTYReattachAckH\x00R\vreattachAck\x12S\n" +
+	"\x13notification_config\x18\x06 \x01(\v2 .peersh.v1.PTYNotificationConfigH\x00R\x12notificationConfigB\x06\n" +
+	"\x04kind\"\xc8\x01\n" +
+	"\x15PTYNotificationConfig\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12+\n" +
+	"\x11threshold_seconds\x18\x02 \x01(\rR\x10thresholdSeconds\x12!\n" +
+	"\fidle_seconds\x18\x03 \x01(\rR\vidleSeconds\x12\x1b\n" +
+	"\ttab_label\x18\x04 \x01(\tR\btabLabel\x12(\n" +
+	"\x10mobile_device_id\x18\x05 \x01(\tR\x0emobileDeviceId\"\xd1\x02\n" +
 	"\fFilesRequest\x12?\n" +
 	"\vget_session\x18\x01 \x01(\v2\x1c.peersh.v1.GetSessionRequestH\x00R\n" +
 	"getSession\x12C\n" +
@@ -1882,7 +2005,7 @@ func file_peersh_v1_exec_proto_rawDescGZIP() []byte {
 	return file_peersh_v1_exec_proto_rawDescData
 }
 
-var file_peersh_v1_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_peersh_v1_exec_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_peersh_v1_exec_proto_goTypes = []any{
 	(*StreamRequest)(nil),            // 0: peersh.v1.StreamRequest
 	(*ExecRequest)(nil),              // 1: peersh.v1.ExecRequest
@@ -1894,49 +2017,51 @@ var file_peersh_v1_exec_proto_goTypes = []any{
 	(*PTYData)(nil),                  // 7: peersh.v1.PTYData
 	(*PTYExit)(nil),                  // 8: peersh.v1.PTYExit
 	(*PTYFrame)(nil),                 // 9: peersh.v1.PTYFrame
-	(*FilesRequest)(nil),             // 10: peersh.v1.FilesRequest
-	(*FilesResponse)(nil),            // 11: peersh.v1.FilesResponse
-	(*KillPTYRequest)(nil),           // 12: peersh.v1.KillPTYRequest
-	(*KillPTYResponse)(nil),          // 13: peersh.v1.KillPTYResponse
-	(*ListPTYsRequest)(nil),          // 14: peersh.v1.ListPTYsRequest
-	(*PTYHandle)(nil),                // 15: peersh.v1.PTYHandle
-	(*ListPTYsResponse)(nil),         // 16: peersh.v1.ListPTYsResponse
-	(*GetSessionRequest)(nil),        // 17: peersh.v1.GetSessionRequest
-	(*GetSessionResponse)(nil),       // 18: peersh.v1.GetSessionResponse
-	(*ListSessionFilesRequest)(nil),  // 19: peersh.v1.ListSessionFilesRequest
-	(*FileEntry)(nil),                // 20: peersh.v1.FileEntry
-	(*ListSessionFilesResponse)(nil), // 21: peersh.v1.ListSessionFilesResponse
-	(*ReadSessionFileRequest)(nil),   // 22: peersh.v1.ReadSessionFileRequest
-	(*ReadSessionFileResponse)(nil),  // 23: peersh.v1.ReadSessionFileResponse
-	nil,                              // 24: peersh.v1.PTYRequest.EnvEntry
+	(*PTYNotificationConfig)(nil),    // 10: peersh.v1.PTYNotificationConfig
+	(*FilesRequest)(nil),             // 11: peersh.v1.FilesRequest
+	(*FilesResponse)(nil),            // 12: peersh.v1.FilesResponse
+	(*KillPTYRequest)(nil),           // 13: peersh.v1.KillPTYRequest
+	(*KillPTYResponse)(nil),          // 14: peersh.v1.KillPTYResponse
+	(*ListPTYsRequest)(nil),          // 15: peersh.v1.ListPTYsRequest
+	(*PTYHandle)(nil),                // 16: peersh.v1.PTYHandle
+	(*ListPTYsResponse)(nil),         // 17: peersh.v1.ListPTYsResponse
+	(*GetSessionRequest)(nil),        // 18: peersh.v1.GetSessionRequest
+	(*GetSessionResponse)(nil),       // 19: peersh.v1.GetSessionResponse
+	(*ListSessionFilesRequest)(nil),  // 20: peersh.v1.ListSessionFilesRequest
+	(*FileEntry)(nil),                // 21: peersh.v1.FileEntry
+	(*ListSessionFilesResponse)(nil), // 22: peersh.v1.ListSessionFilesResponse
+	(*ReadSessionFileRequest)(nil),   // 23: peersh.v1.ReadSessionFileRequest
+	(*ReadSessionFileResponse)(nil),  // 24: peersh.v1.ReadSessionFileResponse
+	nil,                              // 25: peersh.v1.PTYRequest.EnvEntry
 }
 var file_peersh_v1_exec_proto_depIdxs = []int32{
 	1,  // 0: peersh.v1.StreamRequest.exec:type_name -> peersh.v1.ExecRequest
 	3,  // 1: peersh.v1.StreamRequest.pty:type_name -> peersh.v1.PTYRequest
-	10, // 2: peersh.v1.StreamRequest.files:type_name -> peersh.v1.FilesRequest
-	24, // 3: peersh.v1.PTYRequest.env:type_name -> peersh.v1.PTYRequest.EnvEntry
+	11, // 2: peersh.v1.StreamRequest.files:type_name -> peersh.v1.FilesRequest
+	25, // 3: peersh.v1.PTYRequest.env:type_name -> peersh.v1.PTYRequest.EnvEntry
 	5,  // 4: peersh.v1.PTYFrame.input:type_name -> peersh.v1.PTYInput
 	6,  // 5: peersh.v1.PTYFrame.resize:type_name -> peersh.v1.PTYResize
 	7,  // 6: peersh.v1.PTYFrame.data:type_name -> peersh.v1.PTYData
 	8,  // 7: peersh.v1.PTYFrame.exit:type_name -> peersh.v1.PTYExit
 	4,  // 8: peersh.v1.PTYFrame.reattach_ack:type_name -> peersh.v1.PTYReattachAck
-	17, // 9: peersh.v1.FilesRequest.get_session:type_name -> peersh.v1.GetSessionRequest
-	19, // 10: peersh.v1.FilesRequest.list_files:type_name -> peersh.v1.ListSessionFilesRequest
-	22, // 11: peersh.v1.FilesRequest.read_file:type_name -> peersh.v1.ReadSessionFileRequest
-	14, // 12: peersh.v1.FilesRequest.list_ptys:type_name -> peersh.v1.ListPTYsRequest
-	12, // 13: peersh.v1.FilesRequest.kill_pty:type_name -> peersh.v1.KillPTYRequest
-	18, // 14: peersh.v1.FilesResponse.get_session:type_name -> peersh.v1.GetSessionResponse
-	21, // 15: peersh.v1.FilesResponse.list_files:type_name -> peersh.v1.ListSessionFilesResponse
-	23, // 16: peersh.v1.FilesResponse.read_file:type_name -> peersh.v1.ReadSessionFileResponse
-	16, // 17: peersh.v1.FilesResponse.list_ptys:type_name -> peersh.v1.ListPTYsResponse
-	13, // 18: peersh.v1.FilesResponse.kill_pty:type_name -> peersh.v1.KillPTYResponse
-	15, // 19: peersh.v1.ListPTYsResponse.ptys:type_name -> peersh.v1.PTYHandle
-	20, // 20: peersh.v1.ListSessionFilesResponse.entries:type_name -> peersh.v1.FileEntry
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	10, // 9: peersh.v1.PTYFrame.notification_config:type_name -> peersh.v1.PTYNotificationConfig
+	18, // 10: peersh.v1.FilesRequest.get_session:type_name -> peersh.v1.GetSessionRequest
+	20, // 11: peersh.v1.FilesRequest.list_files:type_name -> peersh.v1.ListSessionFilesRequest
+	23, // 12: peersh.v1.FilesRequest.read_file:type_name -> peersh.v1.ReadSessionFileRequest
+	15, // 13: peersh.v1.FilesRequest.list_ptys:type_name -> peersh.v1.ListPTYsRequest
+	13, // 14: peersh.v1.FilesRequest.kill_pty:type_name -> peersh.v1.KillPTYRequest
+	19, // 15: peersh.v1.FilesResponse.get_session:type_name -> peersh.v1.GetSessionResponse
+	22, // 16: peersh.v1.FilesResponse.list_files:type_name -> peersh.v1.ListSessionFilesResponse
+	24, // 17: peersh.v1.FilesResponse.read_file:type_name -> peersh.v1.ReadSessionFileResponse
+	17, // 18: peersh.v1.FilesResponse.list_ptys:type_name -> peersh.v1.ListPTYsResponse
+	14, // 19: peersh.v1.FilesResponse.kill_pty:type_name -> peersh.v1.KillPTYResponse
+	16, // 20: peersh.v1.ListPTYsResponse.ptys:type_name -> peersh.v1.PTYHandle
+	21, // 21: peersh.v1.ListSessionFilesResponse.entries:type_name -> peersh.v1.FileEntry
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_peersh_v1_exec_proto_init() }
@@ -1959,15 +2084,16 @@ func file_peersh_v1_exec_proto_init() {
 		(*PTYFrame_Data)(nil),
 		(*PTYFrame_Exit)(nil),
 		(*PTYFrame_ReattachAck)(nil),
+		(*PTYFrame_NotificationConfig)(nil),
 	}
-	file_peersh_v1_exec_proto_msgTypes[10].OneofWrappers = []any{
+	file_peersh_v1_exec_proto_msgTypes[11].OneofWrappers = []any{
 		(*FilesRequest_GetSession)(nil),
 		(*FilesRequest_ListFiles)(nil),
 		(*FilesRequest_ReadFile)(nil),
 		(*FilesRequest_ListPtys)(nil),
 		(*FilesRequest_KillPty)(nil),
 	}
-	file_peersh_v1_exec_proto_msgTypes[11].OneofWrappers = []any{
+	file_peersh_v1_exec_proto_msgTypes[12].OneofWrappers = []any{
 		(*FilesResponse_GetSession)(nil),
 		(*FilesResponse_ListFiles)(nil),
 		(*FilesResponse_ReadFile)(nil),
@@ -1980,7 +2106,7 @@ func file_peersh_v1_exec_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_peersh_v1_exec_proto_rawDesc), len(file_peersh_v1_exec_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   25,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

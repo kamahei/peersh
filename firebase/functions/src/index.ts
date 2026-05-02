@@ -23,6 +23,7 @@ import * as admin from 'firebase-admin';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { onRequest } from 'firebase-functions/v2/https';
 import { onMessagePublished } from 'firebase-functions/v2/pubsub';
+import { onValueCreated } from 'firebase-functions/v2/database';
 import { logger, setGlobalOptions } from 'firebase-functions/v2';
 
 admin.initializeApp();
@@ -306,5 +307,107 @@ export const budgetGuard = onMessagePublished(
 
     // Below threshold: leave any existing state alone but log progress.
     logger.info('budget under threshold', { ratio });
+  },
+);
+
+// onNotificationCreated dispatches a v2-B push notification when the
+// host writes /users/{userId}/notifications/{notifId} into RTDB.
+//
+// Source doc shape:
+//   { target_mobile_device_id, host_device_id, title, body,
+//     deep_link: { ... }, created_at }
+//
+// The function reads the target mobile's FCM token from RTDB
+// /users/{userId}/devices/{target_mobile_device_id}/fcm_token, sends
+// an FCM notification message with a `data` payload carrying the
+// deep-link, then deletes the source doc so the queue stays small.
+//
+// Same budget-guard short-circuit as onSessionCreated: ops/budget-
+// state.triggered=true silently drops the dispatch (mobile users can
+// re-toggle their bell when the operator clears the flag).
+export const onNotificationCreated = onValueCreated(
+  '/users/{userId}/notifications/{notifId}',
+  async (event) => {
+    const data = event.data?.val();
+    if (!data) {
+      logger.warn('onNotificationCreated: empty snapshot');
+      return;
+    }
+    const userId = event.params.userId as string;
+    const notifId = event.params.notifId as string;
+
+    const guard = await admin.firestore().doc('ops/budget-state').get();
+    if (guard.exists && guard.get('triggered') === true) {
+      logger.warn('onNotificationCreated: skipped, budget guard active', {
+        userId,
+        notifId,
+      });
+      // Still delete so the queue doesn't grow.
+      await event.data?.ref.remove();
+      return;
+    }
+
+    const targetId = data.target_mobile_device_id;
+    if (!targetId || typeof targetId !== 'string') {
+      logger.warn('onNotificationCreated: missing target_mobile_device_id', {
+        userId,
+        notifId,
+      });
+      await event.data?.ref.remove();
+      return;
+    }
+
+    const tokenSnap = await admin
+      .database()
+      .ref(`/users/${userId}/devices/${targetId}/fcm_token`)
+      .get();
+    const token = tokenSnap.val();
+    if (!token || typeof token !== 'string') {
+      logger.info('onNotificationCreated: no fcm_token registered', {
+        userId,
+        targetId,
+      });
+      await event.data?.ref.remove();
+      return;
+    }
+
+    // Stringify the deep_link map — FCM data values must be strings.
+    const deepLink: Record<string, string> = {};
+    if (data.deep_link && typeof data.deep_link === 'object') {
+      for (const [k, v] of Object.entries(data.deep_link)) {
+        deepLink[k] = String(v);
+      }
+    }
+
+    try {
+      await admin.messaging().send({
+        token,
+        notification: {
+          title: data.title ?? 'peersh',
+          body: data.body ?? '',
+        },
+        data: deepLink,
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'command_ready',
+          },
+        },
+        apns: {
+          headers: { 'apns-priority': '10' },
+          payload: {
+            aps: { sound: 'default' },
+          },
+        },
+      });
+      logger.info('FCM notification sent', { userId, targetId, notifId });
+    } catch (err) {
+      logger.error('FCM send failed', { err, userId, targetId, notifId });
+    } finally {
+      // Cleanup the source doc whether send succeeded or not — a stuck
+      // notification entry would otherwise re-fire on every cold start
+      // of the function. Failed sends are dropped (no retry queue).
+      await event.data?.ref.remove();
+    }
   },
 );

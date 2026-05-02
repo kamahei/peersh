@@ -43,6 +43,25 @@ class TerminalTabModel extends ChangeNotifier {
   /// Track wrap mode locally so each tab can override the global default.
   bool? _localLineWrapOverride;
 
+  /// v2-B push notification toggle. When true, the host sends an FCM
+  /// notification to this device after the next prompt OSC 9;9
+  /// occurrence (or output silence) past the threshold.
+  bool _notifyOnPromptReady = false;
+  bool get notifyOnPromptReady => _notifyOnPromptReady;
+  set notifyOnPromptReady(bool v) {
+    if (_notifyOnPromptReady == v) return;
+    _notifyOnPromptReady = v;
+    notifyListeners();
+  }
+
+  /// Minimum command duration before a prompt-ready notification fires.
+  /// Default 10s — overridable per tab via the long-press dialog.
+  Duration notifyThreshold = const Duration(seconds: 10);
+
+  /// Output-silence window for the idle heuristic (Claude / Codex).
+  /// 0 disables. Default 0 — opt in per tab.
+  Duration notifyIdleWindow = Duration.zero;
+
   void setLabel(String v) {
     if (v.isEmpty) return;
     if (_label == v) return;

@@ -371,6 +371,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 	// generous enough to cover NAT punching and a few dial retries while
 	// still expiring abandoned grants.
 	var authz *peerauth.Authz
+	var notifyCfg *notifyCtx
 	if signalingURL != "" {
 		authz = peerauth.New(60 * time.Second)
 		go authz.RunSweeper(ctx, 10*time.Second)
@@ -397,6 +398,11 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			defer rt.Close()
 			go runHeartbeat(ctx, rt)
 			go runWakePump(ctx, rt, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
+			notifyCfg = &notifyCtx{
+				notifier:     rt,
+				hostDeviceID: deviceID,
+				hostName:     displayName,
+			}
 		} else {
 			if userID == "" || pskFile == "" {
 				return errors.New("-signaling requires -user and -psk-file (PSK mode), or -pair-code + -firebase-project + -firebase-api-key (Firebase pairing mode)")
@@ -419,8 +425,18 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			}
 			return fmt.Errorf("Accept: %w", err)
 		}
-		go serveConn(ctx, conn, mgr, authz)
+		go serveConn(ctx, conn, mgr, authz, notifyCfg)
 	}
+}
+
+// notifyCtx bundles the per-process state servePTYStream needs to
+// dispatch v2-B push notifications. Nil in PSK / direct mode (where
+// no Firebase RTDB client exists). servePTYStream treats nil as
+// "notifications disabled" and skips the entire feature.
+type notifyCtx struct {
+	notifier     fbpeershd.Notifier
+	hostDeviceID string
+	hostName     string
 }
 
 // runSignaling dials the signaling server, registers, and replies to
@@ -780,7 +796,7 @@ func enumerateCandidates(listen *net.UDPAddr, srflx *net.UDPAddr) []*signalv1.En
 // ExecRequest. The host's pwsh process is owned by mgr, not by this
 // function — when the QUIC connection closes, the session is detached
 // (mgr's idle timer takes over) instead of killed.
-func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager, authz *peerauth.Authz) {
+func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager, authz *peerauth.Authz, nctx *notifyCtx) {
 	remote := conn.RemoteAddr().String()
 	peerID := peertls.PeerDeviceID(conn.TLSState())
 	log := slog.With("peer", remote, "peer_device_id", peerID)
@@ -831,7 +847,7 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 			log.Info("AcceptStream: end of connection", "err", err)
 			return
 		}
-		go serveStream(ctx, host, stream, registry, ptyMgr, log)
+		go serveStream(ctx, host, stream, registry, ptyMgr, log, nctx)
 	}
 }
 
@@ -851,7 +867,7 @@ func runPTYSweeper(ctx context.Context, mgr *ptyhost.Manager) {
 // serveStream dispatches a per-stream first frame (StreamRequest) to either
 // the one-shot Exec path or the interactive PTY path. Each stream owns its
 // own protocol; this function returns when the stream closes.
-func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger) {
+func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger, nctx *notifyCtx) {
 	defer stream.Close()
 	r := wire.NewReader(stream)
 	req := &v1.StreamRequest{}
@@ -863,7 +879,7 @@ func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream,
 	case *v1.StreamRequest_Exec:
 		serveExecStream(ctx, host, stream, kind.Exec, log)
 	case *v1.StreamRequest_Pty:
-		servePTYStream(ctx, stream, r, kind.Pty, reg, mgr, log)
+		servePTYStream(ctx, stream, r, kind.Pty, reg, mgr, log, nctx)
 	case *v1.StreamRequest_Files:
 		serveFilesStream(stream, kind.Files, reg, mgr)
 	default:
@@ -871,7 +887,7 @@ func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream,
 	}
 }
 
-func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger) {
+func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger, nctx *notifyCtx) {
 	clog := log.With("stream", stream.StreamID(), "pty_cmd", req.GetCommand(), "pty_id", req.GetPtyId(), "reattach", req.GetReattachHandle() != "")
 	cols := uint16(req.GetCols())
 	rows := uint16(req.GetRows())
@@ -945,6 +961,16 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 	// authoritative way to terminate it.
 	defer mgr.Detach(handle)
 
+	// v2-B notify state. nil when notifications are disabled (PSK /
+	// direct mode); otherwise a per-PTY state machine that watches
+	// Input vs OSC 9;9 timing and dispatches command-completion
+	// notifications via the Firebase Notifier.
+	var notifier *ptyNotifyState
+	if nctx != nil {
+		notifier = newPTYNotifyState(nctx, req.GetPtyId(), clog)
+		go notifier.runIdleTicker(pumpCtx)
+	}
+
 	var writeMu sync.Mutex
 	pumpDone := make(chan struct{})
 	go func() {
@@ -954,6 +980,7 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 			// replay is byte-identical to what the client just saw.
 			if data := f.GetData(); data != nil {
 				mgr.Append(handle, data.GetData())
+				notifier.onOutput(pumpCtx, data.GetData())
 			}
 			writeMu.Lock()
 			defer writeMu.Unlock()
@@ -971,10 +998,13 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 		}
 		switch k := frame.GetKind().(type) {
 		case *v1.PTYFrame_Input:
+			notifier.onInput()
 			if _, err := sess.Write(k.Input.GetData()); err != nil {
 				clog.Info("pty write to child", "err", err)
 				break
 			}
+		case *v1.PTYFrame_NotificationConfig:
+			notifier.setConfig(k.NotificationConfig)
 		case *v1.PTYFrame_Resize:
 			if err := sess.Resize(uint16(k.Resize.GetCols()), uint16(k.Resize.GetRows())); err != nil {
 				clog.Info("pty resize", "err", err)

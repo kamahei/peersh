@@ -286,6 +286,28 @@ class PeershBridge {
     });
   }
 
+  /// v2-B: configure host-side push-notification behavior for this PTY.
+  /// `mobileDeviceId` routes the eventual FCM message; `tabLabel` is
+  /// echoed into the notification body so the user knows which tab
+  /// finished. Threshold / idle-window of 0 use the host defaults.
+  Future<void> ptyNotificationConfig({
+    required int ptyId,
+    required bool enabled,
+    required int thresholdSeconds,
+    required int idleSeconds,
+    required String tabLabel,
+    required String mobileDeviceId,
+  }) async {
+    await _control.invokeMethod<void>('ptyNotificationConfig', {
+      'ptyId': ptyId,
+      'enabled': enabled,
+      'thresholdSeconds': thresholdSeconds,
+      'idleSeconds': idleSeconds,
+      'tabLabel': tabLabel,
+      'mobileDeviceId': mobileDeviceId,
+    });
+  }
+
   /// Closes a PTY. Idempotent.
   Future<void> closePty({required int ptyId}) async {
     await _control.invokeMethod<void>('closePTY', {

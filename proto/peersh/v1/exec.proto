@@ -148,17 +148,54 @@ message PTYExit {
 }
 
 // PTYFrame multiplexes the direction-specific message types onto the
-// single QUIC stream. Client → server frames use the input / resize
-// fields; server → client frames use the data / exit / reattach_ack
-// fields.
+// single QUIC stream. Client → server frames use the input / resize /
+// notification_config fields; server → client frames use the data /
+// exit / reattach_ack fields.
 message PTYFrame {
   oneof kind {
-    PTYInput       input        = 1;
-    PTYResize      resize       = 2;
-    PTYData        data         = 3;
-    PTYExit        exit         = 4;
-    PTYReattachAck reattach_ack = 5;
+    PTYInput              input               = 1;
+    PTYResize             resize              = 2;
+    PTYData               data                = 3;
+    PTYExit               exit                = 4;
+    PTYReattachAck        reattach_ack        = 5;
+    PTYNotificationConfig notification_config = 6;
   }
+}
+
+// PTYNotificationConfig (client → server) toggles per-PTY push-
+// notification behavior on the host. v2-B uses this to opt the
+// individual terminal tab into command-completion alerts.
+message PTYNotificationConfig {
+  // enabled gates all notifications from this PTY. When false, the
+  // host does not write any RTDB notification doc regardless of
+  // OSC 9;9 detection or idle silence.
+  bool enabled = 1;
+
+  // threshold_seconds is the minimum elapsed time between a user-
+  // typed command starting and the next prompt OSC 9;9 firing
+  // before a notification is dispatched. Default 10 s; commands
+  // shorter than this don't notify.
+  uint32 threshold_seconds = 2;
+
+  // idle_seconds enables the output-silence heuristic for non-shell
+  // tools (Claude / Codex / etc.) that don't emit OSC 9;9 prompt
+  // markers. When the PTY's stdout has been silent for this many
+  // seconds AND a command is still considered running, the host
+  // dispatches a single notification. 0 disables the heuristic
+  // entirely.
+  uint32 idle_seconds = 3;
+
+  // tab_label is the human-readable label the mobile client uses
+  // for this PTY tab. The host echoes it into the notification body
+  // so the user sees which tab finished.
+  string tab_label = 4;
+
+  // mobile_device_id is the UUID the mobile app generated and
+  // registered against RTDB at users/{uid}/devices/{mobile_device_id}/
+  // fcm_token. The host writes this into the RTDB notification doc;
+  // the Cloud Function uses it to look up the FCM token to dispatch
+  // to. Must be present for notifications to fire.
+  string mobile_device_id = 5;
 }
 
 // --- Session-scoped file API (Phase 8 Tier 2) ----------------------------

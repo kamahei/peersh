@@ -139,7 +139,9 @@ firebase deploy --only firestore:rules,firestore:indexes,database,functions
 cd ..
 ```
 
-The `database` target uploads `firebase/database.rules.json`, which restricts `users/{uid}/...` (wake_requests + devices presence) read/write to the matching authenticated uid.
+The `database` target uploads `firebase/database.rules.json`, which restricts `users/{uid}/...` (wake_requests + devices presence + notifications) read/write to the matching authenticated uid.
+
+The `functions` target now includes `onNotificationCreated` (v2-B push-notification dispatcher) alongside the existing `mintPairingCode`, `claimPairingCode`, and `budgetGuard`. See [`docs/firebase-mode.md`](../firebase-mode.md#push-notifications-v2-b) for the runtime architecture.
 
 If the first `functions` deploy fails with a "Permission denied while using the Eventarc Service Agent" error, the Eventarc service agent has not finished propagating yet. Wait ~60 s and retry; the error is transient and only affects the very first 2nd-gen function in a fresh project. The Cloud Build worker also needs `roles/cloudbuild.builds.builder` granted to the Compute default service account; if you see "missing required permission on the build service account":
 

@@ -630,6 +630,36 @@ func (p *PTYSession) Resize(cols, rows int) error {
 	})
 }
 
+// SendNotificationConfig forwards the v2-B push-notification toggle
+// state for this PTY to the host. The host stores the config per-PTY
+// and uses it to decide whether (and when) to dispatch a Cloud
+// Messaging notification on prompt-ready / idle-silence detection.
+//
+// Calling with enabled=false explicitly disables the feature for
+// this PTY without tearing down the stream. Threshold / idle of 0
+// fall back to the host-side defaults.
+func (p *PTYSession) SendNotificationConfig(enabled bool, thresholdSeconds, idleSeconds int, tabLabel, mobileDeviceID string) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return errors.New("ptysession: closed")
+	}
+	p.mu.Unlock()
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	return wire.Write(p.stream, &v1.PTYFrame{
+		Kind: &v1.PTYFrame_NotificationConfig{
+			NotificationConfig: &v1.PTYNotificationConfig{
+				Enabled:          enabled,
+				ThresholdSeconds: uint32(thresholdSeconds),
+				IdleSeconds:      uint32(idleSeconds),
+				TabLabel:         tabLabel,
+				MobileDeviceId:   mobileDeviceID,
+			},
+		},
+	})
+}
+
 // Close terminates the PTY by closing the underlying QUIC stream. The
 // host's pseudo-console pump observes EOF and tears down the child.
 func (p *PTYSession) Close() error {

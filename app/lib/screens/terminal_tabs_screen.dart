@@ -20,6 +20,7 @@ import '../models/pty_event.dart';
 import '../models/pty_file.dart';
 import '../models/server_entry.dart';
 import '../services/flavor.dart' as flavor;
+import '../services/mobile_device_registry.dart';
 import '../services/peersh_session.dart';
 import '../state/persisted_pty_handles.dart';
 import '../state/servers.dart';
@@ -449,6 +450,31 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     });
   }
 
+  Future<void> _toggleNotify(int idx) async {
+    if (idx < 0 || idx >= _tabs.length) return;
+    final tab = _tabs[idx];
+    final ptyId = tab.ptyId;
+    if (ptyId == null) return; // tab not yet bound to a PTY
+    final newEnabled = !tab.notifyOnPromptReady;
+    setState(() => tab.notifyOnPromptReady = newEnabled);
+    try {
+      final mobileId = await readOrCreateMobileDeviceId();
+      await ref.read(bridgeProvider).ptyNotificationConfig(
+            ptyId: ptyId,
+            enabled: newEnabled,
+            thresholdSeconds: tab.notifyThreshold.inSeconds,
+            idleSeconds: tab.notifyIdleWindow.inSeconds,
+            tabLabel: tab.label,
+            mobileDeviceId: mobileId,
+          );
+    } catch (e) {
+      debugPrint('peersh: ptyNotificationConfig failed: $e');
+      if (!mounted) return;
+      // revert local state on failure so the bell reflects truth
+      setState(() => tab.notifyOnPromptReady = !newEnabled);
+    }
+  }
+
   Future<void> _sendBytes(List<int> data) async {
     if (_tabs.isEmpty) return;
     final tab = _tabs[_activeIndex];
@@ -615,6 +641,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                     onTap: (i) => setState(() => _activeIndex = i),
                     onClose: _closeTab,
                     onKill: _killTabPty,
+                    onToggleNotify: _toggleNotify,
                   ),
                   Expanded(
                     child: _tabs.isEmpty
@@ -727,6 +754,7 @@ class _TabBar extends StatelessWidget {
     required this.onTap,
     required this.onClose,
     required this.onKill,
+    required this.onToggleNotify,
   });
 
   final List<TerminalTabModel> tabs;
@@ -734,6 +762,7 @@ class _TabBar extends StatelessWidget {
   final ValueChanged<int> onTap;
   final ValueChanged<int> onClose;
   final ValueChanged<int> onKill;
+  final ValueChanged<int> onToggleNotify;
 
   @override
   Widget build(BuildContext context) {
@@ -753,8 +782,10 @@ class _TabBar extends StatelessWidget {
               builder: (_, __) => _TabChip(
                 label: tab.label,
                 active: i == activeIndex,
+                notifyEnabled: tab.notifyOnPromptReady,
                 onTap: () => onTap(i),
                 onClose: () => onClose(i),
+                onToggleNotify: () => onToggleNotify(i),
                 onLongPress: () async {
                   final action = await showModalBottomSheet<String>(
                     context: context,
@@ -796,16 +827,20 @@ class _TabChip extends StatelessWidget {
   const _TabChip({
     required this.label,
     required this.active,
+    required this.notifyEnabled,
     required this.onTap,
     required this.onClose,
     required this.onLongPress,
+    required this.onToggleNotify,
   });
 
   final String label;
   final bool active;
+  final bool notifyEnabled;
   final VoidCallback onTap;
   final VoidCallback onClose;
   final VoidCallback onLongPress;
+  final VoidCallback onToggleNotify;
 
   @override
   Widget build(BuildContext context) {
@@ -834,6 +869,22 @@ class _TabChip extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(width: 4),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                onPressed: onToggleNotify,
+                icon: Icon(
+                  notifyEnabled
+                      ? Icons.notifications_active
+                      : Icons.notifications_none,
+                  size: 16,
+                  color: fg,
+                ),
+                tooltip: notifyEnabled
+                    ? 'Notifications on (tap to turn off)'
+                    : 'Notify when this tab\'s next command finishes',
+              ),
               IconButton(
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,

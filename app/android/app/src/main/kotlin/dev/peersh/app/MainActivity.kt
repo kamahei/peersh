@@ -186,6 +186,12 @@ class MainActivity : FlutterActivity() {
                         result.success(ok)
                     }
                     "requestNotifications" -> {
+                        // Always (re)create the command_ready channel — it is
+                        // idempotent and harmless to call repeatedly. Doing it
+                        // here means the Dart bridge call also primes the
+                        // channel without needing a separate platform method.
+                        ensureCommandReadyChannel()
+
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             val granted = ActivityCompat.checkSelfPermission(
                                 this,
@@ -201,8 +207,10 @@ class MainActivity : FlutterActivity() {
                                 // the caller polls notificationsEnabled or
                                 // re-prompts on next session start.
                             }
+                            result.success(granted)
+                        } else {
+                            result.success(true)
                         }
-                        result.success(null)
                     }
                     "openNotificationSettings" -> {
                         val intent = Intent().apply {
@@ -367,6 +375,29 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    "ptyNotificationConfig" -> {
+                        val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        val threshold = (call.argument<Number>("thresholdSeconds") ?: 0).toInt()
+                        val idle = (call.argument<Number>("idleSeconds") ?: 0).toInt()
+                        val tabLabel = call.argument<String>("tabLabel") ?: ""
+                        val mobileDeviceId = call.argument<String>("mobileDeviceId") ?: ""
+                        val p = ptys[ptyId]
+                        if (p == null) {
+                            result.error("UNKNOWN_PTY", "no pty for id=$ptyId", null)
+                            return@setMethodCallHandler
+                        }
+                        executor.submit {
+                            try {
+                                p.sendNotificationConfig(enabled, threshold.toLong(), idle.toLong(), tabLabel, mobileDeviceId)
+                                mainHandler.post { result.success(null) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("PTY_NOTIFY_CONFIG_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
                     "closePTY" -> {
                         val ptyId = (call.argument<Number>("ptyId") ?: 0).toLong()
                         val p = ptys.remove(ptyId)
@@ -507,6 +538,29 @@ class MainActivity : FlutterActivity() {
             }
             mainHandler.post { sinkRef()?.success(event) }
         }
+    }
+
+    /**
+     * Idempotently creates the v2-B "command_ready" notification
+     * channel. The Cloud Function `onNotificationCreated` sets this
+     * id on every dispatched FCM message so the OS picks the right
+     * importance / sound. Safe to call from any caller; no-op on
+     * Android < O.
+     */
+    private fun ensureCommandReadyChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val nm = getSystemService(android.app.NotificationManager::class.java) ?: return
+        if (nm.getNotificationChannel("command_ready") != null) return
+        val ch = android.app.NotificationChannel(
+            "command_ready",
+            "Command ready",
+            android.app.NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Notifies you when a long-running command finishes on a connected PC."
+            enableLights(true)
+            enableVibration(true)
+        }
+        nm.createNotificationChannel(ch)
     }
 
     /**
