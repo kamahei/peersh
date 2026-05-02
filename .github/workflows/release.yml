@@ -1,0 +1,203 @@
+name: Release
+
+# Tag-triggered: push a `v*` tag (e.g. `v0.1.0`) to fire a GitHub
+# Release with the Windows binary set + an Android debug APK attached.
+# iOS isn't included because we don't have a code-signing pipeline
+# wired yet (manual macOS build still works via build-ios.yml).
+#
+# What this DOES NOT do:
+#   - It does not sign the Android APK with a Play upload key (the
+#     debug-keystore-signed APK is sideload-only). Operators who want
+#     to publish to Play Store run the build-android.yml workflow
+#     manually after wiring their own key.
+#   - It does not build the MSI installer. Toggle by editing the
+#     dispatch input on build-peershd.yml or running it manually.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach to (e.g. v0.1.0). Leave blank to use the current ref.'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build_peershd:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            VERSION="${{ inputs.tag }}"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build peershd + peersh-cli (Windows amd64)
+        shell: bash
+        env:
+          PEERSHD_FIREBASE_API_KEY: ${{ secrets.PEERSHD_FIREBASE_API_KEY }}
+          PEERSHD_FIREBASE_PROJECT_ID: ${{ secrets.PEERSHD_FIREBASE_PROJECT_ID }}
+          PEERSHD_FIREBASE_REGION: ${{ secrets.PEERSHD_FIREBASE_REGION }}
+          PEERSHD_SIGNALING_URL: ${{ secrets.PEERSHD_SIGNALING_URL }}
+          PEERSHD_GOOGLE_CLIENT_ID: ${{ secrets.PEERSHD_GOOGLE_CLIENT_ID }}
+          PEERSHD_GOOGLE_CLIENT_SECRET: ${{ secrets.PEERSHD_GOOGLE_CLIENT_SECRET }}
+        run: |
+          mkdir -p dist
+          VERSION="${{ steps.meta.outputs.version }}"
+          REPO="$GITHUB_REPOSITORY"
+          LDFLAGS="-X main.embeddedVersion=$VERSION -X main.embeddedUpdateRepo=$REPO"
+          [[ -n "$PEERSHD_FIREBASE_API_KEY"      ]] && LDFLAGS="$LDFLAGS -X main.embeddedFirebaseAPIKey=$PEERSHD_FIREBASE_API_KEY"
+          [[ -n "$PEERSHD_FIREBASE_PROJECT_ID"   ]] && LDFLAGS="$LDFLAGS -X main.embeddedFirebaseProjectID=$PEERSHD_FIREBASE_PROJECT_ID"
+          [[ -n "$PEERSHD_FIREBASE_REGION"       ]] && LDFLAGS="$LDFLAGS -X main.embeddedFirebaseRegion=$PEERSHD_FIREBASE_REGION"
+          [[ -n "$PEERSHD_SIGNALING_URL"         ]] && LDFLAGS="$LDFLAGS -X main.embeddedSignalingURL=$PEERSHD_SIGNALING_URL"
+          [[ -n "$PEERSHD_GOOGLE_CLIENT_ID"      ]] && LDFLAGS="$LDFLAGS -X main.embeddedGoogleClientID=$PEERSHD_GOOGLE_CLIENT_ID"
+          [[ -n "$PEERSHD_GOOGLE_CLIENT_SECRET"  ]] && LDFLAGS="$LDFLAGS -X main.embeddedGoogleClientSecret=$PEERSHD_GOOGLE_CLIENT_SECRET"
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/peershd-windows-amd64.exe ./windows/cmd/peershd
+          GOOS=windows GOARCH=amd64 go build -trimpath -o dist/peersh-cli-windows-amd64.exe ./cli/cmd/peersh-cli
+          (cd dist && sha256sum peershd-windows-amd64.exe > peershd-windows-amd64.exe.sha256)
+          (cd dist && sha256sum peersh-cli-windows-amd64.exe > peersh-cli-windows-amd64.exe.sha256)
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: dist/*
+          retention-days: 1
+
+  build_android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 ndk;26.1.10909125'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: stable
+          cache: true
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Restore Firebase config (optional)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
+          APP_FIREBASE_JSON: ${{ secrets.APP_FIREBASE_JSON }}
+        run: |
+          if [[ -n "$GOOGLE_SERVICES_JSON" ]]; then
+            echo "$GOOGLE_SERVICES_JSON" | base64 -d > app/android/app/google-services.json
+          fi
+          if [[ -n "$FIREBASE_OPTIONS_DART" ]]; then
+            echo "$FIREBASE_OPTIONS_DART" | base64 -d > app/lib/firebase_options.dart
+          fi
+          if [[ -n "$APP_FIREBASE_JSON" ]]; then
+            echo "$APP_FIREBASE_JSON" | base64 -d > app/firebase.json
+          fi
+
+      - name: Initialise gomobile
+        run: gomobile init
+
+      - name: Build mobile-core AAR
+        run: bash scripts/build-mobile-core.sh android
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: flutter build apk --release
+        working-directory: app
+        run: flutter build apk --release
+
+      - name: Rename + checksum APK
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp app/build/app/outputs/flutter-apk/app-release.apk dist/peersh-android.apk
+          (cd dist && sha256sum peersh-android.apk > peersh-android.apk.sha256)
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/*
+          retention-days: 1
+
+  publish:
+    needs: [build_peershd, build_android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/windows-binaries/peershd-windows-amd64.exe
+            dist/windows-binaries/peershd-windows-amd64.exe.sha256
+            dist/windows-binaries/peersh-cli-windows-amd64.exe
+            dist/windows-binaries/peersh-cli-windows-amd64.exe.sha256
+            dist/android-apk/peersh-android.apk
+            dist/android-apk/peersh-android.apk.sha256

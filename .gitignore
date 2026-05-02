@@ -44,3 +44,9 @@ peersh-signaling.db-*
 app/ios/Runner/GoogleService-Info.plist
 # .firebaserc holds the operator's project id; .firebaserc.example is the template.
 firebase/.firebaserc
+
+# Android release-signing config — operator-specific credentials. The
+# example file is committed; the real one stays local.
+app/android/key.properties
+app/android/*.keystore
+app/android/*.jks

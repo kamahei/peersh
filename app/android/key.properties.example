@@ -1,0 +1,17 @@
+# Copy this file to `app/android/key.properties` and fill in to sign
+# release APKs / app bundles with your own upload key.
+#
+# When this file is absent, release builds fall back to the debug
+# keystore (sideload-only — Play Store rejects debug-signed uploads).
+#
+# Generate a fresh upload key:
+#
+#   keytool -genkey -v -keystore app/android/release.keystore \
+#     -alias peersh-upload -keyalg RSA -keysize 2048 -validity 10000
+#
+# Then point this file at it.
+
+storeFile=release.keystore
+storePassword=changeme
+keyAlias=peersh-upload
+keyPassword=changeme

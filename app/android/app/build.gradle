@@ -6,6 +6,24 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// Optional release signing. Drop a `key.properties` next to this
+// build.gradle (or in app/android/) with:
+//
+//   storeFile=...
+//   storePassword=...
+//   keyAlias=...
+//   keyPassword=...
+//
+// to sign release APKs / app bundles with your own upload key. When
+// the file is absent, release builds fall back to debug-keystore
+// signing — fine for sideload, NOT acceptable for Play Store upload.
+def keyPropertiesFile = rootProject.file("key.properties")
+def hasReleaseKey = keyPropertiesFile.exists()
+def keystoreProperties = new Properties()
+if (hasReleaseKey) {
+    keyPropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
 android {
     namespace = "dev.peersh.app"
     compileSdk = flutter.compileSdkVersion
@@ -31,11 +49,31 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseKey) {
+            release {
+                storeFile = file(keystoreProperties["storeFile"])
+                storePassword = keystoreProperties["storePassword"]
+                keyAlias = keystoreProperties["keyAlias"]
+                keyPassword = keystoreProperties["keyPassword"]
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            // Use the operator's release key when key.properties is
+            // present; otherwise fall back to the debug keystore so
+            // `flutter build apk --release` still produces an
+            // installable (sideload-only) APK out of the box.
+            signingConfig = hasReleaseKey
+                ? signingConfigs.release
+                : signingConfigs.debug
+            // Code-shrink stays off until we add a R8 keep-rules file
+            // for the gomobile-generated classes; turning it on without
+            // rules currently strips peersh.Peersh / peersh.Session.
+            minifyEnabled = false
+            shrinkResources = false
         }
     }
 }
