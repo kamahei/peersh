@@ -26,6 +26,19 @@ service cloud.firestore {
       }
     }
 
+    // ops/* is internal state owned by the Cloud Functions / signaling
+    // server (budget-state, etc.). Admin SDK bypasses these rules; deny
+    // all client access explicitly.
+    match /ops/{doc=**} {
+      allow read, write: if false;
+    }
+
+    // pairing_codes/* is short-lived state managed by the pairing Cloud
+    // Functions (mintPairingCode / claimPairingCode). Admin-only.
+    match /pairing_codes/{code} {
+      allow read, write: if false;
+    }
+
     // Catch-all: deny everything else.
     match /{document=**} {
       allow read, write: if false;

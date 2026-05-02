@@ -97,11 +97,12 @@ class MainActivity : FlutterActivity() {
                     "openFirebaseSignalingSession" -> {
                         val signaling = call.argument<String>("signaling") ?: ""
                         val idToken = call.argument<String>("idToken") ?: ""
+                        val appCheckToken = call.argument<String>("appCheckToken") ?: ""
                         val target = call.argument<String>("target") ?: ""
                         val stun = call.argument<String>("stun") ?: ""
                         executor.submit {
                             try {
-                                val s = Peersh.openFirebaseSignalingSession(signaling, idToken, target, stun)
+                                val s = Peersh.openFirebaseSignalingSession(signaling, idToken, appCheckToken, target, stun)
                                 val id = nextSessionId.getAndIncrement()
                                 sessions[id] = s
                                 mainHandler.post { result.success(id) }

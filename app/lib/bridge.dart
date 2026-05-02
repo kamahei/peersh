@@ -65,16 +65,19 @@ class PeershBridge {
 
   /// Phase 5b: opens a Firebase-authenticated signaling session. The
   /// caller supplies a fresh Firebase ID token; the server resolves
-  /// user_id from it.
+  /// user_id from it. [appCheckToken] is forwarded to the server's
+  /// App Check verifier; pass empty when App Check is not in use.
   Future<int> openFirebaseSignalingSession({
     required String signaling,
     required String idToken,
     required String targetDeviceId,
+    String appCheckToken = '',
     String stunServer = 'stun.l.google.com:19302',
   }) async {
     final id = await _control.invokeMethod<int>('openFirebaseSignalingSession', {
       'signaling': signaling,
       'idToken': idToken,
+      'appCheckToken': appCheckToken,
       'target': targetDeviceId,
       'stun': stunServer,
     });

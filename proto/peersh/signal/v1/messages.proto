@@ -52,6 +52,11 @@ message Register {
   // this field are still compatible with PSK servers since proto3
   // defaults to "".
   string firebase_id_token = 13;
+
+  // Firebase App Check token. Server-side enforcement is opt-in via
+  // `app_check_required = true`; when on, Register frames without a
+  // valid token are rejected. Added in Phase 5b finalize.
+  string firebase_app_check_token = 14;
 }
 
 // RegisterAck is the server's response to Register.

@@ -103,8 +103,11 @@ func OpenDirectSession(addr string) (*Session, error) {
 // firebase auth provider verifies the token and uses its uid as the
 // peersh user_id. Everything else (STUN, signaling Connect, NAT punch,
 // QUIC dial, Hello) is identical.
-func OpenFirebaseSignalingSession(signalingURL, firebaseIDToken, targetDeviceID, stunServer string) (*Session, error) {
-	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, targetDeviceID, stunServer)
+//
+// firebaseAppCheckToken is forwarded as the App Check token on the
+// Register frame; pass an empty string when App Check is not in use.
+func OpenFirebaseSignalingSession(signalingURL, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer string) (*Session, error) {
+	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer)
 }
 
 // OpenSignalingSession registers with a signaling server, requests a
@@ -115,10 +118,10 @@ func OpenSignalingSession(signalingURL, userID, pskHex, targetDeviceID, stunServ
 	if err != nil {
 		return nil, fmt.Errorf("decode psk: %w", err)
 	}
-	return openSignalingInternal(signalingURL, userID, secret, "", targetDeviceID, stunServer)
+	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer)
 }
 
-func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, targetDeviceID, stunServer string) (*Session, error) {
+func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer string) (*Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -143,15 +146,16 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 	tr := transport.New(pc, devtls.DevClientTLSConfig())
 
 	sc, err := signaling.Dial(ctx, signaling.DialOptions{
-		URL:             signalingURL,
-		UserID:          userID,
-		Secret:          secret,
-		FirebaseIDToken: firebaseIDToken,
-		DeviceID:        deviceID,
-		PublicKey:       pub,
-		Kind:            signalv1.DeviceKind_DEVICE_KIND_MOBILE_CLIENT,
-		DisplayName:     "peersh-mobile",
-		ClientID:        "mobile-core/0.3",
+		URL:                   signalingURL,
+		UserID:                userID,
+		Secret:                secret,
+		FirebaseIDToken:       firebaseIDToken,
+		FirebaseAppCheckToken: firebaseAppCheckToken,
+		DeviceID:              deviceID,
+		PublicKey:             pub,
+		Kind:                  signalv1.DeviceKind_DEVICE_KIND_MOBILE_CLIENT,
+		DisplayName:           "peersh-mobile",
+		ClientID:              "mobile-core/0.3",
 	})
 	if err != nil {
 		_ = tr.Close()

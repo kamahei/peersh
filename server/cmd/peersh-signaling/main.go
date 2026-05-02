@@ -27,6 +27,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	fbappsdk "firebase.google.com/go/v4"
+
 	"github.com/peersh/peersh/core/auth"
 	fbauth "github.com/peersh/peersh/core/auth/firebase"
 	"github.com/peersh/peersh/core/auth/psk"
@@ -38,9 +40,10 @@ import (
 	"github.com/peersh/peersh/server/config"
 	"github.com/peersh/peersh/server/ratelimit"
 	"github.com/peersh/peersh/server/room"
+	"github.com/peersh/peersh/server/ws"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/peersh/peersh/server/ws"
+	"google.golang.org/api/option"
 )
 
 func main() {
@@ -123,23 +126,30 @@ func runServe(args []string) error {
 		return fmt.Errorf("build auth: %w", err)
 	}
 
+	appCheck, err := buildAppCheck(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("build app check: %w", err)
+	}
+
 	metrics := ws.NewMetrics()
 	if err := metrics.Register(prometheus.DefaultRegisterer); err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
 
 	server := ws.New(&ws.Server{
-		ServerID:    cfg.ServerID,
-		Store:       st,
-		Auth:        authProvider,
-		AuthBuilder: authBuilder,
-		AuthKind:    authKind,
-		Registry:    room.New(),
-		IPLimit:     ratelimit.New(config.PerSecond(cfg.RateLimit.IPPerMinute), cfg.RateLimit.IPBurst),
-		UserLimit:   ratelimit.New(config.PerSecond(cfg.RateLimit.UserPerMinute), cfg.RateLimit.UserBurst),
-		DeviceLimit: ratelimit.New(config.PerSecond(cfg.RateLimit.DevicePerMinute), cfg.RateLimit.DeviceBurst),
-		Logger:      logger,
-		Metrics:     metrics,
+		ServerID:         cfg.ServerID,
+		Store:            st,
+		Auth:             authProvider,
+		AuthBuilder:      authBuilder,
+		AuthKind:         authKind,
+		AppCheckVerifier: appCheck,
+		AppCheckRequired: cfg.Firebase.AppCheckRequired,
+		Registry:         room.New(),
+		IPLimit:          ratelimit.New(config.PerSecond(cfg.RateLimit.IPPerMinute), cfg.RateLimit.IPBurst),
+		UserLimit:        ratelimit.New(config.PerSecond(cfg.RateLimit.UserPerMinute), cfg.RateLimit.UserBurst),
+		DeviceLimit:      ratelimit.New(config.PerSecond(cfg.RateLimit.DevicePerMinute), cfg.RateLimit.DeviceBurst),
+		Logger:           logger,
+		Metrics:          metrics,
 	})
 
 	mux := http.NewServeMux()
@@ -209,6 +219,32 @@ func openStore(ctx context.Context, cfg config.Config) (store.Store, error) {
 	default:
 		return nil, fmt.Errorf("config: unknown store_backend %q", cfg.StoreBackend)
 	}
+}
+
+// buildAppCheck constructs an App Check verifier when the auth provider
+// is firebase. PSK mode returns a nil verifier (App Check is a Firebase
+// concept). Firebase mode returns a verifier even when AppCheckRequired
+// is false, so unverified tokens are still logged for rollout
+// observability.
+func buildAppCheck(ctx context.Context, cfg config.Config) (fbauth.AppCheckVerifier, error) {
+	if cfg.AuthProvider != "firebase" {
+		return nil, nil
+	}
+	if cfg.Firebase.ProjectID == "" {
+		return nil, nil
+	}
+	app, err := fbappsdk.NewApp(ctx, &fbappsdk.Config{ProjectID: cfg.Firebase.ProjectID}, fbAppOptions(cfg.Firebase.CredentialsPath)...)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: NewApp for app check: %w", err)
+	}
+	return fbauth.AppCheckFromApp(ctx, app)
+}
+
+func fbAppOptions(credsPath string) []option.ClientOption {
+	if credsPath == "" {
+		return nil
+	}
+	return []option.ClientOption{option.WithCredentialsFile(credsPath)}
 }
 
 // buildAuth returns the configured auth.Provider plus the matching

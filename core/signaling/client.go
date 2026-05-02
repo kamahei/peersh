@@ -48,6 +48,11 @@ type DialOptions struct {
 	// ignored in this mode.
 	FirebaseIDToken string
 
+	// FirebaseAppCheckToken is forwarded as-is on the Register frame.
+	// Optional even in Firebase mode: enforcement is decided by the
+	// server's `app_check_required` config.
+	FirebaseAppCheckToken string
+
 	// Optional. Defaults to http.DefaultClient.
 	HTTPClient *http.Client
 
@@ -147,6 +152,7 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 	if opts.FirebaseIDToken != "" {
 		// Firebase mode: the server resolves user_id from the token.
 		reg.FirebaseIdToken = opts.FirebaseIDToken
+		reg.FirebaseAppCheckToken = opts.FirebaseAppCheckToken
 	} else {
 		// PSK mode: HMAC-sign the Register frame.
 		if err := psk.SignRegister(opts.Secret, reg); err != nil {

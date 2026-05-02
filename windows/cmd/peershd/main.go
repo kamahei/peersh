@@ -95,22 +95,26 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	listen := fs.String("listen", ":7777", "UDP address to listen on for QUIC")
 	certDir := fs.String("cert-dir", "", "directory for self-signed dev cert (default: platform-specific app data dir)")
 	debug := fs.Bool("debug", false, "enable debug logging")
-	signalingURL := fs.String("signaling", "", "signaling server URL (ws:// or wss://); empty disables signaling")
+	defaultRegion := embeddedFirebaseRegion
+	if defaultRegion == "" {
+		defaultRegion = "asia-northeast1"
+	}
+	signalingURL := fs.String("signaling", embeddedSignalingURL, "signaling server URL (ws:// or wss://); empty disables signaling")
 	userID := fs.String("user", "", "user_id under which to register (PSK signaling mode)")
 	pskFile := fs.String("psk-file", "", "path to a file containing a hex-encoded PSK (PSK signaling mode)")
 	displayName := fs.String("display-name", "", "display name to register (defaults to hostname)")
 	stunServer := fs.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
-	firebaseProjectID := fs.String("firebase-project", "", "Firebase project id (Firebase signaling mode)")
+	firebaseProjectID := fs.String("firebase-project", embeddedFirebaseProjectID, "Firebase project id (Firebase signaling mode)")
 	firebaseCredentials := fs.String("firebase-credentials", "", "path to Firebase service-account JSON (advanced; the pairing flow does not need this)")
 	firebaseEmail := fs.String("firebase-email", "", "email of the Firebase account this peershd registers under (with -firebase-credentials); resolved to uid via Admin SDK")
 	firebaseUID := fs.String("firebase-uid", "", "explicit Firebase uid (alternative to -firebase-email)")
-	firebaseAPIKey := fs.String("firebase-api-key", "", "Firebase Web API key for signInWithCustomToken / token refresh (Firebase signaling mode)")
-	firebaseRegion := fs.String("firebase-region", "asia-northeast1", "region of the deployed Cloud Functions (claimPairingCode)")
+	firebaseAPIKey := fs.String("firebase-api-key", embeddedFirebaseAPIKey, "Firebase Web API key for signInWithCustomToken / token refresh (Firebase signaling mode)")
+	firebaseRegion := fs.String("firebase-region", defaultRegion, "region of the deployed Cloud Functions (claimPairingCode)")
 	firebasePairCode := fs.String("pair-code", "", "one-time 6-digit pairing code shown by the mobile app's Pair PC screen; consumed once and replaced by a persisted refresh token")
 	firebaseTokenFile := fs.String("firebase-token-file", "", "path to the persisted Firebase refresh token (default: %LOCALAPPDATA%\\peersh\\firebase-refresh-token.txt)")
 	firebaseLogin := fs.Bool("firebase-login", false, "open the default browser to sign in with Google (one-shot bootstrap; replaces -pair-code on desktops with a browser)")
-	googleClientID := fs.String("google-client-id", "", "OAuth 2.0 'Desktop app' client id (required with -firebase-login)")
-	googleClientSecret := fs.String("google-client-secret", "", "OAuth 2.0 'Desktop app' client secret (required with -firebase-login)")
+	googleClientID := fs.String("google-client-id", embeddedGoogleClientID, "OAuth 2.0 'Desktop app' client id (required with -firebase-login)")
+	googleClientSecret := fs.String("google-client-secret", embeddedGoogleClientSecret, "OAuth 2.0 'Desktop app' client secret (required with -firebase-login)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

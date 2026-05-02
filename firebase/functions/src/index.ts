@@ -12,13 +12,17 @@
 //   claimPairingCode   — HTTPS callable. Unauthenticated peershd hosts
 //                        post the code; the function returns the cached
 //                        Custom Token and deletes the doc (one-shot).
-//
-// Cost guardrails (Phase 5+) live as separate functions in cost.ts and
-// are wired in below when present.
+//   budgetGuard        — Pub/Sub triggered by Cloud Billing budget
+//                        alerts. Writes ops/budget-state with
+//                        {triggered: true, ...} when a configured
+//                        threshold fires; onSessionCreated checks the
+//                        flag and short-circuits the FCM send so a
+//                        runaway loop can't burn quota past the budget.
 
 import * as admin from 'firebase-admin';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { onRequest } from 'firebase-functions/v2/https';
+import { onMessagePublished } from 'firebase-functions/v2/pubsub';
 import { logger, setGlobalOptions } from 'firebase-functions/v2';
 
 admin.initializeApp();
@@ -48,6 +52,21 @@ export const onSessionCreated = onDocumentCreated(
     const data = snap.data();
     const userId = event.params.userId;
     const sessionId = event.params.sessionId;
+
+    // Cost guardrail: when budgetGuard has marked the project as over
+    // budget, skip the FCM send entirely. Mobile clients still get
+    // their own copy of the session via Firestore — they just won't
+    // wake up an idle host. Operator clears the flag to resume.
+    const guard = await admin.firestore().doc('ops/budget-state').get();
+    if (guard.exists && guard.get('triggered') === true) {
+      logger.warn('onSessionCreated: skipped, budget guard active', {
+        userId,
+        sessionId,
+        threshold: guard.get('threshold'),
+      });
+      return;
+    }
+
     const hostDeviceId = data.host_device_id as string | undefined;
     if (!hostDeviceId) {
       logger.warn('onSessionCreated: session has no host_device_id', {
@@ -217,5 +236,69 @@ export const claimPairingCode = onRequest(
   },
 );
 
-// cost.ts hooks here when implemented:
-// export { dailyBudgetGuard } from './cost';
+// ---------------------------------------------------------------------
+// Cost guardrail
+// ---------------------------------------------------------------------
+//
+// Wire-up:
+//   1. Operator creates a Cloud Billing budget at GCP Console -> Billing
+//      -> Budgets & alerts. Set thresholds (e.g. 50%, 90%, 100%) and
+//      attach a Pub/Sub topic — convention name `peersh-budget-alert`.
+//   2. The budget service publishes JSON messages on that topic at each
+//      threshold. budgetGuard reads them and writes ops/budget-state.
+//   3. onSessionCreated reads ops/budget-state on every fire; when the
+//      `triggered` flag is true, it skips the FCM send. Operator clears
+//      the flag (delete the doc or set triggered: false) to resume.
+//
+// Threshold defaults to firing at 100% of the budget; operators can
+// tighten via PEERSH_BUDGET_GUARD_THRESHOLD env var (e.g. "0.9" for
+// 90%).
+
+const BUDGET_GUARD_THRESHOLD = parseFloat(
+  process.env.PEERSH_BUDGET_GUARD_THRESHOLD ?? '1.0',
+);
+
+interface BudgetAlert {
+  budgetDisplayName?: string;
+  costAmount?: number;
+  budgetAmount?: number;
+  alertThresholdExceeded?: number;
+  costIntervalStart?: string;
+}
+
+export const budgetGuard = onMessagePublished(
+  'peersh-budget-alert',
+  async (event) => {
+    let alert: BudgetAlert = {};
+    try {
+      alert = event.data.message.json as BudgetAlert;
+    } catch {
+      // Pub/Sub message wasn't JSON; nothing to do.
+      logger.warn('budgetGuard: non-JSON message body');
+      return;
+    }
+    const cost = alert.costAmount ?? 0;
+    const budget = alert.budgetAmount ?? 0;
+    const ratio = budget > 0 ? cost / budget : 0;
+    logger.info('budget alert received', { cost, budget, ratio });
+
+    if (ratio >= BUDGET_GUARD_THRESHOLD) {
+      await admin.firestore().doc('ops/budget-state').set(
+        {
+          triggered: true,
+          ratio,
+          cost_amount: cost,
+          budget_amount: budget,
+          threshold: BUDGET_GUARD_THRESHOLD,
+          updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      logger.warn('budget guard activated', { ratio });
+      return;
+    }
+
+    // Below threshold: leave any existing state alone but log progress.
+    logger.info('budget under threshold', { ratio });
+  },
+);

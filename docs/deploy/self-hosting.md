@@ -238,6 +238,61 @@ The endpoint accepts GET and HEAD only.
 
 No additional setup is required: STUN is automatic and uses the same UDP socket QUIC speaks over.
 
+## Distributing peershd with embedded Firebase defaults
+
+If you operate a Firebase-backed peersh deployment and want to hand `peershd.exe` to other people (family, team, internal users) without making them paste `-firebase-api-key`, `-google-client-id`, etc. on every launch, build a *distribution binary* that bakes those values in.
+
+### 1. Gather the project values
+
+You need:
+
+- **Firebase Web API key** — `grep "apiKey" app/lib/firebase_options.dart`. Public-by-design; safe to embed.
+- **Firebase project id** — same file. Non-sensitive.
+- **Cloud Functions region** — typically `asia-northeast1`. Match your `firebase/functions/src/index.ts` `setGlobalOptions({region: ...})`.
+- **Signaling URL** — `wss://<your-cloud-run-host>/ws`.
+- **OAuth Desktop-app client id + secret** — created once in [GCP Console → APIs & Services → Credentials → OAuth client ID → Desktop app](https://console.cloud.google.com/apis/credentials). The secret of an Installed-app client is *not actually a secret* per Google's docs — embed away.
+
+### 2. Fill `local/peershd-build.env`
+
+```sh
+cp scripts/peershd-build.env.example local/peershd-build.env
+$EDITOR local/peershd-build.env       # paste the values
+```
+
+`local/` is gitignored, so the file stays off the tree even if you run `git status` casually.
+
+### 3. Build
+
+```sh
+# Linux / macOS / Git Bash:
+bash scripts/build-peershd-distrib.sh
+
+# Windows cmd / PowerShell:
+.\scripts\build-peershd-distrib.cmd
+```
+
+Output: `local/peershd.exe` (cross-compiled to Windows from any host). End users can run it with no Firebase flags:
+
+```sh
+peershd.exe -firebase-login -display-name "<their host>"
+```
+
+The first run opens a browser, signs in, persists the refresh token. Subsequent runs need only `-display-name` (or even nothing — `-display-name` defaults to the hostname).
+
+### 4. Verify the embed
+
+Strings you can grep for in the resulting binary:
+
+```sh
+strings local/peershd.exe | grep -E "AIza|cloudfunctions|googleusercontent"
+```
+
+You should see your project id, the API key, and the OAuth client id. If they're missing, the ldflags didn't apply — re-run with `-x` on the script to debug.
+
+### 5. Distribute
+
+Drop `local/peershd.exe` (and `peersh-cli.exe` if you also want the REPL) into a zip, GitHub release, or your MSI build and ship. End users only need to run it once with `-firebase-login` (or `-pair-code`) to bootstrap. The Web API key being visible in the binary is OK — App Check is the actual rate limit (see `docs/deploy/firebase.md` "App Check").
+
 ## Verifying a working setup
 
 Once everything is running:

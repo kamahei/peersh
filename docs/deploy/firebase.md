@@ -247,6 +247,8 @@ peershd registers with the signaling server using a fresh Firebase ID token. The
 2. **Pairing code (`-pair-code`)** — required on headless / kiosk hosts (no browser). The mobile app generates a one-time 6-digit code that peershd consumes once.
 3. **Service-account JSON (`-firebase-credentials`)** — multi-host fleet provisioning. Project-wide credential, kept under an advanced section below.
 
+> **Tip — distribution build.** If you're shipping peershd binaries to other people (family, team, or as part of a paid product), bake your project's defaults into the binary so end users don't need to pass `-firebase-*` / `-google-*` flags. See `docs/deploy/self-hosting.md` for the `scripts/build-peershd-distrib.sh` walkthrough; the rest of this section assumes the operator (you) is running peershd directly with explicit flags.
+
 ### 1. Find the Firebase Web API key
 
 ```sh
@@ -336,6 +338,60 @@ peershd \
 ```
 
 This grants peershd the ability to mint tokens for **any** uid in the project — keep `peershd-sa.json` strictly on trusted hosts. The pairing flow is preferred for personal use because the persisted credential is scoped to a single uid.
+
+## App Check (anti-abuse)
+
+Without App Check, anyone with the Firebase Web API key can mint ID tokens and Register against the signaling server. App Check blocks this: the mobile app attests its integrity (Play Integrity on Android, debug provider in dev) and the server rejects Register frames whose attestation doesn't pass.
+
+Roll out in this order so existing clients don't break:
+
+1. **Enable App Check in Firebase Console**
+   `https://console.firebase.google.com/project/<your-project-id>/appcheck`
+   Click **Get started** → register the Android app → choose **Play Integrity** as the provider. (For iOS, use **App Attest**; iOS support in peersh is deferred to a future phase.)
+
+2. **Roll out the mobile build that sends App Check tokens.**
+   The shipped APK calls `FirebaseAppCheck.instance.activate(...)` on launch and forwards the token on every Register. If App Check isn't yet enabled in the console, the token is empty/invalid — the server logs but doesn't reject (since `app_check_required = false`). Wait until your users have updated.
+
+3. **Enforce on the signaling server.**
+   Once telemetry shows healthy App Check tokens are arriving, enable enforcement:
+
+   ```sh
+   gcloud run services update peersh-signaling \
+     --region=<region> \
+     --project=<your-project-id> \
+     --update-env-vars=PEERSH_SIGNALING_FIREBASE_APP_CHECK_REQUIRED=true
+   ```
+
+Debug builds use the App Check `Debug` provider, which only works after you register the device's debug token in Firebase Console → App Check → Manage debug tokens. Production builds use Play Integrity automatically (`kReleaseMode` switches in `app/lib/main.dart`).
+
+## Cost guardrail
+
+The `budgetGuard` Cloud Function listens to a Cloud Billing budget alert Pub/Sub topic. When the configured threshold is hit, it writes `ops/budget-state` in Firestore; `onSessionCreated` checks that flag and short-circuits the FCM wake-up so a runaway loop can't keep burning Functions invocations past your budget.
+
+To wire it up:
+
+```sh
+# 1. Create the Pub/Sub topic the budget alert will publish to.
+gcloud pubsub topics create peersh-budget-alert --project=<your-project-id>
+
+# 2. Cloud Billing → Budgets & alerts → Create budget. Attach
+#    `peersh-budget-alert` as the Pub/Sub notification topic. Set
+#    thresholds (e.g. 50%, 90%, 100%).
+
+# 3. Deploy the function (already in firebase/functions/src/index.ts).
+cd firebase
+firebase deploy --only functions:budgetGuard
+```
+
+When the alert fires:
+
+```sh
+# Resume operation after fixing the cost runaway:
+gcloud firestore documents delete --project=<your-project-id> \
+  ops/budget-state
+```
+
+You can tighten the trigger ratio via the function's `PEERSH_BUDGET_GUARD_THRESHOLD` env var (default `1.0` = 100%; set to `0.9` to stop FCM wakes at 90% of budget). Edit in `firebase.json` or via `gcloud run services update` on the underlying Cloud Run service.
 
 ## Multiple PCs
 

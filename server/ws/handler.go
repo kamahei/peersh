@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/peersh/peersh/core/auth"
+	fbauth "github.com/peersh/peersh/core/auth/firebase"
 	"github.com/peersh/peersh/core/auth/psk"
 	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 	"github.com/peersh/peersh/core/store"
@@ -45,6 +46,17 @@ type Server struct {
 	// AuthKind is recorded with newly-created users so store.User.AuthProvider
 	// matches the runtime provider.
 	AuthKind store.AuthProvider
+
+	// AppCheckVerifier is consulted on every Register frame when set.
+	// Nil disables App Check verification entirely. When non-nil, every
+	// missing-or-invalid token is logged; the AppCheckRequired flag
+	// decides whether to reject the connection.
+	AppCheckVerifier fbauth.AppCheckVerifier
+
+	// AppCheckRequired forces rejection of Register frames missing a
+	// valid App Check token. Effective only when AppCheckVerifier is
+	// also set.
+	AppCheckRequired bool
 
 	Registry    *room.Registry
 	IPLimit     *ratelimit.Bucket // upgrade-time per-IP
@@ -257,6 +269,23 @@ func (c *Connection) handshake(ctx context.Context) error {
 	}
 	if !c.server.UserLimit.Allow(reg.GetUserId()) {
 		return fmt.Errorf("user rate limit")
+	}
+
+	if c.server.AppCheckVerifier != nil {
+		if err := fbauth.VerifyAppCheck(c.server.AppCheckVerifier, reg.GetFirebaseAppCheckToken()); err != nil {
+			c.server.Logger.Info("app check verification failed",
+				"user_id", reg.GetUserId(),
+				"required", c.server.AppCheckRequired,
+				"err", err)
+			if c.server.AppCheckRequired {
+				_ = c.Send(hsCtx, &signalv1.Frame{
+					Body: &signalv1.Frame_RegisterAck{RegisterAck: &signalv1.RegisterAck{
+						Accepted: false, Reason: "app check: " + err.Error(), ServerId: c.server.ServerID,
+					}},
+				})
+				return fmt.Errorf("app check: %w", err)
+			}
+		}
 	}
 
 	builder := c.server.AuthBuilder

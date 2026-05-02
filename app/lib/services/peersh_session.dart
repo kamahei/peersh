@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../bridge.dart';
@@ -30,9 +32,20 @@ class PeershSession {
       if (firebaseIdToken == null || firebaseIdToken.isEmpty) {
         throw StateError('Firebase server requires a fresh ID token; sign in first.');
       }
+      String appCheckToken = '';
+      try {
+        appCheckToken = await FirebaseAppCheck.instance.getToken() ?? '';
+      } catch (e) {
+        // App Check may be inactivated (no project) or temporarily
+        // unreachable; fall through with an empty token. The server
+        // logs a warning when `app_check_required = false`, or rejects
+        // the Register frame when enforced.
+        debugPrint('peersh: App Check getToken failed: $e');
+      }
       id = await bridge.openFirebaseSignalingSession(
         signaling: server.wsUrl,
         idToken: firebaseIdToken,
+        appCheckToken: appCheckToken,
         targetDeviceId: server.targetDeviceId,
         stunServer: server.stunServer,
       );

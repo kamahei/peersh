@@ -280,8 +280,12 @@ type Register struct {
 	// this field are still compatible with PSK servers since proto3
 	// defaults to "".
 	FirebaseIdToken string `protobuf:"bytes,13,opt,name=firebase_id_token,json=firebaseIdToken,proto3" json:"firebase_id_token,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Firebase App Check token. Server-side enforcement is opt-in via
+	// `app_check_required = true`; when on, Register frames without a
+	// valid token are rejected. Added in Phase 5b finalize.
+	FirebaseAppCheckToken string `protobuf:"bytes,14,opt,name=firebase_app_check_token,json=firebaseAppCheckToken,proto3" json:"firebase_app_check_token,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *Register) Reset() {
@@ -373,6 +377,13 @@ func (x *Register) GetHmacSignature() []byte {
 func (x *Register) GetFirebaseIdToken() string {
 	if x != nil {
 		return x.FirebaseIdToken
+	}
+	return ""
+}
+
+func (x *Register) GetFirebaseAppCheckToken() string {
+	if x != nil {
+		return x.FirebaseAppCheckToken
 	}
 	return ""
 }
@@ -636,7 +647,7 @@ const file_peersh_signal_v1_messages_proto_rawDesc = "" +
 	"\vServerHello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\"\n" +
 	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12\x1b\n" +
-	"\tserver_id\x18\x03 \x01(\tR\bserverId\"\xc3\x02\n" +
+	"\tserver_id\x18\x03 \x01(\tR\bserverId\"\xfc\x02\n" +
 	"\bRegister\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x1d\n" +
@@ -648,7 +659,8 @@ const file_peersh_signal_v1_messages_proto_rawDesc = "" +
 	" \x01(\x03R\fsignedAtUnix\x12\x14\n" +
 	"\x05nonce\x18\v \x01(\fR\x05nonce\x12%\n" +
 	"\x0ehmac_signature\x18\f \x01(\fR\rhmacSignature\x12*\n" +
-	"\x11firebase_id_token\x18\r \x01(\tR\x0ffirebaseIdToken\"^\n" +
+	"\x11firebase_id_token\x18\r \x01(\tR\x0ffirebaseIdToken\x127\n" +
+	"\x18firebase_app_check_token\x18\x0e \x01(\tR\x15firebaseAppCheckToken\"^\n" +
 	"\vRegisterAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1b\n" +

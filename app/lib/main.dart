@@ -7,7 +7,9 @@
 // initialization succeeds and Firebase server entries become usable
 // alongside PSK ones.
 
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -22,6 +24,18 @@ Future<void> main() async {
       options: DefaultFirebaseOptions.currentPlatform,
     );
     firebaseInitialized = true;
+    // App Check ships in every Firebase-enabled APK. The server-side
+    // `app_check_required` config decides whether to enforce; rolling
+    // tokens out on clients first keeps the deployment order safe.
+    try {
+      await FirebaseAppCheck.instance.activate(
+        providerAndroid: kReleaseMode
+            ? const AndroidPlayIntegrityProvider()
+            : const AndroidDebugProvider(),
+      );
+    } catch (e) {
+      debugPrint('peersh: App Check activation failed (continuing): $e');
+    }
   } catch (e) {
     firebaseInitialized = false;
     debugPrint('peersh: Firebase initialization skipped (PSK-only mode): $e');

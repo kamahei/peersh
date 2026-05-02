@@ -68,6 +68,13 @@ type BootstrapPSK struct {
 type FirebaseConfig struct {
 	ProjectID       string `toml:"project_id"`
 	CredentialsPath string `toml:"credentials_path"`
+
+	// AppCheckRequired enforces Firebase App Check. When true, Register
+	// frames without a valid App Check token are rejected (only
+	// applicable in firebase auth mode). Roll out by enabling on
+	// clients first, then flipping this on once telemetry confirms
+	// every active client is sending tokens.
+	AppCheckRequired bool `toml:"app_check_required"`
 }
 
 // DiscoveryConfig populates the /.well-known/peersh.json document the
@@ -216,6 +223,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_FIREBASE_CREDENTIALS"); v != "" {
 		cfg.Firebase.CredentialsPath = v
+	}
+	if v := os.Getenv("PEERSH_SIGNALING_FIREBASE_APP_CHECK_REQUIRED"); v != "" {
+		cfg.Firebase.AppCheckRequired = v == "1" || v == "true" || v == "TRUE"
 	}
 	if v := os.Getenv("PEERSH_SIGNALING_BOOTSTRAP_PSK"); v != "" {
 		if parsed, err := parseBootstrapPSKs(v); err == nil {
