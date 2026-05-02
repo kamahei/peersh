@@ -143,6 +143,8 @@ PROJECT_ID=<your-project-id> REGION=<region> \
   bash server/deploy/cloud-run/deploy.sh
 ```
 
+> **Windows / PowerShell tip.** Invoking `bash` from PowerShell with a backslash path strips the backslashes (`bash D:\peersh\...\deploy.sh` → `D:peersh...deploy.sh: No such file or directory`). Either single-quote the path (`bash 'D:\peersh\server\deploy\cloud-run\deploy.sh'`) or use forward slashes (`bash D:/peersh/server/deploy/cloud-run/deploy.sh`). Or `cd` into the repo root first and use a relative path.
+
 Then set the environment variables that switch the running service into Firebase mode (the deploy script's defaults are PSK-friendly; Firebase mode adds two more):
 
 ```sh

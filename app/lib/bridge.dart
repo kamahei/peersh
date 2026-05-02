@@ -113,6 +113,31 @@ class PeershBridge {
     });
   }
 
+  /// Starts (or refreshes) the Android foreground service that holds
+  /// the OS off the app process while a session is active. iOS has no
+  /// equivalent yet (Background Modes work is deferred); the call is
+  /// silently ignored on platforms without the handler.
+  Future<void> startForegroundService({
+    required String title,
+    required String body,
+  }) async {
+    try {
+      await _control.invokeMethod<void>('fgServiceStart', {
+        'title': title,
+        'body': body,
+      });
+    } catch (_) {
+      // No-op on iOS / web / desktop.
+    }
+  }
+
+  /// Stops the foreground service started via [startForegroundService].
+  Future<void> stopForegroundService() async {
+    try {
+      await _control.invokeMethod<void>('fgServiceStop');
+    } catch (_) {}
+  }
+
   /// Opens an interactive PTY on an existing session. Returns the host-
   /// assigned PTY id + the server-issued reattach handle. The caller
   /// uses the id for [ptyInput] / [ptyResize] / [closePty] / file API

@@ -143,6 +143,12 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         }
         // Otherwise leave _tabs empty so the user picks via the prompt.
       });
+      // Foreground service keeps the OS from freezing the app process
+      // (and the QUIC keepalive) when backgrounded.
+      unawaited(bridge.startForegroundService(
+        title: widget.server.name,
+        body: 'Connected — tap to return',
+      ));
       if (isReconnect) _showReattachBanner();
       if (mounted && _tabs.isEmpty) {
         await _maybeOfferReattach(persisted);
@@ -299,6 +305,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     _resumedBannerTimer?.cancel();
     _ptyExitWatcher?.cancel();
     final bridge = ref.read(bridgeProvider);
+    unawaited(bridge.stopForegroundService());
     for (final tab in _tabs) {
       final id = tab.ptyId;
       if (id != null) bridge.closePty(ptyId: id);

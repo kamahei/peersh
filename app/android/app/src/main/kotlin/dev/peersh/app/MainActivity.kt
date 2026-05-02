@@ -158,6 +158,16 @@ class MainActivity : FlutterActivity() {
                             mainHandler.post { result.success(null) }
                         }
                     }
+                    "fgServiceStart" -> {
+                        val title = call.argument<String>("title") ?: "peersh"
+                        val body = call.argument<String>("body") ?: "Session active"
+                        PeershForegroundService.start(applicationContext, title, body)
+                        result.success(null)
+                    }
+                    "fgServiceStop" -> {
+                        PeershForegroundService.stop(applicationContext)
+                        result.success(null)
+                    }
                     "openPTY" -> {
                         val sessionId = (call.argument<Number>("sessionId") ?: 0).toInt()
                         val command = call.argument<String>("command") ?: ""
