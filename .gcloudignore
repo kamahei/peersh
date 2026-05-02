@@ -1,0 +1,52 @@
+# Keep `gcloud builds submit` archive small. Only files needed by
+# server/deploy/Dockerfile (go.work + core/ + server/ + go.mod stubs of
+# cli/windows/mobile-core for `go work sync`) travel to Cloud Build.
+.git
+.gitignore
+.github
+.idea
+.vscode
+.claude
+/local
+/docs
+/app
+/scripts
+/firebase
+/tests
+/bin
+/dist
+*.md
+*.psk
+*.real
+*.example
+*.log
+*.exe
+*.msi
+*.wixpdb
+**/build
+**/.dart_tool
+**/.gradle
+**/node_modules
+
+# Workspace sibling modules: only their go.mod/go.sum stubs are needed
+# by the Dockerfile's COPY .../go.mod step. Exclude their source trees
+# explicitly (gcloud's gitignore parser does not reliably honor
+# directory-wide exclusion + per-file negation).
+cli/cmd
+cli/doc.go
+cli/*.exe
+mobile-core/peersh.go
+mobile-core/peersh_test.go
+mobile-core/doc.go
+windows/cmd
+windows/firebase
+windows/peerauth
+windows/pty
+windows/ptyhost
+windows/pwsh
+windows/session
+windows/shell
+windows/installer
+windows/assets
+windows/doc.go
+windows/*.exe
