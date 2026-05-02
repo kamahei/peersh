@@ -293,6 +293,27 @@ You should see your project id, the API key, and the OAuth client id. If they're
 
 Drop `local/peershd.exe` (and `peersh-cli.exe` if you also want the REPL) into a zip, GitHub release, or your MSI build and ship. End users only need to run it once with `-firebase-login` (or `-pair-code`) to bootstrap. The Web API key being visible in the binary is OK — App Check is the actual rate limit (see `docs/deploy/firebase.md` "App Check").
 
+## peershd self-update
+
+Distribution builds embed a GitHub repo (`embeddedUpdateRepo`) and a version string. Once the build is in place, end users can refresh to the latest release without rebuilding from source:
+
+```sh
+peershd version          # report the running version + repo
+
+peershd update -check    # exit 0 if up to date, 1 if a newer release exists
+peershd update           # download + verify SHA-256 + atomic replace + exit
+peershd update -force    # reinstall even when versions match (recovery)
+```
+
+Release artefacts must follow the naming convention so the update subcommand can find them:
+
+- `peershd-windows-amd64.exe` (the binary)
+- `peershd-windows-amd64.exe.sha256` (one-line `<hex>` or `<hex>  <name>` lines, BSD/Unix style)
+
+The bundled `.github/workflows/build-peershd.yml` produces both. After CI succeeds, attach the artefacts to a GitHub release and `peershd update` will find them.
+
+When the binary is locked (running as a Windows Service), the update fails fast with a hint to `peershd -stop` first. After installing, restart manually.
+
 ## Verifying a working setup
 
 Once everything is running:

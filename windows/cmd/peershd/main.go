@@ -80,6 +80,22 @@ func main() {
 		return
 	}
 
+	// Subcommands that don't run the daemon. Single-token entry points
+	// to keep flags simple: `peershd version`, `peershd update -check`.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "version", "-version", "--version":
+			versionCommand()
+			return
+		case "update":
+			if err := runUpdate(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	if err := runWithCtx(nil, os.Args[1:]); err != nil {
 		slog.Error("peershd exiting on error", "err", err)
 		os.Exit(1)

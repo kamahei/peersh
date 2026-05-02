@@ -1,7 +1,15 @@
 package dev.peersh.app
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -18,6 +26,10 @@ import java.util.concurrent.atomic.AtomicInteger
 class MainActivity : FlutterActivity() {
     private val controlChannelName = "dev.peersh/bridge"
     private val eventChannelName = "dev.peersh/session/events"
+
+    companion object {
+        private const val REQ_POST_NOTIFICATIONS = 0x70
+    }
 
     private val sessions = ConcurrentHashMap<Int, Session>()
     // PTY map keyed by host-assigned PTYSession.id() (Long): the same id
@@ -166,6 +178,48 @@ class MainActivity : FlutterActivity() {
                     }
                     "fgServiceStop" -> {
                         PeershForegroundService.stop(applicationContext)
+                        result.success(null)
+                    }
+                    "notificationsEnabled" -> {
+                        val ok = NotificationManagerCompat.from(applicationContext)
+                            .areNotificationsEnabled()
+                        result.success(ok)
+                    }
+                    "requestNotifications" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            val granted = ActivityCompat.checkSelfPermission(
+                                this,
+                                Manifest.permission.POST_NOTIFICATIONS,
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (!granted) {
+                                ActivityCompat.requestPermissions(
+                                    this,
+                                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                                    REQ_POST_NOTIFICATIONS,
+                                )
+                                // We don't await the user's response here;
+                                // the caller polls notificationsEnabled or
+                                // re-prompts on next session start.
+                            }
+                        }
+                        result.success(null)
+                    }
+                    "openNotificationSettings" -> {
+                        val intent = Intent().apply {
+                            action = Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                            putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        try {
+                            startActivity(intent)
+                        } catch (_: Throwable) {
+                            // Older Android: fall back to app settings
+                            val fallback = Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", packageName, null),
+                            ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+                            startActivity(fallback)
+                        }
                         result.success(null)
                     }
                     "openPTY" -> {

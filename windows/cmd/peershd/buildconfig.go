@@ -37,4 +37,11 @@ var (
 	embeddedSignalingURL       string
 	embeddedGoogleClientID     string
 	embeddedGoogleClientSecret string
+
+	// Self-update bookkeeping. embeddedVersion is checked against the
+	// latest release tag at update-time; embeddedUpdateRepo is the
+	// "owner/repo" used to fetch GitHub release manifests. Empty repo
+	// disables the update subcommand cleanly.
+	embeddedVersion    = "dev"
+	embeddedUpdateRepo string // e.g. "kamahei/peersh"
 )

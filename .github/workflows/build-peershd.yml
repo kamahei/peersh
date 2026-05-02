@@ -1,0 +1,92 @@
+name: Build peershd (Windows)
+
+# Manually triggered. Builds peershd.exe + peersh-cli.exe and (optionally)
+# the MSI installer. Does NOT auto-run on push — release operator picks
+# when to publish artefacts.
+#
+# Embedding Firebase / OAuth defaults: set the optional repo or
+# environment secrets PEERSHD_FIREBASE_* / PEERSHD_GOOGLE_* and they're
+# baked into the binary via -ldflags. If unset, the build still
+# succeeds — the binary just requires runtime flags.
+
+on:
+  workflow_dispatch:
+    inputs:
+      with_msi:
+        description: 'Also build the MSI installer (requires WiX in CI)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build peershd.exe + peersh-cli.exe
+        shell: bash
+        env:
+          PEERSHD_FIREBASE_API_KEY: ${{ secrets.PEERSHD_FIREBASE_API_KEY }}
+          PEERSHD_FIREBASE_PROJECT_ID: ${{ secrets.PEERSHD_FIREBASE_PROJECT_ID }}
+          PEERSHD_FIREBASE_REGION: ${{ secrets.PEERSHD_FIREBASE_REGION }}
+          PEERSHD_SIGNALING_URL: ${{ secrets.PEERSHD_SIGNALING_URL }}
+          PEERSHD_GOOGLE_CLIENT_ID: ${{ secrets.PEERSHD_GOOGLE_CLIENT_ID }}
+          PEERSHD_GOOGLE_CLIENT_SECRET: ${{ secrets.PEERSHD_GOOGLE_CLIENT_SECRET }}
+        run: |
+          mkdir -p dist
+          # Use the git tag for "release" runs (when this workflow is
+          # invoked by a release workflow via workflow_call) and a short
+          # SHA otherwise. embeddedUpdateRepo is the current repo so
+          # `peershd update` polls /releases/latest from the right place.
+          VERSION=$(git describe --tags --exact-match 2>/dev/null || echo "dev-$(git rev-parse --short HEAD)")
+          REPO="$GITHUB_REPOSITORY"
+          LDFLAGS="-X main.embeddedVersion=$VERSION -X main.embeddedUpdateRepo=$REPO"
+          [[ -n "$PEERSHD_FIREBASE_API_KEY"      ]] && LDFLAGS="$LDFLAGS -X main.embeddedFirebaseAPIKey=$PEERSHD_FIREBASE_API_KEY"
+          [[ -n "$PEERSHD_FIREBASE_PROJECT_ID"   ]] && LDFLAGS="$LDFLAGS -X main.embeddedFirebaseProjectID=$PEERSHD_FIREBASE_PROJECT_ID"
+          [[ -n "$PEERSHD_FIREBASE_REGION"       ]] && LDFLAGS="$LDFLAGS -X main.embeddedFirebaseRegion=$PEERSHD_FIREBASE_REGION"
+          [[ -n "$PEERSHD_SIGNALING_URL"         ]] && LDFLAGS="$LDFLAGS -X main.embeddedSignalingURL=$PEERSHD_SIGNALING_URL"
+          [[ -n "$PEERSHD_GOOGLE_CLIENT_ID"      ]] && LDFLAGS="$LDFLAGS -X main.embeddedGoogleClientID=$PEERSHD_GOOGLE_CLIENT_ID"
+          [[ -n "$PEERSHD_GOOGLE_CLIENT_SECRET"  ]] && LDFLAGS="$LDFLAGS -X main.embeddedGoogleClientSecret=$PEERSHD_GOOGLE_CLIENT_SECRET"
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/peershd-windows-amd64.exe ./windows/cmd/peershd
+          GOOS=windows GOARCH=amd64 go build -trimpath -o dist/peersh-cli-windows-amd64.exe ./cli/cmd/peersh-cli
+          # Sidecar checksums so peershd's self-update can verify.
+          (cd dist && sha256sum peershd-windows-amd64.exe > peershd-windows-amd64.exe.sha256)
+          (cd dist && sha256sum peersh-cli-windows-amd64.exe > peersh-cli-windows-amd64.exe.sha256)
+
+      - name: Run Go tests
+        shell: bash
+        run: |
+          go test ./core/... ./server/... ./windows/firebase/...
+
+      - name: Build MSI installer
+        if: ${{ inputs.with_msi == 'true' }}
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.* || dotnet tool update --global wix --version 5.*
+          $env:Path = "$env:USERPROFILE\.dotnet\tools;$env:Path"
+          wix eula accept wix7
+          .\scripts\build-msi.cmd
+
+      - name: Upload Windows artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: peershd-windows-amd64
+          path: |
+            dist/peershd-windows-amd64.exe
+            dist/peershd-windows-amd64.exe.sha256
+            dist/peersh-cli-windows-amd64.exe
+            dist/peersh-cli-windows-amd64.exe.sha256
+            windows/installer/*.msi
+          if-no-files-found: warn
+          retention-days: 14

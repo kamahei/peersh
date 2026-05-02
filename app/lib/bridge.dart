@@ -138,6 +138,37 @@ class PeershBridge {
     } catch (_) {}
   }
 
+  /// Returns true when system notifications are currently enabled for
+  /// this app. False on Android 13+ when POST_NOTIFICATIONS hasn't
+  /// been granted; the foreground service still runs but its
+  /// notification is hidden. On non-Android platforms returns true.
+  Future<bool> notificationsEnabled() async {
+    try {
+      final v = await _control.invokeMethod<bool>('notificationsEnabled');
+      return v ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Triggers the system POST_NOTIFICATIONS prompt on Android 13+.
+  /// No-op on platforms / OS versions where the runtime permission
+  /// isn't required.
+  Future<void> requestNotifications() async {
+    try {
+      await _control.invokeMethod<void>('requestNotifications');
+    } catch (_) {}
+  }
+
+  /// Opens the system Settings page for this app's notification
+  /// settings (or app details when notification settings aren't
+  /// reachable directly).
+  Future<void> openNotificationSettings() async {
+    try {
+      await _control.invokeMethod<void>('openNotificationSettings');
+    } catch (_) {}
+  }
+
   /// Opens an interactive PTY on an existing session. Returns the host-
   /// assigned PTY id + the server-issued reattach handle. The caller
   /// uses the id for [ptyInput] / [ptyResize] / [closePty] / file API

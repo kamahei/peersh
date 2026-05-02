@@ -24,6 +24,7 @@ if exist "%~dp0..\local\peershd-build.env" (
 )
 
 if "%PEERSH_BUILD_FIREBASE_REGION%"=="" set PEERSH_BUILD_FIREBASE_REGION=asia-northeast1
+if "%PEERSH_BUILD_VERSION%"=="" set PEERSH_BUILD_VERSION=dev
 
 set LDFLAGS=-X main.embeddedFirebaseAPIKey=%PEERSH_BUILD_FIREBASE_API_KEY%
 set LDFLAGS=%LDFLAGS% -X main.embeddedFirebaseProjectID=%PEERSH_BUILD_FIREBASE_PROJECT_ID%
@@ -31,6 +32,8 @@ set LDFLAGS=%LDFLAGS% -X main.embeddedFirebaseRegion=%PEERSH_BUILD_FIREBASE_REGI
 set LDFLAGS=%LDFLAGS% -X main.embeddedSignalingURL=%PEERSH_BUILD_SIGNALING_URL%
 set LDFLAGS=%LDFLAGS% -X main.embeddedGoogleClientID=%PEERSH_BUILD_GOOGLE_CLIENT_ID%
 set LDFLAGS=%LDFLAGS% -X main.embeddedGoogleClientSecret=%PEERSH_BUILD_GOOGLE_CLIENT_SECRET%
+set LDFLAGS=%LDFLAGS% -X main.embeddedVersion=%PEERSH_BUILD_VERSION%
+set LDFLAGS=%LDFLAGS% -X main.embeddedUpdateRepo=%PEERSH_BUILD_UPDATE_REPO%
 
 cd /d "%~dp0.."
 set GOOS=windows

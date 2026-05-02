@@ -1,0 +1,109 @@
+name: Build iOS
+
+# Manually triggered. Builds the iOS xcframework (gomobile bind) and
+# the unsigned Flutter iOS app on macOS runners. Does NOT auto-run on
+# push.
+#
+# Code signing is intentionally NOT wired here. To produce a signed IPA
+# for TestFlight / Store, you'll add a follow-up workflow that imports a
+# .p12 and provisioning profile from secrets and runs xcodebuild
+# archive + exportArchive. That work is deferred until a real Apple
+# Developer account is in scope.
+#
+# Notes:
+# - The mobile-core gomobile bind for iOS produces an `.xcframework`
+#   under app/ios/Frameworks/peersh.xcframework. Phase 4 left an iOS
+#   stub in place; this workflow rebuilds the real binding now that
+#   we have macOS runners on tap.
+# - Firebase config restore mirrors the Android workflow (set the
+#   secrets if you want a Firebase-functional build).
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Build profile (debug | release)'
+        required: false
+        default: 'debug'
+        type: choice
+        options: ['debug', 'release']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: stable
+          cache: true
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Restore Firebase config (optional)
+        env:
+          IOS_FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
+          IOS_GOOGLE_SERVICE_INFO_PLIST: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}
+          IOS_APP_FIREBASE_JSON: ${{ secrets.APP_FIREBASE_JSON }}
+        run: |
+          if [[ -n "$IOS_FIREBASE_OPTIONS_DART" ]]; then
+            echo "$IOS_FIREBASE_OPTIONS_DART" | base64 -d > app/lib/firebase_options.dart
+          fi
+          if [[ -n "$IOS_GOOGLE_SERVICE_INFO_PLIST" ]]; then
+            mkdir -p app/ios/Runner
+            echo "$IOS_GOOGLE_SERVICE_INFO_PLIST" | base64 -d > app/ios/Runner/GoogleService-Info.plist
+          fi
+          if [[ -n "$IOS_APP_FIREBASE_JSON" ]]; then
+            echo "$IOS_APP_FIREBASE_JSON" | base64 -d > app/firebase.json
+          fi
+
+      - name: Initialise gomobile
+        run: gomobile init
+
+      - name: Build mobile-core xcframework
+        run: bash scripts/build-mobile-core.sh ios
+
+      - name: Resolve Flutter packages
+        working-directory: app
+        run: flutter pub get
+
+      - name: CocoaPods install
+        working-directory: app/ios
+        run: pod install --repo-update
+
+      - name: flutter analyze
+        working-directory: app
+        run: flutter analyze
+
+      - name: flutter build ios (no codesign)
+        working-directory: app
+        run: flutter build ios --${{ inputs.profile }} --no-codesign
+
+      - name: Package unsigned .app bundle
+        working-directory: app
+        run: |
+          mkdir -p ../dist
+          cd build/ios/iphoneos
+          zip -r ../../../../dist/Runner-${{ inputs.profile }}.app.zip Runner.app
+
+      - name: Upload artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: peersh-ios-${{ inputs.profile }}-unsigned
+          path: dist/Runner-${{ inputs.profile }}.app.zip
+          retention-days: 14

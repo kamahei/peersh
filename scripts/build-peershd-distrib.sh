@@ -31,6 +31,8 @@ fi
 : "${PEERSH_BUILD_GOOGLE_CLIENT_SECRET:?required}"
 : "${PEERSH_BUILD_FIREBASE_REGION:=asia-northeast1}"
 : "${PEERSH_BUILD_SIGNALING_URL:=}"
+: "${PEERSH_BUILD_VERSION:=dev-$(git -C "$(dirname "$0")/.." rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+: "${PEERSH_BUILD_UPDATE_REPO:=}"
 
 GOOS=windows GOARCH=amd64 go build -trimpath \
   -ldflags "
@@ -40,6 +42,8 @@ GOOS=windows GOARCH=amd64 go build -trimpath \
     -X 'main.embeddedSignalingURL=${PEERSH_BUILD_SIGNALING_URL}'
     -X 'main.embeddedGoogleClientID=${PEERSH_BUILD_GOOGLE_CLIENT_ID}'
     -X 'main.embeddedGoogleClientSecret=${PEERSH_BUILD_GOOGLE_CLIENT_SECRET}'
+    -X 'main.embeddedVersion=${PEERSH_BUILD_VERSION}'
+    -X 'main.embeddedUpdateRepo=${PEERSH_BUILD_UPDATE_REPO}'
   " \
   -o local/peershd.exe ./windows/cmd/peershd
 

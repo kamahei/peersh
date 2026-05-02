@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../bridge.dart';
 import '../models/pty_event.dart';
 import '../models/pty_file.dart';
 import '../models/server_entry.dart';
@@ -61,6 +62,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   ServerEntry? _resolvedServer; // server with picked device id baked in
   bool _showResumedBanner = false;
   Timer? _resumedBannerTimer;
+  bool _showNotifHint = false;
   static const _maxReconnectAttempts = 6;
   static const _baseBackoff = Duration(milliseconds: 500);
   static const _maxBackoff = Duration(seconds: 30);
@@ -144,7 +146,12 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         // Otherwise leave _tabs empty so the user picks via the prompt.
       });
       // Foreground service keeps the OS from freezing the app process
-      // (and the QUIC keepalive) when backgrounded.
+      // (and the QUIC keepalive) when backgrounded. On the very first
+      // session start, prompt for POST_NOTIFICATIONS so the persistent
+      // notification is visible.
+      if (!isReconnect) {
+        unawaited(_ensureNotificationPermission(bridge));
+      }
       unawaited(bridge.startForegroundService(
         title: widget.server.name,
         body: 'Connected — tap to return',
@@ -193,6 +200,24 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     _resumedBannerTimer = Timer(const Duration(seconds: 4), () {
       if (mounted) setState(() => _showResumedBanner = false);
     });
+  }
+
+  /// First-connect-only: trigger the POST_NOTIFICATIONS system prompt
+  /// when needed, and surface a one-time hint banner if the user
+  /// dismisses it. Doing this before the FG service starts means the
+  /// notification appears on the first session. The hint state is
+  /// purely UI — denial doesn't stop the service from running.
+  Future<void> _ensureNotificationPermission(PeershBridge bridge) async {
+    final ok = await bridge.notificationsEnabled();
+    if (ok) return;
+    await bridge.requestNotifications();
+    // Re-check after a brief settle so the dialog has a chance to land.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    final stillOff = !(await bridge.notificationsEnabled());
+    if (stillOff && mounted) {
+      setState(() => _showNotifHint = true);
+    }
   }
 
   /// Cancel the current backoff loop and surface the last error so the
@@ -576,6 +601,13 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 children: [
+                  if (_showNotifHint)
+                    _NotifHintBanner(
+                      onOpenSettings: () =>
+                          ref.read(bridgeProvider).openNotificationSettings(),
+                      onDismiss: () =>
+                          setState(() => _showNotifHint = false),
+                    ),
                   if (_showResumedBanner) const _ResumedBanner(),
                   _TabBar(
                     tabs: _tabs,
@@ -605,6 +637,55 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+class _NotifHintBanner extends StatelessWidget {
+  const _NotifHintBanner({
+    required this.onOpenSettings,
+    required this.onDismiss,
+  });
+
+  final VoidCallback onOpenSettings;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.tertiaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            Icon(
+              Icons.notifications_off_outlined,
+              size: 18,
+              color: scheme.onTertiaryContainer,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Notifications are off. The connection-keeper notification is hidden; the session may be killed when backgrounded.',
+                style: TextStyle(
+                  color: scheme.onTertiaryContainer,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: onOpenSettings,
+              child: const Text('Settings'),
+            ),
+            IconButton(
+              tooltip: 'Dismiss',
+              onPressed: onDismiss,
+              icon: const Icon(Icons.close, size: 18),
+            ),
+          ],
+        ),
       ),
     );
   }
