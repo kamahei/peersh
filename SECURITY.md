@@ -59,6 +59,17 @@ is design intent, not complete production behavior yet.
   must keep that file on disk-encrypted media. See
   `docs/deploy/self-hosting.md`.
 
+## Dependency audit policy
+
+The Cloud Functions package (`firebase/functions/`) is gated by
+[`audit-ci`](https://github.com/IBM/audit-ci), not by raw `npm audit`.
+Use `npm run audit` from that directory; it enforces moderate-level
+production advisories with one expiring allowlist entry documented in
+`firebase/functions/audit-ci.jsonc`. The current allowlist covers an
+unreachable-in-our-code-path advisory in a transitive `firebase-admin`
+dependency that has no fix-forward path; the entry is scheduled to be
+re-evaluated on 2026-08-01.
+
 ## Coordinated disclosure
 
 We follow a coordinated-disclosure model. When a fix is ready:

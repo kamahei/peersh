@@ -1,0 +1,28 @@
+// audit-ci config for peersh Firebase Functions.
+//
+// `npm audit --omit=dev --audit-level=moderate` reports 11 entries (2 low,
+// 9 moderate). All of them are reachable only through `firebase-admin`'s
+// optional `@google-cloud/*` transitive deps, and every effect traces back
+// to one upstream advisory that npm cannot fix without a SemVer-major
+// downgrade of firebase-admin to 10.1.0 (which is not a real fix):
+//
+//   - GHSA-w5hq-g745-h8pq — uuid <14.0.0
+//     Missing buffer bounds check in v3/v5/v6 when `buf` is provided.
+//     Reachable via: firebase-admin -> @google-cloud/{firestore,storage}
+//                    -> google-gax / gaxios / teeny-request -> uuid
+//
+// We do not invoke the affected code path (no v3/v5/v6 UUID with caller-
+// supplied buffer; the @tootallnate/once chain is dead code in our usage).
+// The firebase-admin maintainers track the upstream bumps.
+//
+// Re-evaluate on 2026-08-01: re-run `npm audit`, drop entries that have been
+// patched upstream, and bump the date if the remainder still has no fix.
+{
+  "$schema": "https://github.com/IBM/audit-ci/raw/main/docs/schema.json",
+  "moderate": true,
+  "package-manager": "npm",
+  "skip-dev": true,
+  "allowlist": [
+    "GHSA-w5hq-g745-h8pq"
+  ]
+}
