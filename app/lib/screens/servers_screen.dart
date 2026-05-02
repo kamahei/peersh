@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/server_entry.dart';
+import '../services/flavor.dart' as flavor;
 import '../state/servers.dart';
+import 'device_picker_sheet.dart';
+import 'firebase_signin.dart';
 import 'server_editor_screen.dart';
 import 'settings_screen.dart';
+import 'signin_screen.dart';
 import 'terminal_tabs_screen.dart';
 
 class ServersScreen extends ConsumerWidget {
@@ -70,7 +74,7 @@ class ServersScreen extends ConsumerWidget {
                     child: ListTile(
                       title: Text(s.name),
                       subtitle: Text(
-                        '${s.userId} @ ${s.wsUrl}',
+                        _serverSubtitle(s),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -79,13 +83,38 @@ class ServersScreen extends ConsumerWidget {
                           builder: (_) => TerminalTabsScreen(server: s),
                         ),
                       ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.edit_outlined),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => ServerEditorScreen(existing: s),
+                      trailing: PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert),
+                        onSelected: (v) async {
+                          if (v == 'edit') {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    ServerEditorScreen(existing: s),
+                              ),
+                            );
+                          } else if (v == 'switch_device') {
+                            await _switchDevice(context, ref, s);
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: 'edit',
+                            child: ListTile(
+                              leading: Icon(Icons.edit_outlined),
+                              title: Text('Edit'),
+                            ),
                           ),
-                        ),
+                          if (s.authMode == ServerAuthMode.firebase &&
+                              flavor.kFirebaseInitialized)
+                            const PopupMenuItem(
+                              value: 'switch_device',
+                              child: ListTile(
+                                leading: Icon(Icons.computer),
+                                title: Text('Switch PC'),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   );
@@ -100,6 +129,38 @@ class ServersScreen extends ConsumerWidget {
         label: const Text('Add server'),
       ),
     );
+  }
+
+  static String _serverSubtitle(ServerEntry s) {
+    switch (s.authMode) {
+      case ServerAuthMode.firebase:
+        if (s.targetDeviceId.isNotEmpty) {
+          return 'firebase · ${s.targetDeviceId}';
+        }
+        return 'firebase · pick a PC on connect';
+      case ServerAuthMode.psk:
+        return '${s.userId} @ ${s.wsUrl}';
+    }
+  }
+
+  Future<void> _switchDevice(
+    BuildContext context,
+    WidgetRef ref,
+    ServerEntry server,
+  ) async {
+    final idToken = await ensureSignedInAndGetIdToken(context, ref);
+    if (idToken == null) return;
+    final user = ref.read(firebaseAuthServiceProvider).currentUser;
+    if (user == null || !context.mounted) return;
+    final picked = await showDevicePickerSheet(
+      context: context,
+      server: server,
+      uid: user.uid,
+    );
+    if (picked == null || !context.mounted) return;
+    await ref
+        .read(serversProvider.notifier)
+        .replace(server.copyWith(targetDeviceId: picked));
   }
 }
 

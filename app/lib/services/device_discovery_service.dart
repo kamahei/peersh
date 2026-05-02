@@ -1,20 +1,17 @@
-// Phase 5b scaffolding — device discovery against a backend store.
+// Phase 5b — device discovery against a backend store.
 //
-// Phase 4b ships single-target-per-server: the user pastes the host's
+// Phase 4b shipped single-target-per-server: the user pasted the host's
 // `device_id` (16 base32 chars from peershd's startup log) into the
-// server entry and that's what the mobile app dials. It works for
-// personal use but doesn't scale — every host you own needs a fresh
-// server entry.
+// server entry and that's what the mobile app dialed. Useful for one
+// host but tedious for several.
 //
 // Phase 5b lifts this restriction by reading a Firestore-backed
-// device list. The host (peershd) registers its own device document
-// under `users/{uid}/devices/{deviceId}` on each connect; the mobile
-// app reads the same collection and surfaces a picker.
-//
-// Today this file only ships the PSK fallback (a single hard-coded
-// device matching whatever the user typed in the server editor).
-// FirebaseDeviceDiscoveryService will replace it once the operator
-// configures Firebase.
+// device list. peersh-signaling writes
+// `users/{uid}/devices/{deviceId}` on each Register frame (with kind,
+// display_name, last_seen_at); the mobile app reads the same
+// collection and surfaces a picker.
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/server_entry.dart';
 
@@ -63,5 +60,55 @@ class PskDeviceDiscoveryService implements DeviceDiscoveryService {
         displayName: server.targetDeviceId,
       ),
     ];
+  }
+}
+
+/// Firestore-backed discovery for Firebase-mode servers. Reads
+/// `users/{uid}/devices` and returns Windows-host entries sorted by
+/// most-recently-seen. Caller must already be signed in (the rules
+/// require auth.uid == userId).
+class FirebaseDeviceDiscoveryService implements DeviceDiscoveryService {
+  FirebaseDeviceDiscoveryService({required this.uid, FirebaseFirestore? db})
+      : _db = db ?? FirebaseFirestore.instance;
+
+  final String uid;
+  final FirebaseFirestore _db;
+
+  /// Server-side `core/proto/peersh/signal/v1.DeviceKind` enum:
+  ///   0 = unspecified
+  ///   1 = mobile client
+  ///   2 = windows host
+  static const int _kindWindowsHost = 2;
+
+  @override
+  Future<List<DiscoveredDevice>> list(ServerEntry server) async {
+    final snap = await _db
+        .collection('users')
+        .doc(uid)
+        .collection('devices')
+        .get();
+    final out = <DiscoveredDevice>[];
+    for (final d in snap.docs) {
+      final data = d.data();
+      final kind = (data['kind'] as num?)?.toInt() ?? 0;
+      if (kind != _kindWindowsHost) continue;
+      out.add(DiscoveredDevice(
+        deviceId: d.id,
+        displayName: (data['display_name'] as String?)?.trim().isNotEmpty == true
+            ? data['display_name'] as String
+            : d.id,
+        kind: 'host',
+        lastSeenUnixMs: _readMillis(data['last_seen_at']),
+      ));
+    }
+    out.sort((a, b) => b.lastSeenUnixMs.compareTo(a.lastSeenUnixMs));
+    return out;
+  }
+
+  static int _readMillis(Object? v) {
+    if (v is Timestamp) return v.millisecondsSinceEpoch;
+    if (v is DateTime) return v.millisecondsSinceEpoch;
+    if (v is int) return v;
+    return 0;
   }
 }

@@ -19,11 +19,14 @@ import '../models/server_entry.dart';
 import '../services/flavor.dart' as flavor;
 import '../services/peersh_session.dart';
 import '../state/persisted_pty_handles.dart';
+import '../state/servers.dart';
 import '../state/settings.dart';
 import '../widgets/special_keys_bar.dart';
+import 'device_picker_sheet.dart';
 import 'file_browser_screen.dart';
 import 'firebase_signin.dart';
 import 'ime_input_sheet.dart';
+import 'signin_screen.dart';
 import 'terminal_pane.dart';
 import 'text_viewer_screen.dart';
 
@@ -54,6 +57,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     final bridge = ref.read(bridgeProvider);
     try {
       String? idToken;
+      ServerEntry connectServer = widget.server;
       if (widget.server.authMode == ServerAuthMode.firebase) {
         if (!flavor.kFirebaseInitialized) {
           throw StateError(
@@ -65,10 +69,18 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         if (idToken == null) {
           throw StateError('Sign-in cancelled.');
         }
+        // For Firebase entries, ask the user which PC to connect to
+        // (skip if a default has been picked previously).
+        if (widget.server.targetDeviceId.isEmpty) {
+          final picked = await _pickDevice(widget.server);
+          if (picked == null) throw StateError('No PC selected.');
+          connectServer = widget.server.copyWith(targetDeviceId: picked);
+          await ref.read(serversProvider.notifier).replace(connectServer);
+        }
       }
       final session = await PeershSession.open(
         bridge: bridge,
-        server: widget.server,
+        server: connectServer,
         firebaseIdToken: idToken,
       );
       if (!mounted) {
@@ -98,6 +110,17 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
       if (!mounted) return;
       setState(() => _connectError = '$e');
     }
+  }
+
+  Future<String?> _pickDevice(ServerEntry server) async {
+    final user = ref.read(firebaseAuthServiceProvider).currentUser;
+    if (user == null) return null;
+    if (!mounted) return null;
+    return showDevicePickerSheet(
+      context: context,
+      server: server,
+      uid: user.uid,
+    );
   }
 
   Future<void> _maybeOfferReattach(List<PtyHandleInfo> persisted) async {

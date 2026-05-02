@@ -108,6 +108,9 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	firebaseRegion := fs.String("firebase-region", "asia-northeast1", "region of the deployed Cloud Functions (claimPairingCode)")
 	firebasePairCode := fs.String("pair-code", "", "one-time 6-digit pairing code shown by the mobile app's Pair PC screen; consumed once and replaced by a persisted refresh token")
 	firebaseTokenFile := fs.String("firebase-token-file", "", "path to the persisted Firebase refresh token (default: %LOCALAPPDATA%\\peersh\\firebase-refresh-token.txt)")
+	firebaseLogin := fs.Bool("firebase-login", false, "open the default browser to sign in with Google (one-shot bootstrap; replaces -pair-code on desktops with a browser)")
+	googleClientID := fs.String("google-client-id", "", "OAuth 2.0 'Desktop app' client id (required with -firebase-login)")
+	googleClientSecret := fs.String("google-client-secret", "", "OAuth 2.0 'Desktop app' client secret (required with -firebase-login)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -138,6 +141,9 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 		firebaseRegion:      *firebaseRegion,
 		firebasePairCode:    *firebasePairCode,
 		firebaseTokenFile:   *firebaseTokenFile,
+		firebaseLogin:       *firebaseLogin,
+		googleClientID:      *googleClientID,
+		googleClientSecret:  *googleClientSecret,
 	})
 }
 
@@ -153,6 +159,9 @@ type runOpts struct {
 	firebaseRegion                string
 	firebasePairCode              string
 	firebaseTokenFile             string
+	firebaseLogin                 bool
+	googleClientID                string
+	googleClientSecret            string
 }
 
 func defaultCertDir() string {
@@ -251,7 +260,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 		}
 		// Pick auth mode: PSK (default), Firebase pairing (recommended),
 		// or Firebase service-account (advanced).
-		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseEmail != "" || opts.firebaseUID != "" || opts.firebasePairCode != "" || opts.firebaseTokenFile != ""
+		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseEmail != "" || opts.firebaseUID != "" || opts.firebasePairCode != "" || opts.firebaseTokenFile != "" || opts.firebaseLogin
 		if useFirebase {
 			src, err := buildFirebaseTokenSource(ctx, opts)
 			if err != nil {
@@ -345,13 +354,15 @@ func runSignaling(ctx context.Context, url, userID string, secret []byte, device
 // buildFirebaseTokenSource picks the right Firebase auth backend for the
 // invocation flags:
 //
-//   1. -pair-code given: claim it, exchange for refresh token, persist,
-//      and return a refresh-token-backed source. One-shot bootstrap.
-//   2. -firebase-credentials given: legacy service-account-JSON path.
-//   3. Otherwise: load the persisted refresh token (path defaults to
+//   1. -firebase-login given: open browser, run OAuth 2.0 + signInWithIdp,
+//      persist refresh token. One-shot bootstrap (desktop only).
+//   2. -pair-code given: claim it, exchange for refresh token, persist.
+//      One-shot bootstrap (works on headless hosts).
+//   3. -firebase-credentials given: legacy service-account-JSON path.
+//   4. Otherwise: load the persisted refresh token (path defaults to
 //      LOCALAPPDATA\peersh\firebase-refresh-token.txt).
 //
-// Both Firebase paths require -firebase-project and -firebase-api-key.
+// All Firebase paths require -firebase-project and -firebase-api-key.
 func buildFirebaseTokenSource(ctx context.Context, opts runOpts) (fbpeershd.TokenSource, error) {
 	if opts.firebaseAPIKey == "" || opts.firebaseProjectID == "" {
 		return nil, errors.New("firebase mode requires -firebase-project and -firebase-api-key")
@@ -359,6 +370,16 @@ func buildFirebaseTokenSource(ctx context.Context, opts runOpts) (fbpeershd.Toke
 	tokenPath := opts.firebaseTokenFile
 	if tokenPath == "" {
 		tokenPath = fbpeershd.DefaultRefreshTokenPath()
+	}
+
+	if opts.firebaseLogin {
+		slog.Info("starting browser-based Google sign-in", "project", opts.firebaseProjectID, "token_file", tokenPath)
+		src, err := fbpeershd.GoogleSignIn(ctx, opts.googleClientID, opts.googleClientSecret, opts.firebaseAPIKey, tokenPath, nil)
+		if err != nil {
+			return nil, fmt.Errorf("firebase login: %w", err)
+		}
+		slog.Info("Google sign-in complete", "uid", src.UID())
+		return src, nil
 	}
 
 	if opts.firebasePairCode != "" {
@@ -383,7 +404,7 @@ func buildFirebaseTokenSource(ctx context.Context, opts runOpts) (fbpeershd.Toke
 
 	src, err := fbpeershd.NewRefreshSource(tokenPath, opts.firebaseAPIKey)
 	if err != nil {
-		return nil, fmt.Errorf("load persisted refresh token (run with -pair-code first): %w", err)
+		return nil, fmt.Errorf("load persisted refresh token (run with -firebase-login or -pair-code first): %w", err)
 	}
 	slog.Info("loaded persisted Firebase refresh token", "token_file", tokenPath)
 	return src, nil

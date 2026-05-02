@@ -241,7 +241,11 @@ You can now add a Firebase-mode server entry in the app: tap **Add server**, set
 
 ## peershd — Firebase auth source
 
-peershd registers with the signaling server using a fresh Firebase ID token. The recommended bootstrap path is the **pairing flow**: the signed-in mobile user generates a one-time 6-digit code, peershd consumes it once, and from then on peershd uses a persisted refresh token scoped to that single uid. No service-account JSON is required.
+peershd registers with the signaling server using a fresh Firebase ID token. There are three bootstrap paths, in increasing order of complexity / friction:
+
+1. **Browser sign-in (`-firebase-login`)** — recommended on a desktop with a browser. peershd opens Google's sign-in page in your default browser, then persists a refresh token scoped to that uid. No code typing.
+2. **Pairing code (`-pair-code`)** — required on headless / kiosk hosts (no browser). The mobile app generates a one-time 6-digit code that peershd consumes once.
+3. **Service-account JSON (`-firebase-credentials`)** — multi-host fleet provisioning. Project-wide credential, kept under an advanced section below.
 
 ### 1. Find the Firebase Web API key
 
@@ -252,7 +256,26 @@ grep "apiKey" app/lib/firebase_options.dart | head -1
 
 Or open Firebase Console → **Project settings → General → Your apps → Web SDK snippet → apiKey**. The Web API key is *public by design* (it identifies the project, not the caller); it's safe to embed it in any peershd invocation.
 
-### 2. Run peershd with the pairing code (one-time bootstrap)
+### 2a. Browser sign-in (recommended on desktops)
+
+Create an OAuth 2.0 "Desktop app" client one time in [Google Cloud Console → APIs & Services → Credentials → Create Credentials → OAuth client ID](https://console.cloud.google.com/apis/credentials). Pick **Desktop app**, name it "peersh-cli", and note the generated client id + client secret. (Google's docs explicitly state the secret of an Installed App client "isn't actually treated as a secret", so embedding it in operator-side scripts or in `peershd.exe` invocations is fine.)
+
+Then on the PC:
+
+```sh
+peershd \
+  -signaling wss://<assigned-host>/ws \
+  -firebase-project <your-project-id> \
+  -firebase-api-key <api-key-from-step-1> \
+  -firebase-login \
+  -google-client-id <oauth-client-id> \
+  -google-client-secret <oauth-client-secret> \
+  -display-name "<your-host-name>"
+```
+
+peershd opens the default browser at Google's sign-in page; pick the same Google account the mobile app uses. After consent the browser shows a "Sign-in successful" page and peershd writes a refresh token to `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt`.
+
+### 2b. Pairing code (works on headless hosts)
 
 Tap **Settings → Pair PC** in the mobile app and **Generate code**. With that code in hand, on the PC:
 
@@ -266,11 +289,11 @@ peershd \
   -display-name "<your-host-name>"
 ```
 
-On success peershd writes the refresh token to `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt` (override with `-firebase-token-file`) and logs `registered with signaling server (firebase mode)` plus `device_id=<id>`. The 6-digit code is consumed and cannot be reused.
+On success peershd writes the refresh token to `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt` (override with `-firebase-token-file`) and logs `registered with signaling server (firebase mode)` plus `device_id=<id>`. The 6-digit code is consumed on first claim and cannot be reused.
 
 ### 3. Subsequent runs
 
-Drop the `-pair-code` flag — peershd loads the persisted refresh token and uses it to mint fresh ID tokens on demand:
+Drop both `-firebase-login` and `-pair-code` — peershd loads the persisted refresh token and uses it to mint fresh ID tokens on demand:
 
 ```sh
 peershd \
@@ -280,7 +303,7 @@ peershd \
   -display-name "<your-host-name>"
 ```
 
-If the refresh token is lost (file deleted, machine reset) or revoked (mobile app **Sign out** + sign back in), generate a fresh pairing code and re-run with `-pair-code`. There's no per-uid quota.
+If the refresh token is lost (file deleted, machine reset) or revoked (mobile app **Sign out** + sign back in), re-run with `-firebase-login` or `-pair-code` to bootstrap again. There's no per-uid quota.
 
 ### Advanced: service-account JSON path
 
@@ -313,6 +336,15 @@ peershd \
 ```
 
 This grants peershd the ability to mint tokens for **any** uid in the project — keep `peershd-sa.json` strictly on trusted hosts. The pairing flow is preferred for personal use because the persisted credential is scoped to a single uid.
+
+## Multiple PCs
+
+Each peershd registers itself as `users/{uid}/devices/{deviceId}` in Firestore on every signaling Register frame (with `display_name`, `kind`, `last_seen_at`). The mobile app reads this collection and surfaces a picker:
+
+- **First connect to a Firebase server** — the app prompts you to pick which PC to connect to. The choice is remembered as the server entry's default.
+- **Switching PCs later** — long-press / tap the server's overflow menu (⋮) → **Switch PC**. The picker shows all your registered hosts ordered by most-recently-seen.
+
+To run a second host on a different machine, just run `peershd` there with `-firebase-login` (or `-pair-code`). It registers itself; the picker will show it on the next refresh.
 
 ## Troubleshooting
 
