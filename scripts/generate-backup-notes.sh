@@ -74,15 +74,41 @@ print(cur if isinstance(cur, str) else json.dumps(cur))
 PY
 }
 
-# Helper: locate keytool. Prefers PATH, falls back to $JAVA_HOME/bin
-# and a few common Windows install locations.
+# Helper: locate keytool. Prefers PATH, then JAVA_HOME, then common
+# install locations on Windows + macOS + Linux. Windows paths get
+# normalised to forward slashes so MSYS bash's `[[ -f ]]` works.
 locate_keytool() {
   if command -v keytool >/dev/null 2>&1; then echo "keytool"; return; fi
-  local cands=()
-  [[ -n "${JAVA_HOME:-}" ]] && cands+=("$JAVA_HOME/bin/keytool" "$JAVA_HOME/bin/keytool.exe")
-  [[ -n "${LOCALAPPDATA:-}" ]] && for d in "$LOCALAPPDATA"/Programs/jdk*/bin/keytool.exe; do
-    cands+=("$d")
-  done
+  local cands=() jh
+  if [[ -n "${JAVA_HOME:-}" ]]; then
+    jh="${JAVA_HOME//\\//}"
+    cands+=("$jh/bin/keytool" "$jh/bin/keytool.exe")
+  fi
+  if [[ -n "${LOCALAPPDATA:-}" ]]; then
+    local lad="${LOCALAPPDATA//\\//}"
+    # Locally-installed JDKs.
+    for d in "$lad"/Programs/jdk*/bin/keytool.exe; do cands+=("$d"); done
+    # Android Studio under %LOCALAPPDATA%.
+    cands+=(
+      "$lad/Programs/Android Studio/jbr/bin/keytool.exe"
+      "$lad/Android/Sdk/jbr/bin/keytool.exe"
+    )
+  fi
+  if [[ -n "${ProgramFiles:-}" ]]; then
+    local pf="${ProgramFiles//\\//}"
+    cands+=(
+      "$pf/Android/Android Studio/jbr/bin/keytool.exe"
+      "$pf/Java"/*/bin/keytool.exe
+    )
+  fi
+  # ProgramFiles(x86) — bash can't reference the parens directly,
+  # so fall back to the canonical path. Harmless when missing.
+  cands+=("/c/Program Files (x86)/Android/Android Studio/jbr/bin/keytool.exe")
+  # POSIX-y fallbacks.
+  cands+=(
+    "/Library/Internet Plug-Ins/JavaAppletPlugin.plugin/Contents/Home/bin/keytool"
+    "/usr/lib/jvm/default-java/bin/keytool"
+  )
   for c in "${cands[@]}"; do
     if [[ -x "$c" || -f "$c" ]]; then echo "$c"; return; fi
   done
