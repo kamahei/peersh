@@ -326,7 +326,14 @@ export const budgetGuard = onMessagePublished(
 // state.triggered=true silently drops the dispatch (mobile users can
 // re-toggle their bell when the operator clears the flag).
 export const onNotificationCreated = onValueCreated(
-  '/users/{userId}/notifications/{notifId}',
+  {
+    ref: '/users/{userId}/notifications/{notifId}',
+    // RTDB v2 triggers must run in the same region as the database
+    // instance. Our RTDB lives in asia-southeast1 (see
+    // docs/firebase-mode.md), while the rest of the functions pin to
+    // asia-northeast1 — override here.
+    region: 'asia-southeast1',
+  },
   async (event) => {
     const data = event.data?.val();
     if (!data) {
