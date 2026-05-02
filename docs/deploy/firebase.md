@@ -16,12 +16,20 @@ The PSK + SQLite path remains supported for self-hosters with a single VPS — p
 - **Mobile side** (committed):
   - `firebase_core`, `firebase_auth`, `cloud_firestore`, `firebase_messaging`, `firebase_app_check`, `google_sign_in` packages in `pubspec.yaml`.
   - `app/lib/services/auth_service_firebase.dart` — Google sign-in + ID token resolver.
-  - `app/lib/services/flavor.dart` — `kFirebaseEnabled = bool.fromEnvironment('PEERSH_FIREBASE')`.
-  - `app/lib/screens/signin_screen.dart` — Google sign-in screen surfaced by `_FirebaseGate`.
-  - `app/lib/firebase_options.dart` — **stub** with throwing `currentPlatform`. Operators run `flutterfire configure` locally to overwrite it with their project's real values.
+  - `app/lib/services/flavor.dart` / `flavor_runtime.dart` — runtime `kFirebaseInitialized` flag (the same APK supports both PSK and Firebase server entries).
+  - `app/lib/screens/signin_screen.dart` — Google sign-in screen, surfaced from the connect flow when the user opens a Firebase server entry.
+  - `app/lib/screens/pair_pc_screen.dart` — **Pair PC** screen: shows a 6-digit code peershd consumes once to bootstrap.
+  - `app/lib/services/pairing_service.dart` — calls the `mintPairingCode` Cloud Function with the user's Firebase ID token.
+  - `app/lib/firebase_options.dart`, `app/firebase.json`, `app/android/app/google-services.json` — **stubs** committed; operators run `flutterfire configure` locally and `git update-index --skip-worktree` to keep their values out of `git diff`.
+- **Cloud Functions** (committed in `firebase/functions/src/index.ts`):
+  - `onSessionCreated` — Firestore trigger that fires FCM wake-up to the matching host.
+  - `mintPairingCode` — HTTPS, ID-token-authenticated. Mints a Custom Token for the calling uid, stores it under `pairing_codes/{code}` with a 5-min TTL, and returns the 6-digit code to the mobile app.
+  - `claimPairingCode` — HTTPS, unauthenticated. Takes a code, returns the cached Custom Token, deletes the doc.
 - **peershd side** (committed):
-  - `windows/firebase` — `AuthSource` mints custom tokens via the Admin SDK + exchanges them for ID tokens via the Identity Toolkit REST endpoint.
-  - `peershd` flags: `-firebase-project`, `-firebase-credentials`, `-firebase-uid`, `-firebase-api-key`.
+  - `windows/firebase` — two `TokenSource` implementations:
+    - `RefreshAuthSource` (recommended) — bootstraps from a 6-digit pairing code, persists a refresh token under `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt`.
+    - `AuthSource` (advanced) — service-account-JSON-based; mints custom tokens via the Admin SDK.
+  - `peershd` flags: `-pair-code`, `-firebase-project`, `-firebase-api-key`, `-firebase-region`, `-firebase-token-file`, `-firebase-credentials`, `-firebase-email`, `-firebase-uid`.
 
 What is **not** in the repo (operator-specific, generated locally):
 
@@ -208,38 +216,75 @@ git update-index --no-skip-worktree app/lib/firebase_options.dart
 
 `google-services.json` is in `.gitignore`, so no `--skip-worktree` is needed for it.
 
-### 2. Build the Firebase-enabled APK
+### 2. Build the APK
 
-The Android Gradle build conditionally applies `com.google.gms.google-services` based on the `PEERSH_FIREBASE` environment variable; the Dart side reads `kFirebaseEnabled = bool.fromEnvironment('PEERSH_FIREBASE')`. Both gates need to be set to `true`:
+The same APK supports both PSK and Firebase server entries; per-server `authMode` selects the auth path at connect time.
 
 ```sh
-# Bash / Git Bash:
-PEERSH_FIREBASE=true flutter build apk --debug --dart-define=PEERSH_FIREBASE=true
-
-# Windows cmd:
-set PEERSH_FIREBASE=true && flutter build apk --debug --dart-define=PEERSH_FIREBASE=true
-
-# PowerShell:
-$env:PEERSH_FIREBASE = "true"; flutter build apk --debug --dart-define=PEERSH_FIREBASE=true
+cd app
+flutter build apk --debug
 ```
 
-The default build (no env var, no dart-define) skips both layers and produces a PSK-only APK that does not require `google-services.json`.
+The build always applies the `com.google.gms.google-services` Gradle plugin and includes the Firebase Auth + Firestore + Messaging packages. At runtime, `Firebase.initializeApp` is called with try/catch — if `firebase_options.dart` is the OSS stub (no real project values), initialization fails and the app silently runs in PSK-only mode. After `flutterfire configure`, initialization succeeds and Firebase server entries become functional.
 
-### 3. Install + sign in
+### 3. Install + sign in + pair
 
 ```sh
 adb install -r app/build/app/outputs/flutter-apk/app-debug.apk
 ```
 
-Open the app → **Sign in with Google** → pick the Google account you want associated with this peersh installation. The app stores the Firebase ID token internally and uses it on every signaling Register frame.
+1. Open the app → **Settings** → **Pair PC**.
+2. Tap **Generate code**. The app prompts for Google sign-in if you haven't signed in yet, then displays a 6-digit pairing code.
+3. On the PC side run peershd with `-pair-code <that code>` (see the next section). The code expires after 5 minutes and is consumed on first claim.
 
-After sign-in completes, Firebase Console → **Authentication → Users** lists the freshly-created uid. Note this uid; peershd needs it.
+You can now add a Firebase-mode server entry in the app: tap **Add server**, set **Auth mode = Firebase**, paste the signaling `wss://` URL and the device id peershd printed at startup.
 
 ## peershd — Firebase auth source
 
-peershd registers with the signaling server using a fresh Firebase ID token minted from a service-account JSON. The JSON file stays on the host's disk (do not commit it).
+peershd registers with the signaling server using a fresh Firebase ID token. The recommended bootstrap path is the **pairing flow**: the signed-in mobile user generates a one-time 6-digit code, peershd consumes it once, and from then on peershd uses a persisted refresh token scoped to that single uid. No service-account JSON is required.
 
-### 1. Create the service account
+### 1. Find the Firebase Web API key
+
+```sh
+# From the FlutterFire-generated file (locally):
+grep "apiKey" app/lib/firebase_options.dart | head -1
+```
+
+Or open Firebase Console → **Project settings → General → Your apps → Web SDK snippet → apiKey**. The Web API key is *public by design* (it identifies the project, not the caller); it's safe to embed it in any peershd invocation.
+
+### 2. Run peershd with the pairing code (one-time bootstrap)
+
+Tap **Settings → Pair PC** in the mobile app and **Generate code**. With that code in hand, on the PC:
+
+```sh
+peershd \
+  -signaling wss://<assigned-host>/ws \
+  -firebase-project <your-project-id> \
+  -firebase-api-key <api-key-from-step-1> \
+  -firebase-region <region> \
+  -pair-code <6-digit-code> \
+  -display-name "<your-host-name>"
+```
+
+On success peershd writes the refresh token to `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt` (override with `-firebase-token-file`) and logs `registered with signaling server (firebase mode)` plus `device_id=<id>`. The 6-digit code is consumed and cannot be reused.
+
+### 3. Subsequent runs
+
+Drop the `-pair-code` flag — peershd loads the persisted refresh token and uses it to mint fresh ID tokens on demand:
+
+```sh
+peershd \
+  -signaling wss://<assigned-host>/ws \
+  -firebase-project <your-project-id> \
+  -firebase-api-key <api-key-from-step-1> \
+  -display-name "<your-host-name>"
+```
+
+If the refresh token is lost (file deleted, machine reset) or revoked (mobile app **Sign out** + sign back in), generate a fresh pairing code and re-run with `-pair-code`. There's no per-uid quota.
+
+### Advanced: service-account JSON path
+
+For multi-host deployments where a single operator wants to provision dozens of peershds without each one touching the mobile app, peershd still accepts the Phase 5b legacy flow:
 
 ```sh
 gcloud iam service-accounts create peershd-host \
@@ -251,48 +296,23 @@ gcloud projects add-iam-policy-binding <your-project-id> \
   --role="roles/firebaseauth.admin"
 ```
 
-### 2. Generate a key
-
-If your org enforces `constraints/iam.disableServiceAccountKeyCreation` (most do by default), you'll see a "Key creation is not allowed on this service account" error. Override at the project level:
+If your org enforces `constraints/iam.disableServiceAccountKeyCreation` (most do by default), override at the project level first (see Phase 5b history). Then:
 
 ```sh
-echo "constraint: constraints/iam.disableServiceAccountKeyCreation
-booleanPolicy:
-  enforced: false" > /tmp/policy.yaml
-gcloud resource-manager org-policies set-policy /tmp/policy.yaml --project=<your-project-id>
-
-# Wait ~30 seconds for propagation, then:
 gcloud iam service-accounts keys create local/peershd-sa.json \
   --iam-account=peershd-host@<your-project-id>.iam.gserviceaccount.com \
   --project=<your-project-id>
-```
 
-`local/` is gitignored. Keep `peershd-sa.json` there.
-
-### 3. Find the Firebase Web API key
-
-```sh
-# From the FlutterFire-generated file (locally):
-grep "apiKey" app/lib/firebase_options.dart | head -1
-```
-
-Or open Firebase Console → **Project settings → General → Your apps → Web SDK snippet → apiKey**.
-
-### 4. Run peershd in Firebase mode
-
-```sh
 peershd \
   -signaling wss://<assigned-host>/ws \
   -firebase-project <your-project-id> \
   -firebase-credentials local/peershd-sa.json \
-  -firebase-uid <uid-from-step-mobile-3> \
-  -firebase-api-key <api-key-from-step-3> \
+  -firebase-email <your-email> \
+  -firebase-api-key <api-key> \
   -display-name "<your-host-name>"
 ```
 
-`-firebase-uid` MUST be the same uid the mobile app signed in as — both peershd and the mobile client must land in the same `users/{uid}/...` Firestore namespace for routing to work.
-
-peershd logs `registered with signaling server (firebase mode)` on success and `device_id=<id>` for the value the mobile client uses as the connection target.
+This grants peershd the ability to mint tokens for **any** uid in the project — keep `peershd-sa.json` strictly on trusted hosts. The pairing flow is preferred for personal use because the persisted credential is scoped to a single uid.
 
 ## Troubleshooting
 

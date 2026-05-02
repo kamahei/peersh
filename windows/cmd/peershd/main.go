@@ -101,10 +101,13 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	displayName := fs.String("display-name", "", "display name to register (defaults to hostname)")
 	stunServer := fs.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
 	firebaseProjectID := fs.String("firebase-project", "", "Firebase project id (Firebase signaling mode)")
-	firebaseCredentials := fs.String("firebase-credentials", "", "path to Firebase service-account JSON (Firebase signaling mode)")
-	firebaseEmail := fs.String("firebase-email", "", "email of the Firebase account this peershd registers under (Firebase signaling mode); resolved to uid via Admin SDK")
+	firebaseCredentials := fs.String("firebase-credentials", "", "path to Firebase service-account JSON (advanced; the pairing flow does not need this)")
+	firebaseEmail := fs.String("firebase-email", "", "email of the Firebase account this peershd registers under (with -firebase-credentials); resolved to uid via Admin SDK")
 	firebaseUID := fs.String("firebase-uid", "", "explicit Firebase uid (alternative to -firebase-email)")
-	firebaseAPIKey := fs.String("firebase-api-key", "", "Firebase Web API key for signInWithCustomToken (Firebase signaling mode)")
+	firebaseAPIKey := fs.String("firebase-api-key", "", "Firebase Web API key for signInWithCustomToken / token refresh (Firebase signaling mode)")
+	firebaseRegion := fs.String("firebase-region", "asia-northeast1", "region of the deployed Cloud Functions (claimPairingCode)")
+	firebasePairCode := fs.String("pair-code", "", "one-time 6-digit pairing code shown by the mobile app's Pair PC screen; consumed once and replaced by a persisted refresh token")
+	firebaseTokenFile := fs.String("firebase-token-file", "", "path to the persisted Firebase refresh token (default: %LOCALAPPDATA%\\peersh\\firebase-refresh-token.txt)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -132,6 +135,9 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 		firebaseEmail:       *firebaseEmail,
 		firebaseUID:         *firebaseUID,
 		firebaseAPIKey:      *firebaseAPIKey,
+		firebaseRegion:      *firebaseRegion,
+		firebasePairCode:    *firebasePairCode,
+		firebaseTokenFile:   *firebaseTokenFile,
 	})
 }
 
@@ -144,6 +150,9 @@ type runOpts struct {
 	firebaseEmail                 string
 	firebaseUID                   string
 	firebaseAPIKey                string
+	firebaseRegion                string
+	firebasePairCode              string
+	firebaseTokenFile             string
 }
 
 func defaultCertDir() string {
@@ -240,21 +249,18 @@ func run(serviceCtx context.Context, opts runOpts) error {
 		if displayName == "" {
 			displayName, _ = os.Hostname()
 		}
-		// Pick auth mode: PSK (default) vs Firebase (when
-		// -firebase-credentials supplied).
-		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseEmail != "" || opts.firebaseUID != ""
+		// Pick auth mode: PSK (default), Firebase pairing (recommended),
+		// or Firebase service-account (advanced).
+		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseEmail != "" || opts.firebaseUID != "" || opts.firebasePairCode != "" || opts.firebaseTokenFile != ""
 		if useFirebase {
-			if opts.firebaseProjectID == "" || opts.firebaseCredentials == "" || (opts.firebaseEmail == "" && opts.firebaseUID == "") || opts.firebaseAPIKey == "" {
-				return errors.New("-firebase-* requires -firebase-project, -firebase-credentials, one of -firebase-email or -firebase-uid, and -firebase-api-key")
-			}
-			src, err := fbpeershd.New(ctx, opts.firebaseProjectID, opts.firebaseCredentials, opts.firebaseEmail, opts.firebaseUID, opts.firebaseAPIKey)
+			src, err := buildFirebaseTokenSource(ctx, opts)
 			if err != nil {
-				return fmt.Errorf("firebase auth source: %w", err)
+				return err
 			}
 			go runSignalingFirebase(ctx, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc)
 		} else {
 			if userID == "" || pskFile == "" {
-				return errors.New("-signaling requires -user and -psk-file (PSK mode) or the four -firebase-* flags (Firebase mode)")
+				return errors.New("-signaling requires -user and -psk-file (PSK mode), or -pair-code + -firebase-project + -firebase-api-key (Firebase pairing mode)")
 			}
 			secret, err := readPSKFile(pskFile)
 			if err != nil {
@@ -336,10 +342,57 @@ func runSignaling(ctx context.Context, url, userID string, secret []byte, device
 	}
 }
 
+// buildFirebaseTokenSource picks the right Firebase auth backend for the
+// invocation flags:
+//
+//   1. -pair-code given: claim it, exchange for refresh token, persist,
+//      and return a refresh-token-backed source. One-shot bootstrap.
+//   2. -firebase-credentials given: legacy service-account-JSON path.
+//   3. Otherwise: load the persisted refresh token (path defaults to
+//      LOCALAPPDATA\peersh\firebase-refresh-token.txt).
+//
+// Both Firebase paths require -firebase-project and -firebase-api-key.
+func buildFirebaseTokenSource(ctx context.Context, opts runOpts) (fbpeershd.TokenSource, error) {
+	if opts.firebaseAPIKey == "" || opts.firebaseProjectID == "" {
+		return nil, errors.New("firebase mode requires -firebase-project and -firebase-api-key")
+	}
+	tokenPath := opts.firebaseTokenFile
+	if tokenPath == "" {
+		tokenPath = fbpeershd.DefaultRefreshTokenPath()
+	}
+
+	if opts.firebasePairCode != "" {
+		slog.Info("pairing peershd with Firebase", "project", opts.firebaseProjectID, "token_file", tokenPath)
+		src, err := fbpeershd.Pair(ctx, opts.firebaseProjectID, opts.firebaseRegion, opts.firebaseAPIKey, opts.firebasePairCode, tokenPath)
+		if err != nil {
+			return nil, fmt.Errorf("pair: %w", err)
+		}
+		return src, nil
+	}
+
+	if opts.firebaseCredentials != "" {
+		if opts.firebaseEmail == "" && opts.firebaseUID == "" {
+			return nil, errors.New("-firebase-credentials requires one of -firebase-email or -firebase-uid")
+		}
+		src, err := fbpeershd.New(ctx, opts.firebaseProjectID, opts.firebaseCredentials, opts.firebaseEmail, opts.firebaseUID, opts.firebaseAPIKey)
+		if err != nil {
+			return nil, fmt.Errorf("firebase auth source: %w", err)
+		}
+		return src, nil
+	}
+
+	src, err := fbpeershd.NewRefreshSource(tokenPath, opts.firebaseAPIKey)
+	if err != nil {
+		return nil, fmt.Errorf("load persisted refresh token (run with -pair-code first): %w", err)
+	}
+	slog.Info("loaded persisted Firebase refresh token", "token_file", tokenPath)
+	return src, nil
+}
+
 // runSignalingFirebase is the Firebase-mode counterpart to runSignaling.
-// Mints an ID token via the AuthSource and uses it on the Register
+// Mints an ID token via the TokenSource and uses it on the Register
 // frame; otherwise the Connect-handling loop is identical.
-func runSignalingFirebase(ctx context.Context, url string, src *fbpeershd.AuthSource, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn) {
+func runSignalingFirebase(ctx context.Context, url string, src fbpeershd.TokenSource, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn) {
 	log := slog.With("signaling", url, "uid", src.UID(), "device", deviceID)
 	if srflx != nil {
 		log.Info("srflx ready for advertisement", "srflx", srflx)

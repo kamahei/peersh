@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../services/flavor.dart' as flavor;
 import '../spike_screen.dart';
 import '../state/settings.dart';
+import 'pair_pc_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -39,6 +41,16 @@ class SettingsScreen extends ConsumerWidget {
               trailing: Text(s.fontSize.toStringAsFixed(0)),
             ),
             const Divider(),
+            if (flavor.kFirebaseInitialized)
+              ListTile(
+                leading: const Icon(Icons.qr_code_2_outlined),
+                title: const Text('Pair PC'),
+                subtitle: const Text(
+                    'Generate a one-time code so peershd can mint Firebase tokens for your account.'),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const PairPcScreen()),
+                ),
+              ),
             ListTile(
               leading: const Icon(Icons.bug_report_outlined),
               title: const Text('Developer spike screen'),

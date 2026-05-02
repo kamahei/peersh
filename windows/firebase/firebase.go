@@ -33,6 +33,15 @@ import (
 	"google.golang.org/api/option"
 )
 
+// TokenSource is the minimal interface peershd needs from a Firebase
+// auth backend: produce a fresh ID token, and report the uid for
+// logging. Implemented by AuthSource (service-account-based) and
+// RefreshAuthSource (pairing / refresh-token-based).
+type TokenSource interface {
+	Token(ctx context.Context) (string, error)
+	UID() string
+}
+
 // AuthSource produces fresh Firebase ID tokens for the configured uid.
 // Safe for concurrent use; the underlying refresh runs at most once per
 // 50 minutes.

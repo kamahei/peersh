@@ -1,17 +1,24 @@
 // peersh Firebase Functions entry point.
 //
-// Phase 5 ships one function:
-//   onSessionCreated  — Firestore trigger that fires when the signaling
-//                       server creates users/{uid}/sessions/{sessionId}.
-//                       It looks up the target device's fcm_token and
-//                       sends a high-priority data message so the host
-//                       can wake / re-establish its UDP socket.
+// Phase 5 ships:
+//   onSessionCreated   — Firestore trigger that fires when the signaling
+//                        server creates users/{uid}/sessions/{sessionId}.
+//                        Sends a high-priority FCM data message so the
+//                        host can wake / re-establish its UDP socket.
+//   mintPairingCode    — HTTPS callable. Authenticated mobile clients
+//                        request a 6-digit code; the function mints a
+//                        Custom Token for the calling uid and stores it
+//                        in pairing_codes/{code} with a 5-min TTL.
+//   claimPairingCode   — HTTPS callable. Unauthenticated peershd hosts
+//                        post the code; the function returns the cached
+//                        Custom Token and deletes the doc (one-shot).
 //
 // Cost guardrails (Phase 5+) live as separate functions in cost.ts and
 // are wired in below when present.
 
 import * as admin from 'firebase-admin';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onRequest } from 'firebase-functions/v2/https';
 import { logger, setGlobalOptions } from 'firebase-functions/v2';
 
 admin.initializeApp();
@@ -88,6 +95,125 @@ export const onSessionCreated = onDocumentCreated(
     } catch (err) {
       logger.error('FCM send failed', { err, userId, hostDeviceId });
     }
+  },
+);
+
+// ---------------------------------------------------------------------
+// Pairing flow
+// ---------------------------------------------------------------------
+//
+// Replaces the "ship a service-account JSON to every host PC" model.
+// On the mobile side a signed-in user requests a short-lived 6-digit
+// code; on the PC side `peershd -pair-code <code>` claims the code,
+// receives a Custom Token, and exchanges it (via Identity Toolkit) for
+// an ID + Refresh Token pair. Only the Refresh Token is persisted on
+// disk, scoped to that single uid.
+//
+// Storage: pairing_codes/{code} = {
+//     uid: string,
+//     custom_token: string,
+//     created_at: Timestamp,
+//     expires_at: Timestamp,
+// }
+// firestore.rules denies all client access to this collection — both
+// functions use the Admin SDK which bypasses the rules.
+
+const PAIRING_CODE_TTL_SEC = 5 * 60;
+
+function generatePairingCode(): string {
+  // Six numeric digits — easy to read aloud / type. 000000 reserved.
+  for (;;) {
+    const n = Math.floor(Math.random() * 1_000_000);
+    if (n === 0) continue;
+    return n.toString().padStart(6, '0');
+  }
+}
+
+export const mintPairingCode = onRequest(
+  { cors: true },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'method-not-allowed' });
+      return;
+    }
+    const authHeader = req.get('authorization') || '';
+    const m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!m) {
+      res.status(401).json({ error: 'missing-id-token' });
+      return;
+    }
+    let decoded: admin.auth.DecodedIdToken;
+    try {
+      decoded = await admin.auth().verifyIdToken(m[1]);
+    } catch (e) {
+      logger.warn('mintPairingCode: invalid id token', { err: `${e}` });
+      res.status(401).json({ error: 'invalid-id-token' });
+      return;
+    }
+    const uid = decoded.uid;
+
+    const customToken = await admin.auth().createCustomToken(uid);
+    const code = generatePairingCode();
+    const now = admin.firestore.Timestamp.now();
+    const expiresAt = admin.firestore.Timestamp.fromMillis(
+      now.toMillis() + PAIRING_CODE_TTL_SEC * 1000,
+    );
+
+    await admin.firestore().doc(`pairing_codes/${code}`).set({
+      uid,
+      custom_token: customToken,
+      created_at: now,
+      expires_at: expiresAt,
+    });
+
+    logger.info('pairing code minted', { uid, code, expiresAt });
+    res.status(200).json({
+      code,
+      expires_at: expiresAt.toMillis(),
+      ttl_seconds: PAIRING_CODE_TTL_SEC,
+    });
+  },
+);
+
+export const claimPairingCode = onRequest(
+  { cors: true },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'method-not-allowed' });
+      return;
+    }
+    const code = ((req.body && req.body.code) || '').toString().trim();
+    if (!/^\d{6}$/.test(code)) {
+      res.status(400).json({ error: 'invalid-code' });
+      return;
+    }
+    const ref = admin.firestore().doc(`pairing_codes/${code}`);
+    const result = await admin.firestore().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return { ok: false, reason: 'not-found' as const };
+      const data = snap.data()!;
+      const expiresAt = data.expires_at as admin.firestore.Timestamp;
+      if (!expiresAt || expiresAt.toMillis() < Date.now()) {
+        tx.delete(ref);
+        return { ok: false, reason: 'expired' as const };
+      }
+      tx.delete(ref);
+      return {
+        ok: true,
+        uid: data.uid as string,
+        customToken: data.custom_token as string,
+      };
+    });
+
+    if (!result.ok) {
+      res.status(404).json({ error: result.reason });
+      return;
+    }
+    logger.info('pairing code claimed', { uid: result.uid, code });
+    res.status(200).json({
+      uid: result.uid,
+      custom_token: result.customToken,
+    });
   },
 );
 
