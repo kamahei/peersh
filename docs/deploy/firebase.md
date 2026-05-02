@@ -1,6 +1,6 @@
 # peersh Firebase mode
 
-Firebase mode replaces the PSK / SQLite self-hosting path with Google sign-in + Firestore + FCM wake-up. It is the recommended path for an "official-hosted" peersh-signaling deployment serving more than a handful of users.
+Firebase mode replaces the PSK / SQLite self-hosting path with Google sign-in + Firestore (device / pairing state) + Realtime Database (wake events). It is the recommended path for an "official-hosted" peersh-signaling deployment serving more than a handful of users. The signaling WebSocket opens only briefly per session — host-side wake-up flows over a Realtime Database SSE stream that does not contribute to Cloud Run billing. See [`docs/firebase-mode.md`](../firebase-mode.md) for the runtime architecture.
 
 The PSK + SQLite path remains supported for self-hosters with a single VPS — pick whichever fits.
 
@@ -8,28 +8,30 @@ The PSK + SQLite path remains supported for self-hosters with a single VPS — p
 
 - **Server side** (committed to the repo, generic):
   - `core/auth/firebase` — Firebase Admin SDK ID-token verifier.
-  - `core/store/firestore` — Firestore-backed Store.
+  - `core/store/firestore` — Firestore-backed Store (devices / pairings / users).
   - `firebase/firestore.rules` — per-user isolation.
   - `firebase/firestore.indexes.json` — composite indexes (none yet).
-  - `firebase/functions/src/index.ts` — `onSessionCreated` Cloud Function that fires FCM wake-up to the matching host.
-  - `peersh-signaling` config switches: `auth_provider = "firebase"`, `store_backend = "firestore"`.
+  - `firebase/database.rules.json` — Realtime Database per-user isolation rules (`users/{uid}/...`).
+  - `firebase/functions/src/index.ts` — `mintPairingCode` / `claimPairingCode` for the headless pairing flow, plus `budgetGuard`. The legacy `onSessionCreated` FCM wake-up is retained as dead code (a future v2-D may revive it).
+  - `peersh-signaling` config switches: `auth_provider = "firebase"`, `store_backend = "firestore"`, `idle_timeout = "60s"` (defense layer for stale connections).
 - **Mobile side** (committed):
-  - `firebase_core`, `firebase_auth`, `cloud_firestore`, `firebase_messaging`, `firebase_app_check`, `google_sign_in` packages in `pubspec.yaml`.
+  - `firebase_core`, `firebase_auth`, `cloud_firestore`, `firebase_database`, `firebase_messaging`, `firebase_app_check`, `google_sign_in` packages in `pubspec.yaml`.
   - `app/lib/services/auth_service_firebase.dart` — Google sign-in + ID token resolver.
-  - `app/lib/services/flavor.dart` / `flavor_runtime.dart` — runtime `kFirebaseInitialized` flag (the same APK supports both PSK and Firebase server entries).
+  - `app/lib/services/rtdb.dart` — RTDB instance helper (region is hard-coded; edit if your project uses a non-`asia-southeast1` region).
+  - `app/lib/services/peersh_session.dart` — writes wake_request to RTDB on each connect attempt; reads `last_seen_at` for the presence freshness hint.
+  - `app/lib/services/device_discovery_service.dart` — reads `users/{uid}/devices` from RTDB to populate the device picker.
   - `app/lib/screens/signin_screen.dart` — Google sign-in screen, surfaced from the connect flow when the user opens a Firebase server entry.
   - `app/lib/screens/pair_pc_screen.dart` — **Pair PC** screen: shows a 6-digit code peershd consumes once to bootstrap.
   - `app/lib/services/pairing_service.dart` — calls the `mintPairingCode` Cloud Function with the user's Firebase ID token.
-  - `app/lib/firebase_options.dart`, `app/firebase.json`, `app/android/app/google-services.json` — **stubs** committed; operators run `flutterfire configure` locally and `git update-index --skip-worktree` to keep their values out of `git diff`.
+  - `app/lib/firebase_options.dart`, `app/firebase.json`, `app/android/app/google-services.json` — **stubs** committed; operators run `flutterfire configure` locally (or use `scripts/build-apk-distrib.{sh,cmd}` which swaps in `local/*.real` at build time and restores the stubs after).
 - **Cloud Functions** (committed in `firebase/functions/src/index.ts`):
-  - `onSessionCreated` — Firestore trigger that fires FCM wake-up to the matching host.
   - `mintPairingCode` — HTTPS, ID-token-authenticated. Mints a Custom Token for the calling uid, stores it under `pairing_codes/{code}` with a 5-min TTL, and returns the 6-digit code to the mobile app.
   - `claimPairingCode` — HTTPS, unauthenticated. Takes a code, returns the cached Custom Token, deletes the doc.
+  - `budgetGuard` — Pub/Sub subscriber that flips `ops/budget-state.triggered` when a Cloud Billing alert fires; retained for a future server-side wake-throttling path.
+  - `onSessionCreated` — present but **dead code** (no client writes `users/{uid}/sessions/{sid}` after v2-A; wake events flow via RTDB instead).
 - **peershd side** (committed):
-  - `windows/firebase` — two `TokenSource` implementations:
-    - `RefreshAuthSource` (recommended) — bootstraps from a 6-digit pairing code, persists a refresh token under `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt`.
-    - `AuthSource` (advanced) — service-account-JSON-based; mints custom tokens via the Admin SDK.
-  - `peershd` flags: `-pair-code`, `-firebase-project`, `-firebase-api-key`, `-firebase-region`, `-firebase-token-file`, `-firebase-credentials`, `-firebase-email`, `-firebase-uid`.
+  - `windows/firebase` — `RefreshAuthSource` (pairing-code / browser-login) and `AuthSource` (service-account JSON), plus the RTDB SSE wake-listener (`rtdb.go`, `wakelistener.go`, `devices.go`). Both `TokenSource` implementations feed the same wake-listener path.
+  - `peershd` flags: `-firebase-login`, `-pair-code`, `-firebase-project`, `-firebase-api-key`, `-firebase-region` (Cloud Functions region), `-firebase-rtdb-region` (RTDB region; default `asia-southeast1`), `-firebase-token-file`, `-firebase-credentials`, `-firebase-email`, `-firebase-uid`.
 
 What is **not** in the repo (operator-specific, generated locally):
 
@@ -66,6 +68,7 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   firebase.googleapis.com \
   firestore.googleapis.com \
+  firebasedatabase.googleapis.com \
   identitytoolkit.googleapis.com \
   fcm.googleapis.com \
   cloudfunctions.googleapis.com \
@@ -97,6 +100,15 @@ gcloud firestore databases create \
 
 Pick one and use it consistently for Firestore + Cloud Run + Cloud Functions to avoid cross-region egress fees.
 
+### 4a. Initialize Realtime Database (one-time)
+
+Wake events for v2-A live in the Realtime Database, not Firestore. The Firebase RTDB CLI does not support non-interactive instance creation; do this from the console:
+
+1. Open `https://console.firebase.google.com/project/<your-project-id>/database`.
+2. **Realtime Database** → **Create Database**.
+3. **Region**: pick `asia-southeast1` (Singapore), `europe-west1`, or `us-central1`. **`asia-northeast1` is NOT supported by RTDB.** The mobile app hard-codes `asia-southeast1` in `app/lib/services/rtdb.dart` — if you choose a different region, edit that constant before building the APK.
+4. Start in **Locked mode**. The rules are uploaded by `firebase deploy --only database` in step 6 below.
+
 ### 5. Enable Google sign-in
 
 This step requires a browser (Firebase Console).
@@ -108,7 +120,7 @@ This step requires a browser (Firebase Console).
 5. Set **Project support email** = the email you want surfaced in the sign-in dialog.
 6. Save.
 
-### 6. Deploy Firestore rules + onSessionCreated function
+### 6. Deploy Firestore rules + Realtime Database rules + Cloud Functions
 
 ```sh
 cp firebase/.firebaserc.example firebase/.firebaserc
@@ -119,13 +131,15 @@ npm install
 cd ../..
 ```
 
-Update the function's region to match your Firestore region (open `firebase/functions/src/index.ts` and edit the `setGlobalOptions({region: ...})` call). Then:
+Update the function's region to match your Cloud Functions region (open `firebase/functions/src/index.ts` and edit the `setGlobalOptions({region: ...})` call). Then:
 
 ```sh
 cd firebase
-firebase deploy --only firestore:rules,firestore:indexes,functions
+firebase deploy --only firestore:rules,firestore:indexes,database,functions
 cd ..
 ```
+
+The `database` target uploads `firebase/database.rules.json`, which restricts `users/{uid}/...` (wake_requests + devices presence) read/write to the matching authenticated uid.
 
 If the first `functions` deploy fails with a "Permission denied while using the Eventarc Service Agent" error, the Eventarc service agent has not finished propagating yet. Wait ~60 s and retry; the error is transient and only affects the very first 2nd-gen function in a fresh project. The Cloud Build worker also needs `roles/cloudbuild.builds.builder` granted to the Compute default service account; if you see "missing required permission on the build service account":
 
@@ -160,6 +174,16 @@ PEERSH_SIGNALING_METRICS_TOKEN=$METRICS_TOKEN
 ```
 
 Replace `<assigned-host>` with the hostname the deploy script printed.
+
+Optional but recommended: set `PEERSH_SIGNALING_IDLE_TIMEOUT` to override the default 60-second idle close (defense layer against frozen clients holding the WS open):
+
+```sh
+gcloud run services update peersh-signaling \
+  --region=<region> --project=<your-project-id> \
+  --update-env-vars=PEERSH_SIGNALING_IDLE_TIMEOUT=120s
+```
+
+Use `-1s` to disable idle close entirely (not recommended for production).
 
 The Cloud Run runtime service account needs Firestore write access — the project's Compute default SA usually has it via `roles/datastore.user`. If not:
 
@@ -313,6 +337,8 @@ peershd \
 
 If the refresh token is lost (file deleted, machine reset) or revoked (mobile app **Sign out** + sign back in), re-run with `-firebase-login` or `-pair-code` to bootstrap again. There's no per-uid quota.
 
+> **RTDB region.** peershd's wake-listener targets `<project>-default-rtdb.<region>.firebasedatabase.app` where `<region>` defaults to `asia-southeast1` (Singapore). If your RTDB instance lives elsewhere, pass `-firebase-rtdb-region <region>` (or set `PEERSH_BUILD_FIREBASE_RTDB_REGION` at build time so the binary embeds it). The same value must match the hard-coded `_rtdbRegion` in `app/lib/services/rtdb.dart` on the mobile side.
+
 ### Advanced: service-account JSON path
 
 For multi-host deployments where a single operator wants to provision dozens of peershds without each one touching the mobile app, peershd still accepts the service-account-JSON flow:
@@ -372,7 +398,7 @@ Debug builds use the App Check `Debug` provider, which only works after you regi
 
 ## Cost guardrail
 
-The `budgetGuard` Cloud Function listens to a Cloud Billing budget alert Pub/Sub topic. When the configured threshold is hit, it writes `ops/budget-state` in Firestore; `onSessionCreated` checks that flag and short-circuits the FCM wake-up so a runaway loop can't keep burning Functions invocations past your budget.
+The `budgetGuard` Cloud Function listens to a Cloud Billing budget alert Pub/Sub topic. When the configured threshold is hit, it writes `ops/budget-state.triggered = true` in Firestore. After v2-A this flag is no longer consulted on the wake path (mobile writes wake_requests directly to RTDB; no Cloud Function in the loop), but the function and the flag are kept for a future server-side wake-throttling path. To kill the wake path entirely under budget pressure, the operator removes the `users/{uid}` write rule from `database.rules.json` and redeploys.
 
 To wire it up:
 
@@ -401,12 +427,14 @@ You can tighten the trigger ratio via the function's `PEERSH_BUDGET_GUARD_THRESH
 
 ## Multiple PCs
 
-Each peershd registers itself as `users/{uid}/devices/{deviceId}` in Firestore on every signaling Register frame (with `display_name`, `kind`, `last_seen_at`). The mobile app reads this collection and surfaces a picker:
+Each peershd writes its `last_seen_at` to `users/{uid}/devices/{deviceId}` in the **Realtime Database** every 5 minutes (the heartbeat) and re-asserts on each wake. The mobile app reads this subtree from RTDB and surfaces a picker:
 
 - **First connect to a Firebase server** — the app prompts you to pick which PC to connect to. The choice is remembered as the server entry's default.
 - **Switching PCs later** — long-press / tap the server's overflow menu (⋮) → **Switch PC**. The picker shows all your registered hosts ordered by most-recently-seen.
 
-To run a second host on a different machine, just run `peershd` there with `-firebase-login` (or `-pair-code`). It registers itself; the picker will show it on the next refresh.
+To run a second host on a different machine, just run `peershd` there with `-firebase-login` (or `-pair-code`). It writes its presence to RTDB; the picker shows it on the next refresh.
+
+> **Note.** The signaling server still writes `display_name` / `kind` / `public_key` to the Firestore `users/{uid}/devices/{deviceId}` document on every Register frame. That data is unused by the mobile picker after v2-A but stays available for ops debugging.
 
 ## Troubleshooting
 
@@ -417,16 +445,24 @@ To run a second host on a different machine, just run `peershd` there with `-fir
 | peershd: `firebase: identity toolkit 400: API key not valid` | Check `-firebase-api-key`. The Web SDK key is the right one — not the Android-only OAuth client id. |
 | Mobile sign-in: `PlatformException(sign_in_failed, ApiException: 10)` | The Google sign-in OAuth client has not been auto-configured. Re-run `flutterfire configure --platforms=android` to register the Android app's SHA-1. |
 | `Permission denied while using the Eventarc Service Agent` (Cloud Function deploy) | Wait ~60 s; first 2nd-gen function in a fresh project takes a moment for the service agent. |
+| peershd: `rtdb: PUT /users//devices/...: HTTP 401: Permission denied` | Empty uid in the URL (note the double slash). Pre-`4a25fcc` peershd called `src.UID()` before minting an ID token; the modern fix lives in `windows/firebase/devices.go::StartWakeRuntime`. Rebuild peershd from a checkout that includes commit `4a25fcc`. |
+| peershd: SSE listener fails with 404 on `firebasedatabase.app` | Realtime Database instance was not created. Re-run step 4a in the Firebase Console, then `firebase deploy --only database`. |
+| Mobile: `Bad state: Firebase server entry but Firebase is not initialized in this APK` | The committed `firebase_options.dart` is the OSS placeholder. Run `flutterfire configure` (or use `scripts/build-apk-distrib.{sh,cmd}`, which swaps in `local/*.real` at build time) and rebuild the APK. |
+| Mobile: wake works on `asia-southeast1` but not on a different RTDB region | The mobile app hard-codes the RTDB region in `app/lib/services/rtdb.dart`. Edit `_rtdbRegion` to match your project and rebuild. |
 
 ## Cost expectations
 
 For personal-scale use (a few users, a few peershd hosts), Firebase mode stays comfortably within the free tier:
 
-- Firestore: < 1.5M reads/month, < 600k writes/month free.
+- Firestore: < 1.5M reads/month, < 600k writes/month free (Spark plan).
+- Realtime Database: 100 simultaneous connections + 1 GB stored / 10 GB transfer per month free (Spark). **Above 100 connected hosts requires the Blaze plan.**
 - Cloud Functions: 2M invocations/month free.
-- FCM: free regardless of volume.
 - Cloud Run: 180k vCPU-seconds + 2M requests/month free.
 
-In Firebase mode, peershd does **not** keep the signaling WebSocket open continuously — it only connects long enough to reply to a Connect message after FCM wake-up, then disconnects again. This is dramatically cheaper than the PSK mode where peershd's WebSocket stays open all day.
+In Firebase mode, peershd does **not** keep the signaling WebSocket open continuously — it holds an SSE connection to RTDB instead, which never touches Cloud Run. The WS is opened only when a wake event arrives and is closed within ~20 seconds. This is dramatically cheaper than PSK mode where peershd's WebSocket stays open all day.
 
-At ~1000 users with average traffic, expect total monthly cost in the low single-digit dollars across Cloud Run + Firestore + Functions; the dominant variable is FCM usage and that is free.
+At ~1000 users on the Blaze plan expect roughly:
+
+- Cloud Run: a few dollars per month (per-session WS billing only).
+- RTDB: ~$10-20/month (1000 idle SSE connections + heartbeat writes; tune via heartbeat interval if needed).
+- Firestore + Functions: well within free tier.

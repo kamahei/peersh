@@ -16,7 +16,7 @@ People who run powerful Windows machines at home — gaming rigs, workstations, 
 ## Goals
 
 - Provide a working mobile → home Windows PowerShell execution path over the public internet without operating any data-plane relay infrastructure.
-- Ship two equally first-class deployment modes: a self-hostable single-binary / Docker signaling server for everyone, and an optional Firebase-backed mode (Google sign-in, FCM wake-up, multi-PC picker) for operators who want them.
+- Ship two equally first-class deployment modes: a self-hostable single-binary / Docker signaling server for everyone, and an optional Firebase-backed mode (Google sign-in, Realtime-Database-based wake-event delivery, multi-PC picker) for operators who want them.
 - Make the wire protocol stable, documented, and versioned from day one.
 - Keep the Firebase mode's running cost near zero at low-thousands-of-users scale by carefully shaping signaling-server access patterns.
 - Preserve a coherent shell experience: a reconnecting client should be able to attach back to the same `pwsh` session it left (cwd, variables intact).

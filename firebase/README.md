@@ -8,13 +8,14 @@ who only run `peersh-signaling` in PSK + SQLite mode never need this.
 
 ```
 firebase/
-├── firebase.json            # firebase CLI config (functions + rules)
+├── firebase.json            # firebase CLI config (firestore + database + functions)
 ├── firestore.rules          # per-user isolation rules
 ├── firestore.indexes.json   # composite indexes (none yet)
+├── database.rules.json      # Realtime Database per-user isolation (v2-A wake events)
 ├── .firebaserc.example      # copy to .firebaserc and set your project id
 └── functions/               # TypeScript Cloud Functions
-    ├── src/index.ts         # FCM wake-up trigger (Phase 5)
-    ├── package.json
+    ├── src/index.ts         # mintPairingCode / claimPairingCode / budgetGuard
+    ├── package.json         # (onSessionCreated dead code retained for v2-D)
     ├── tsconfig.json
     └── .eslintrc.cjs
 ```

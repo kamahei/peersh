@@ -8,16 +8,16 @@ Terms used across the peersh documentation and code. Stays alphabetical so it's 
 - **Capability string.** A short label inside a `ClientHello` / `ServerHello` capability list, advertising support for an optional protocol feature (e.g. `pty.v1`, `files.v1`). Lets clients and servers negotiate optional behavior without bumping `protocol_version`.
 - **CGNAT.** Carrier-grade NAT. The network operator NATs many subscribers behind a shared public IP, often in a way that prevents UDP hole punching. CGNAT-on-both-sides is the canonical case where peersh's "no relay" policy means the connection cannot be made.
 - **`ClientHello` / `ServerHello`.** The first protobuf messages exchanged on the QUIC control stream. Carry `protocol_version`, `capabilities`, optional `session_id` (for reattach), and a free-form identifier. Mismatched versions fail cleanly.
-- **Cloud Function.** Firebase/GCP serverless compute. peersh uses `onSessionCreated` (FCM wake-up), `mintPairingCode` / `claimPairingCode` (peershd pairing), and `budgetGuard` (cost guardrail).
+- **Cloud Function.** Firebase/GCP serverless compute. peersh uses `mintPairingCode` / `claimPairingCode` (peershd pairing) and `budgetGuard` (cost guardrail). `onSessionCreated` is retained as dead code from v1; v2-A moved wake delivery to a Realtime Database SSE listener that bypasses Cloud Functions and Cloud Run entirely.
 - **ConPTY.** Windows pseudo-console API. peersh's interactive PTY backend on the host side.
 - **`cwd`.** Current working directory. Preserved across reattach. Tracked through OSC 9;9 emitted by the prompt wrapper.
 - **Device ID.** A 16-character ASCII string derived deterministically from a device's public key: `base32(sha256(publicKey)[:10])`. Same key serves as identity and as mTLS credential.
 - **EventChannel.** Flutter mechanism for streaming a sequence of events from native code (Go via `gomobile bind`) into Dart.
 - **`ExecRequest` / `ExecResponse`.** Legacy one-shot protobuf exec path. Superseded by the PTY path; still used internally by the cwd / file-list helpers.
-- **FCM.** Firebase Cloud Messaging. Used in Firebase mode to wake up a sleeping Windows host when a session is initiated.
+- **FCM.** Firebase Cloud Messaging. Reserved for a future host→mobile push path; the v2-A wake-event channel is the Realtime Database SSE listener (see RTDB).
 - **Firebase Auth.** Firebase's identity service. The `firebase` `auth.Provider` verifies Firebase ID tokens.
-- **Firestore.** Firebase's document database. The `firestore` `store.Store` backend.
-- **FlutterFire.** The official Flutter plugins for Firebase services. Used by the mobile app for sign-in, FCM token registration, and App Check.
+- **Firestore.** Firebase's document database. The `firestore` `store.Store` backend (devices / pairings / users). Wake events live in RTDB instead.
+- **FlutterFire.** The official Flutter plugins for Firebase services. Used by the mobile app for sign-in, RTDB read/write, and App Check.
 - **Foreground Service.** Android background-execution mechanism with a persistent notification. peersh starts one (`dataSync` type) while a session is active so the OS doesn't freeze the QUIC keepalive.
 - **`gomobile bind`.** Tool that compiles a Go package into an Android `.aar` and an iOS `.xcframework` callable from native (and via plugins, from Flutter).
 - **Hole punching.** UDP technique where two peers behind NATs simultaneously send packets to each other's reflexive addresses, which causes their NATs to install symmetric mappings allowing two-way traffic. peersh's only NAT-traversal mechanism.
@@ -37,10 +37,11 @@ Terms used across the peersh documentation and code. Stays alphabetical so it's 
 - **PTY.** Pseudo-terminal. peersh uses ConPTY on Windows; the mobile side renders with `xterm.dart`.
 - **`pwsh`.** PowerShell 7 (and later) executable. Preferred PowerShell host. Falls back to `powershell.exe` (Windows PowerShell 5.1) when `pwsh` is not on PATH.
 - **QUIC.** UDP-based transport protocol with mandatory TLS 1.3. peersh uses `github.com/quic-go/quic-go` for both server and client.
+- **Realtime Database (RTDB).** Firebase's JSON tree database. v2-A uses it for wake events (`users/{uid}/wake_requests/`) and host presence (`users/{uid}/devices/{deviceId}/last_seen_at`); the host's SSE listener on this subtree replaces a persistent signaling WebSocket and is the cost-discipline exception called out in `AGENTS.md`.
 - **Reflexive address.** A peer's apparent address as seen from the public internet, after NAT translation. Discovered via STUN.
 - **Ring buffer.** A fixed-size circular buffer (256 KiB per session by default) used by `windows/ptyhost.Manager` to capture output emitted while the client is disconnected, for replay on reattach.
 - **`SessionManager`.** Windows-host component (in `windows/pwsh`) that owns long-lived `pwsh` processes, the disconnect ring buffer, idle timeouts, and the reattach-by-`session_id` lookup.
-- **Signaling server.** The peersh component used **only for connection setup**: device registration, pairing, endpoint exchange, optional FCM wake-up. Never carries session data.
+- **Signaling server.** The peersh component used **only for connection setup**: device registration, pairing, endpoint exchange, idle-close defense layer. Never carries session data. In Firebase mode the WebSocket opens only briefly per session — the wake event arrives out-of-band via RTDB SSE.
 - **`store.Store`.** The pluggable storage interface in `core/store/`. Implementations: `memory`, `sqlite`, `firestore`.
 - **STUN.** Session Traversal Utilities for NAT. Protocol used to learn a peer's reflexive address.
 - **Symmetric NAT.** A NAT type that picks a different external port for each (source, destination) pair. Hole punching against a symmetric NAT is hard; symmetric-on-both-sides is the canonical "cannot connect" case.

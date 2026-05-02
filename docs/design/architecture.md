@@ -8,8 +8,9 @@ This file describes the technical shape of peersh: components, transport, NAT tr
 [Mobile App: Flutter UI + Go network layer (gomobile)]
        ↓ Auth (Firebase / PSK / None)
 [Signaling Server: Go binary, deployable anywhere]
-       ↓ endpoint exchange + (optionally) FCM wake-up
+       ↓ endpoint exchange (signaling WS opens only briefly per session in Firebase mode)
 [Windows Service: Go + PowerShell host]
+       ↑ Firebase mode: Realtime Database SSE wake-listener (out of band, no Cloud Run cost)
        ↑↓ UDP Hole Punching → QUIC P2P (mTLS)
 [Mobile App]
 ```
@@ -23,7 +24,7 @@ The signaling server is **only used for connection setup**. All actual data flow
 - **UI** in Flutter (Dart).
 - **Network layer** in Go, compiled to mobile via `gomobile bind` (`.aar` for Android, `.xcframework` for iOS).
 - Dart and Go communicate via Method Channel and EventChannel.
-- Owns: pairing UX, server list, device list, terminal UI, secure storage of credentials, FCM token registration (when Firebase mode is enabled), background persistence (Android Foreground Service / iOS Background Modes).
+- Owns: pairing UX, server list, device list (read from Realtime Database in Firebase mode), terminal UI, secure storage of credentials, background persistence (Android Foreground Service / iOS Background Modes), and writing wake events to RTDB so the host can open its short-lived signaling WebSocket in response.
 
 #### Mobile architecture
 
@@ -56,9 +57,9 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 ### Signaling server (`peersh-signaling`)
 
 - Single Go binary. Deployable as a binary or Docker container.
-- Owns: device registration, pairing/matching, endpoint exchange, optional FCM wake-up, rate limiting, auth verification, store-backed persistence.
+- Owns: device registration, pairing/matching, endpoint exchange, rate limiting, auth verification, store-backed persistence, idle-close defense layer.
 - Configurable via TOML/YAML file plus environment variables.
-- Uses WebSocket for the client-server signaling channel. WebSocket is used (rather than Firestore real-time listeners) so that the official hosted mode keeps Firestore costs bounded.
+- Uses WebSocket for the client-server signaling channel. In Firebase mode the WS is short-lived (opened in response to a Realtime Database wake event, closed after the session is established); idle close defaults to 60 s. In PSK mode the host holds it open continuously.
 - Stateless across restarts to the extent possible: durable state lives in the configured store.
 
 ### Windows host (`peershd`)
@@ -168,9 +169,9 @@ To keep a Firebase-mode signaling server within the Firebase / GCP free tier at 
 
 - Each connection lifecycle should consume **at most ~5 Firestore reads and ~2 writes**. Design Firestore access patterns and indexes against this budget.
 - Use **client-side caching** for device info and public keys. Don't read what the client already knows.
-- **No Firestore real-time listeners** for the signaling path. Signaling uses WebSocket with in-memory server-side state.
+- **No real-time listeners on signaling messages** (Hello/Register/Connect). The host-side Realtime Database SSE listener on `users/{uid}/wake_requests` is an explicit cost-discipline exception, sanctioned because it replaces the persistent signaling WebSocket and the connection goes to `firebasedatabase.app` (not Cloud Run).
 - Batch operations where possible.
-- **Cost guardrails** at the project level: Cloud Billing budgets, the `budgetGuard` Cloud Function (which sets `ops/budget-state` and short-circuits `onSessionCreated`), and the App Check enforcement switch on Register frames.
+- **Cost guardrails** at the project level: Cloud Billing budgets and the App Check enforcement switch on Register frames. The `budgetGuard` Cloud Function and `ops/budget-state` short-circuit are retained for a future `onSessionCreated` revival; at present neither is on the wake-event path.
 
 ## Repository layout
 

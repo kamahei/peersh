@@ -100,7 +100,7 @@ Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 36
 PEERSH_SIGNALING_BOOTSTRAP_PSK="alice:abc...:alice-laptop,bob:def...:bob-phone"
 ```
 
-## Migrating to Firebase mode (Firestore + Firebase Auth)
+## Migrating to Firebase mode (Firestore + Realtime Database + Firebase Auth)
 
 The same Cloud Run service can be flipped to Firebase mode by updating env vars (no rebuild required):
 
@@ -112,7 +112,19 @@ PEERSH_SIGNALING_STORE_BACKEND=firestore,\
 PEERSH_SIGNALING_FIREBASE_PROJECT_ID=<your-firebase-project-id>
 ```
 
-The bootstrap-PSK env var becomes a no-op in Firebase mode. See [`firebase.md`](firebase.md) for the full walkthrough (Cloud Functions, Firestore rules, mobile FlutterFire setup, peershd `-firebase-login` / `-pair-code`).
+The bootstrap-PSK env var becomes a no-op in Firebase mode. The Firebase mode also requires a Realtime Database instance for wake-event delivery (created separately in the Firebase Console; see [`firebase.md`](firebase.md) step 4a). See [`firebase.md`](firebase.md) for the full walkthrough (Cloud Functions, Firestore + RTDB rules, mobile FlutterFire setup, peershd `-firebase-login` / `-pair-code`).
+
+## Optional: idle close defense layer
+
+After v2-E, the signaling server tears down a registered WebSocket that hasn't sent a frame within `IdleTimeout` (default 60 s) with a `ServerError("idle_timeout")` frame. This bounds Cloud Run billing if a frozen client holds the WS open without sending Connect frames. Override per service:
+
+```sh
+gcloud run services update peersh-signaling \
+  --region=asia-northeast1 \
+  --update-env-vars=PEERSH_SIGNALING_IDLE_TIMEOUT=120s
+```
+
+Use `-1s` to disable entirely (not recommended for production); `0s` keeps the 60 s default.
 
 ## Files in `server/deploy/cloud-run/`
 

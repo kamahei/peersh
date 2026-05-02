@@ -9,7 +9,7 @@ Pick the target that fits your situation and budget. The same Docker image (`ser
 | **GCP Cloud Run** | [`cloud-run.md`](cloud-run.md) | $0 (free tier covers personal use) | 15 min | ⚠️ via `bootstrap_psk` env var | Pay-per-use, scales to zero, ephemeral filesystem |
 | **Render.com Blueprint** | [`render-com.md`](render-com.md) | $7.25/mo (Starter + 1 GB disk) | 5 min | ✅ on Starter | One-click GitHub deploy, persistent disk |
 | **Docker / VPS / bare metal** | [`self-hosting.md`](self-hosting.md) | varies | 10–30 min | ✅ | Full control; bring-your-own TLS termination |
-| **Firebase mode (Cloud Run + Firestore + Functions)** | [`firebase.md`](firebase.md) | $0 within free tier | 30–60 min | ✅ Firestore | Google sign-in, FCM wake-up, multi-PC picker |
+| **Firebase mode (Cloud Run + Firestore + RTDB + Functions)** | [`firebase.md`](firebase.md) | $0 within free tier (Spark up to 100 hosts; Blaze beyond) | 30–60 min | ✅ Firestore + RTDB | Google sign-in, Realtime-Database-based wake-event delivery, multi-PC picker |
 
 ## Recommended path for a new operator
 

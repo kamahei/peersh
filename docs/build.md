@@ -136,6 +136,17 @@ Output: `app/build/app/outputs/flutter-apk/app-{debug,release}.apk`. Install via
 adb install -r build/app/outputs/flutter-apk/app-debug.apk
 ```
 
+#### Distribution build (real Firebase config swap-in)
+
+The committed `app/lib/firebase_options.dart`, `app/android/app/google-services.json`, and `app/firebase.json` are OSS placeholders that throw at runtime if a Firebase server entry is opened. To produce an APK that boots Firebase mode, save your operator-specific FlutterFire output as `local/firebase_options.dart.real`, `local/google-services.json.real`, and `local/app-firebase.json.real`, then build with the wrapper:
+
+```sh
+bash scripts/build-apk-distrib.sh        # macOS / Linux / Git Bash
+.\scripts\build-apk-distrib.cmd          # Windows native
+```
+
+The script swaps the real files in, runs `flutter build apk --release`, and restores the placeholders via `git checkout` on exit so the secrets never appear in `git status`.
+
 ### Release-signing with your own keystore
 
 By default `flutter build apk --release` uses the debug keystore (sideload-fine, Play-Store-rejected). To use your own upload key, copy `app/android/key.properties.example` to `app/android/key.properties` and fill in. See [`backup.md`](backup.md) for keystore-handling guidance.

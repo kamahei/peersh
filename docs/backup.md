@@ -160,3 +160,4 @@ Anytime you regenerate a secret (rotate a PSK, rotate the Firebase service-accou
 - `app/build/`, `app/.dart_tool/`, `app/android/app/libs/peersh.aar`, `app/ios/Frameworks/peersh.xcframework/` — all rebuilt by `scripts/build-mobile-core.sh` and `flutter build`.
 - `peersh-signaling.db` on a Cloud Run / ephemeral host (use `PEERSH_SIGNALING_BOOTSTRAP_PSK` to repopulate). On a real-disk host where SQLite is the source of truth, **do** back it up.
 - Firestore data — use `gcloud firestore export` for a full export if you care about session / device history; the schema is rebuilt as devices reconnect anyway.
+- Realtime Database data (Firebase mode wake events + presence) — `wake_requests` are ephemeral (host deletes them after processing); `last_seen_at` is operational state recovered on the next peershd start. Backup not required; if needed, use `firebase database:get / -o backup.json` for a one-shot dump.

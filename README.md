@@ -17,7 +17,7 @@ The project is open source under **Apache License 2.0**.
 Both modes coexist in a single APK; per-server-entry choice on the mobile side:
 
 - **PSK signaling (simplest).** Run the `peersh-signaling` binary (or the Docker image / Render / Fly / Cloud Run template) anywhere with a public TCP port. HMAC pre-shared keys for auth, SQLite for state. No Google Cloud or Firebase account needed. Five minutes from `docker run` to a working setup.
-- **Firebase signaling (Google sign-in).** Same `peersh-signaling` server with `auth_provider = "firebase"` + `store_backend = "firestore"`. Lets the mobile app sign in with Google instead of typing a PSK; backed by Firestore + FCM wake-up + Cloud Functions for the pairing flow. Fits comfortably in the Firebase free tier at low-thousands-of-users scale; you provision your own GCP / Firebase project. Walkthrough in [`docs/deploy/firebase.md`](docs/deploy/firebase.md).
+- **Firebase signaling (Google sign-in).** Same `peersh-signaling` server with `auth_provider = "firebase"` + `store_backend = "firestore"`. Lets the mobile app sign in with Google instead of typing a PSK; backed by Firestore (device / pairing state), Realtime Database (cost-efficient wake-event delivery via SSE — no persistent signaling WebSocket required), and Cloud Functions for the pairing flow. Fits comfortably in the Firebase free tier for personal use; > 100 simultaneous hosts requires the Blaze plan. You provision your own GCP / Firebase project. Walkthrough in [`docs/deploy/firebase.md`](docs/deploy/firebase.md); architecture in [`docs/firebase-mode.md`](docs/firebase-mode.md).
 
 The mobile app supports multiple servers side by side, mixing PSK and Firebase entries.
 

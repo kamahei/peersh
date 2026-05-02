@@ -23,7 +23,8 @@ Represents a physical device participating in peersh: a Windows host running `pe
   - `display_name` (string, user-supplied)
   - `created_at` (timestamp)
   - `last_seen_at` (timestamp; updated on each signaling registration)
-  - `fcm_token` (string, optional; used by Firebase mode for wake-up)
+  - `fcm_token` (string, optional; reserved for a future host→mobile push path — unused after v2-A)
+  - In Firebase mode, the host **also** writes `last_seen_at` to the Realtime Database at `users/{uid}/devices/{deviceId}/last_seen_at` (epoch ms) every 5 minutes; the mobile picker reads from RTDB rather than Firestore.
 - **Invariants.**
   - `device_id` is fully determined by `public_key`. Servers verify this on registration.
   - The same `public_key` cannot be registered to two different `owner_user_id`s.
@@ -92,7 +93,7 @@ Represents an active or recently-active connection between a paired mobile devic
   - `state` transitions: `setting_up → connected → disconnected → connected → ... → expired | closed`.
   - Output emitted while disconnected is captured in a host-side 256 KiB ring buffer keyed by `session_id`.
   - Idle timeout defaults to 30 minutes.
-- **Storage scope.** Sessions are tracked in memory on the host (`peershd`) for the active shell process plus its buffered output. The signaling server also persists a minimal session record under `users/{uid}/sessions/{sessionId}` in Firebase mode so the `onSessionCreated` Cloud Function can fire FCM wake-up.
+- **Storage scope.** Sessions are tracked in memory on the host (`peershd`) for the active shell process plus its buffered output. The Firestore `users/{uid}/sessions/{sessionId}` collection is reserved for a future server-side wake-throttling path; after v2-A no client writes to it (wake events flow through Realtime Database `users/{uid}/wake_requests/`).
 
 ### PSKRecord
 
@@ -130,10 +131,32 @@ Represents a `(user_id, secret_key)` pair for the `psk` auth provider.
 
 ### `firestore`
 
-- Used by Firebase mode.
-- Document layout: `users/{uid}` doc; `users/{uid}/devices/{deviceId}` (device + fcm_token); `users/{uid}/sessions/{sessionId}` (triggers `onSessionCreated`); `users/{uid}/pairings/{pairingId}` (legacy). Plus admin-only `pairing_codes/{code}` (mobile pairing flow) and `ops/budget-state` (cost guardrail).
+- Used by Firebase mode for durable state (devices / users / pairings).
+- Document layout: `users/{uid}` doc; `users/{uid}/devices/{deviceId}` (device metadata, written by the signaling server's Register handler — not consulted by the mobile picker after v2-A); `users/{uid}/pairings/{pairingId}` (legacy). Plus admin-only `pairing_codes/{code}` (mobile pairing flow) and `ops/budget-state` (cost guardrail).
+- `users/{uid}/sessions/{sessionId}` is reserved (no client writes after v2-A).
 - Access patterns fit within the cost budget (≤ ~5 reads + ~2 writes per connection lifecycle).
 - Security rules enforce per-user isolation: a user can only read/write documents under their own `user_id`. Admin-only paths deny all client access.
+
+### Realtime Database (Firebase mode, v2-A wake path)
+
+Wake events do not live in Firestore — they would consume a real-time listener slot that AGENTS.md's cost discipline forbids on the signaling path. Instead the host opens a single SSE stream to RTDB, which goes to `*.firebasedatabase.app` (not Cloud Run) and idles at gRPC keep-alive cost.
+
+Tree layout under `<project>-default-rtdb`:
+
+```
+users/
+  {uid}/
+    wake_requests/
+      {auto-id}: { target_device_id, mobile_device_id?, created_at }
+    devices/
+      {deviceId}/
+        last_seen_at: <epoch ms>
+```
+
+- `wake_requests/{rid}` is written by the mobile client on each connect attempt and **deleted by the host immediately after handling**. Crashed hosts leak entries; the listener filter (`target_device_id == self`) keeps stale entries from re-firing.
+- `devices/{deviceId}/last_seen_at` is the host's heartbeat (every 5 minutes). The mobile picker reads from this subtree.
+- Security rules in `firebase/database.rules.json` allow read/write under `users/{uid}/...` only when `auth.uid == $uid`.
+- The mobile app embeds the RTDB region in `app/lib/services/rtdb.dart` (default `asia-southeast1`); change it before building the APK if your project's database lives elsewhere. peershd embeds the same region via `-firebase-rtdb-region` / `PEERSH_BUILD_FIREBASE_RTDB_REGION`.
 
 ## What is not in the data model
 
