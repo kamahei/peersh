@@ -63,6 +63,25 @@ class PeershBridge {
     return id;
   }
 
+  /// Phase 5b: opens a Firebase-authenticated signaling session. The
+  /// caller supplies a fresh Firebase ID token; the server resolves
+  /// user_id from it.
+  Future<int> openFirebaseSignalingSession({
+    required String signaling,
+    required String idToken,
+    required String targetDeviceId,
+    String stunServer = 'stun.l.google.com:19302',
+  }) async {
+    final id = await _control.invokeMethod<int>('openFirebaseSignalingSession', {
+      'signaling': signaling,
+      'idToken': idToken,
+      'target': targetDeviceId,
+      'stun': stunServer,
+    });
+    if (id == null) throw StateError('bridge: openFirebaseSignalingSession returned null');
+    return id;
+  }
+
   /// Runs command on the session. Output streams via [events] tagged with
   /// the session id. The future resolves when the platform-side worker
   /// has completed the call.

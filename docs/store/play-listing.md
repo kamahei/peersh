@@ -62,8 +62,8 @@ https://github.com/kamahei/peersh
 
 - **App category**: Tools
 - **Tags**: developer, ssh, terminal, powershell, remote
-- **Email**: <contact-email> (or whatever the OSS contact you want
-  on the public listing — Play surfaces it)
+- **Email**: `<contact-email>` — pick the OSS contact you want surfaced
+  on the public Play listing.
 - **Website**: https://github.com/kamahei/peersh
 - **Privacy policy**: (hosted URL pointing at privacy-policy.md)
 

@@ -19,7 +19,7 @@ admin.initializeApp();
 setGlobalOptions({
   // Region pinning matters for cost predictability; pick the same
   // region as your Firestore database.
-  region: 'us-central1',
+  region: 'asia-northeast1',
   // FCM Cloud Function should not be doing CPU-heavy work; one CPU is
   // plenty.
   cpu: 1,

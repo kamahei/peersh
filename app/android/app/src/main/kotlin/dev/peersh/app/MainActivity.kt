@@ -94,6 +94,24 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    "openFirebaseSignalingSession" -> {
+                        val signaling = call.argument<String>("signaling") ?: ""
+                        val idToken = call.argument<String>("idToken") ?: ""
+                        val target = call.argument<String>("target") ?: ""
+                        val stun = call.argument<String>("stun") ?: ""
+                        executor.submit {
+                            try {
+                                val s = Peersh.openFirebaseSignalingSession(signaling, idToken, target, stun)
+                                val id = nextSessionId.getAndIncrement()
+                                sessions[id] = s
+                                mainHandler.post { result.success(id) }
+                            } catch (t: Throwable) {
+                                mainHandler.post {
+                                    result.error("OPEN_FAILED", t.message ?: t.javaClass.simpleName, null)
+                                }
+                            }
+                        }
+                    }
                     "exec" -> {
                         val sessionId = (call.argument<Number>("sessionId") ?: 0).toInt()
                         val command = call.argument<String>("command") ?: ""

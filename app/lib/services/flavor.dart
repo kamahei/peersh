@@ -1,21 +1,12 @@
 // Compile-time toggle between PSK-only and PSK + Firebase builds.
 //
-// Phase 5b will replace this constant with a Dart conditional import
-// (`firebase_flavor.dart`) plus an Android build flavor that wires up
-// google-services.json. Until then, every release ships with PSK
-// only and `kFirebaseEnabled` stays false.
+// Set via dart-define at build time:
+//   flutter build apk --debug --dart-define=PEERSH_FIREBASE=true
 //
-// To turn Firebase on later:
-//   1. Run `flutterfire configure` in `app/` to generate
-//      `lib/firebase_options.dart` and android/app/google-services.json.
-//   2. Add firebase_core / firebase_auth / cloud_firestore /
-//      firebase_messaging / firebase_app_check to pubspec.yaml.
-//   3. Replace this file's body with `const bool kFirebaseEnabled =
-//      bool.fromEnvironment('PEERSH_FIREBASE');` and pass
-//      `--dart-define=PEERSH_FIREBASE=true` to flutter build for the
-//      firebase flavor.
-//   4. Update services/auth_service.dart, device_discovery_service.dart,
-//      fcm_service.dart to instantiate the FirebaseXxx implementation
-//      when kFirebaseEnabled is true.
+// Default (no dart-define) keeps the PSK-only path so an APK without
+// google-services.json still builds and runs. The kFirebaseEnabled
+// flag is read at runtime by the main app shell + Riverpod providers
+// to pick between PskAuthService / FirebaseAuthService etc.
 
-const bool kFirebaseEnabled = false;
+const bool kFirebaseEnabled =
+    bool.fromEnvironment('PEERSH_FIREBASE', defaultValue: false);

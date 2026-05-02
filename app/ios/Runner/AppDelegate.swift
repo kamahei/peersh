@@ -45,7 +45,8 @@ import UIKit
                             message: "Run gomobile bind -target=ios on macOS",
                             details: nil))
 
-      case "echo", "openDirectSession", "openSignalingSession", "exec", "readFile", "closeSession",
+      case "echo", "openDirectSession", "openSignalingSession", "openFirebaseSignalingSession",
+           "exec", "readFile", "closeSession",
            "openPTY", "ptyInput", "ptyResize", "closePTY",
            "getCwd", "listSessionFiles", "readSessionFile",
            "listPTYs", "killPTY":

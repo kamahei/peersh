@@ -45,6 +45,7 @@ import (
 	"github.com/peersh/peersh/core/wire"
 	"sync"
 
+	fbpeershd "github.com/peersh/peersh/windows/firebase"
 	"github.com/peersh/peersh/windows/ptyhost"
 	"github.com/peersh/peersh/windows/pwsh"
 )
@@ -95,10 +96,14 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	certDir := fs.String("cert-dir", "", "directory for self-signed dev cert (default: platform-specific app data dir)")
 	debug := fs.Bool("debug", false, "enable debug logging")
 	signalingURL := fs.String("signaling", "", "signaling server URL (ws:// or wss://); empty disables signaling")
-	userID := fs.String("user", "", "user_id under which to register (signaling mode)")
-	pskFile := fs.String("psk-file", "", "path to a file containing a hex-encoded PSK (signaling mode)")
+	userID := fs.String("user", "", "user_id under which to register (PSK signaling mode)")
+	pskFile := fs.String("psk-file", "", "path to a file containing a hex-encoded PSK (PSK signaling mode)")
 	displayName := fs.String("display-name", "", "display name to register (defaults to hostname)")
 	stunServer := fs.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
+	firebaseProjectID := fs.String("firebase-project", "", "Firebase project id (Firebase signaling mode)")
+	firebaseCredentials := fs.String("firebase-credentials", "", "path to Firebase service-account JSON (Firebase signaling mode)")
+	firebaseUID := fs.String("firebase-uid", "", "Firebase uid this peershd registers under (Firebase signaling mode)")
+	firebaseAPIKey := fs.String("firebase-api-key", "", "Firebase Web API key for signInWithCustomToken (Firebase signaling mode)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -113,7 +118,29 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 		*certDir = defaultCertDir()
 	}
 
-	return run(serviceCtx, *listen, *certDir, *signalingURL, *userID, *pskFile, *displayName, *stunServer)
+	return run(serviceCtx, runOpts{
+		listen:              *listen,
+		certDir:             *certDir,
+		signalingURL:        *signalingURL,
+		userID:              *userID,
+		pskFile:             *pskFile,
+		displayName:         *displayName,
+		stunServer:          *stunServer,
+		firebaseProjectID:   *firebaseProjectID,
+		firebaseCredentials: *firebaseCredentials,
+		firebaseUID:         *firebaseUID,
+		firebaseAPIKey:      *firebaseAPIKey,
+	})
+}
+
+type runOpts struct {
+	listen, certDir, signalingURL string
+	userID, pskFile               string
+	displayName, stunServer       string
+	firebaseProjectID             string
+	firebaseCredentials           string
+	firebaseUID                   string
+	firebaseAPIKey                string
 }
 
 func defaultCertDir() string {
@@ -131,7 +158,14 @@ func defaultCertDir() string {
 	return filepath.Join(".", "peersh-dev")
 }
 
-func run(serviceCtx context.Context, listen, certDir, signalingURL, userID, pskFile, displayName, stunServer string) error {
+func run(serviceCtx context.Context, opts runOpts) error {
+	listen := opts.listen
+	certDir := opts.certDir
+	signalingURL := opts.signalingURL
+	userID := opts.userID
+	pskFile := opts.pskFile
+	displayName := opts.displayName
+	stunServer := opts.stunServer
 	var ctx context.Context
 	var stop func()
 	if serviceCtx != nil {
@@ -200,17 +234,31 @@ func run(serviceCtx context.Context, listen, certDir, signalingURL, userID, pskF
 
 	// Optional signaling-mode goroutine.
 	if signalingURL != "" {
-		if userID == "" || pskFile == "" {
-			return errors.New("-signaling requires -user and -psk-file")
-		}
-		secret, err := readPSKFile(pskFile)
-		if err != nil {
-			return fmt.Errorf("read psk: %w", err)
-		}
 		if displayName == "" {
 			displayName, _ = os.Hostname()
 		}
-		go runSignaling(ctx, signalingURL, userID, secret, deviceID, pub, displayName, listenAddr, srflx, pc)
+		// Pick auth mode: PSK (default) vs Firebase (when
+		// -firebase-credentials supplied).
+		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseUID != ""
+		if useFirebase {
+			if opts.firebaseProjectID == "" || opts.firebaseCredentials == "" || opts.firebaseUID == "" || opts.firebaseAPIKey == "" {
+				return errors.New("-firebase-* requires -firebase-project, -firebase-credentials, -firebase-uid, and -firebase-api-key")
+			}
+			src, err := fbpeershd.New(ctx, opts.firebaseProjectID, opts.firebaseCredentials, opts.firebaseUID, opts.firebaseAPIKey)
+			if err != nil {
+				return fmt.Errorf("firebase auth source: %w", err)
+			}
+			go runSignalingFirebase(ctx, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc)
+		} else {
+			if userID == "" || pskFile == "" {
+				return errors.New("-signaling requires -user and -psk-file (PSK mode) or the four -firebase-* flags (Firebase mode)")
+			}
+			secret, err := readPSKFile(pskFile)
+			if err != nil {
+				return fmt.Errorf("read psk: %w", err)
+			}
+			go runSignaling(ctx, signalingURL, userID, secret, deviceID, pub, displayName, listenAddr, srflx, pc)
+		}
 	}
 
 	// Phase 1 QUIC accept loop.
@@ -276,6 +324,59 @@ func runSignaling(ctx context.Context, url, userID string, secret []byte, device
 		}
 
 		// Reply with our local candidates so the peer can dial us.
+		cands := enumerateCandidates(listenAddr, srflx)
+		if err := sc.SendConnect(ctx, from, cands); err != nil {
+			log.Warn("send Connect reply", "err", err)
+			continue
+		}
+		log.Info("sent local candidates", "to", from, "count", len(cands))
+	}
+}
+
+// runSignalingFirebase is the Firebase-mode counterpart to runSignaling.
+// Mints an ID token via the AuthSource and uses it on the Register
+// frame; otherwise the Connect-handling loop is identical.
+func runSignalingFirebase(ctx context.Context, url string, src *fbpeershd.AuthSource, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn) {
+	log := slog.With("signaling", url, "uid", src.UID(), "device", deviceID)
+	if srflx != nil {
+		log.Info("srflx ready for advertisement", "srflx", srflx)
+	}
+	idToken, err := src.Token(ctx)
+	if err != nil {
+		log.Error("firebase id token mint failed", "err", err)
+		return
+	}
+	sc, err := signaling.Dial(ctx, signaling.DialOptions{
+		URL:             url,
+		FirebaseIDToken: idToken,
+		DeviceID:        deviceID,
+		PublicKey:       pub,
+		Kind:            signalv1.DeviceKind_DEVICE_KIND_WINDOWS_HOST,
+		DisplayName:     displayName,
+		ClientID:        "peershd/0.1+firebase",
+	})
+	if err != nil {
+		log.Error("signaling dial failed", "err", err)
+		return
+	}
+	defer sc.Close()
+	log.Info("registered with signaling server (firebase mode)", "server_id", sc.ServerID())
+
+	for {
+		conn, err := sc.Recv(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			log.Info("signaling closed", "err", err)
+			return
+		}
+		from := conn.GetFromDeviceId()
+		log.Info("connect request received", "from", from, "candidates", len(conn.GetCandidates()))
+		peerCands := punching.SortCandidates(conn.GetCandidates())
+		if err := punching.Punch(ctx, pc, punching.CandidatesToUDPAddrs(peerCands), punching.Options{}); err != nil {
+			log.Warn("punch failed", "err", err)
+		}
 		cands := enumerateCandidates(listenAddr, srflx)
 		if err := sc.SendConnect(ctx, from, cands); err != nil {
 			log.Warn("send Connect reply", "err", err)

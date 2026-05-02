@@ -16,12 +16,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/pty_file.dart';
 import '../models/server_entry.dart';
+import '../services/flavor.dart';
 import '../services/peersh_session.dart';
 import '../state/persisted_pty_handles.dart';
 import '../state/settings.dart';
 import '../widgets/special_keys_bar.dart';
 import 'file_browser_screen.dart';
 import 'ime_input_sheet.dart';
+import 'signin_screen.dart';
 import 'terminal_pane.dart';
 import 'text_viewer_screen.dart';
 
@@ -51,9 +53,16 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   Future<void> _connectSession() async {
     final bridge = ref.read(bridgeProvider);
     try {
+      String? idToken;
+      if (kFirebaseEnabled) {
+        // Force-refresh so Register frame travels with a fresh token.
+        final user = ref.read(firebaseAuthServiceProvider).currentUser;
+        idToken = user == null ? null : await user.getIdToken(true);
+      }
       final session = await PeershSession.open(
         bridge: bridge,
         server: widget.server,
+        firebaseIdToken: idToken,
       );
       if (!mounted) {
         await session.close();

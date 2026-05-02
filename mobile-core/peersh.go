@@ -96,17 +96,32 @@ func OpenDirectSession(addr string) (*Session, error) {
 	return &Session{pc: pc, tr: tr, conn: conn, ctx: sCtx, cancel: sCancel}, nil
 }
 
+// OpenFirebaseSignalingSession is the Phase 5b counterpart to
+// OpenSignalingSession: instead of a PSK + user id pair, the caller
+// supplies a Firebase ID token (obtained on the platform side via
+// google_sign_in + firebase_auth.signInWithCredential). The server's
+// firebase auth provider verifies the token and uses its uid as the
+// peersh user_id. Everything else (STUN, signaling Connect, NAT punch,
+// QUIC dial, Hello) is identical.
+func OpenFirebaseSignalingSession(signalingURL, firebaseIDToken, targetDeviceID, stunServer string) (*Session, error) {
+	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, targetDeviceID, stunServer)
+}
+
 // OpenSignalingSession registers with a signaling server, requests a
 // Connect to targetDeviceID, runs STUN + Punch + sequential dial, and
 // runs Hello. stunServer = "" disables STUN (HOST-only candidates).
 func OpenSignalingSession(signalingURL, userID, pskHex, targetDeviceID, stunServer string) (*Session, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	secret, err := hex.DecodeString(strings.TrimSpace(pskHex))
 	if err != nil {
 		return nil, fmt.Errorf("decode psk: %w", err)
 	}
+	return openSignalingInternal(signalingURL, userID, secret, "", targetDeviceID, stunServer)
+}
+
+func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, targetDeviceID, stunServer string) (*Session, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate device key: %w", err)
@@ -128,14 +143,15 @@ func OpenSignalingSession(signalingURL, userID, pskHex, targetDeviceID, stunServ
 	tr := transport.New(pc, devtls.DevClientTLSConfig())
 
 	sc, err := signaling.Dial(ctx, signaling.DialOptions{
-		URL:         signalingURL,
-		UserID:      userID,
-		Secret:      secret,
-		DeviceID:    deviceID,
-		PublicKey:   pub,
-		Kind:        signalv1.DeviceKind_DEVICE_KIND_MOBILE_CLIENT,
-		DisplayName: "peersh-mobile",
-		ClientID:    "mobile-core/0.2",
+		URL:             signalingURL,
+		UserID:          userID,
+		Secret:          secret,
+		FirebaseIDToken: firebaseIDToken,
+		DeviceID:        deviceID,
+		PublicKey:       pub,
+		Kind:            signalv1.DeviceKind_DEVICE_KIND_MOBILE_CLIENT,
+		DisplayName:     "peersh-mobile",
+		ClientID:        "mobile-core/0.3",
 	})
 	if err != nil {
 		_ = tr.Close()

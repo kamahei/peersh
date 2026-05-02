@@ -25,6 +25,13 @@ import (
 const ProtocolVersion = 1
 
 // DialOptions describes how to connect and what identity to register.
+//
+// Two auth modes are supported:
+//   - PSK: populate UserID + Secret. The client signs the Register frame
+//     with HMAC-SHA256 over the secret.
+//   - Firebase: populate FirebaseIDToken. The server's firebase auth
+//     provider verifies the token and uses its `uid` as the user_id;
+//     UserID + Secret may be left empty.
 type DialOptions struct {
 	URL         string // ws://host/ws or wss://host/ws
 	UserID      string
@@ -34,6 +41,12 @@ type DialOptions struct {
 	Kind        signalv1.DeviceKind
 	DisplayName string
 	ClientID    string // free-form identifier, e.g. "peersh-cli/0.1"
+
+	// FirebaseIDToken, when non-empty, switches the client into Firebase
+	// mode: the Register frame carries this token verbatim and the
+	// server's firebase auth provider validates it. PSK fields are
+	// ignored in this mode.
+	FirebaseIDToken string
 
 	// Optional. Defaults to http.DefaultClient.
 	HTTPClient *http.Client
@@ -131,8 +144,14 @@ func (c *Client) handshake(ctx context.Context, opts DialOptions) error {
 		Kind:        opts.Kind,
 		DisplayName: opts.DisplayName,
 	}
-	if err := psk.SignRegister(opts.Secret, reg); err != nil {
-		return fmt.Errorf("sign Register: %w", err)
+	if opts.FirebaseIDToken != "" {
+		// Firebase mode: the server resolves user_id from the token.
+		reg.FirebaseIdToken = opts.FirebaseIDToken
+	} else {
+		// PSK mode: HMAC-sign the Register frame.
+		if err := psk.SignRegister(opts.Secret, reg); err != nil {
+			return fmt.Errorf("sign Register: %w", err)
+		}
 	}
 	if err := c.writeFrame(ctx, &signalv1.Frame{
 		Body: &signalv1.Frame_Register{Register: reg},

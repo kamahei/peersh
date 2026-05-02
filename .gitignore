@@ -38,3 +38,11 @@ app/.flutter-plugins-dependencies
 # Local peersh-signaling SQLite state (generated when running server locally)
 peersh-signaling.db
 peersh-signaling.db-*
+
+# Phase 5b: Firebase / FlutterFire generated config — project-specific.
+# Run `flutterfire configure --project=<your-project>` locally to generate.
+app/android/app/google-services.json
+app/ios/Runner/GoogleService-Info.plist
+app/firebase.json
+# .firebaserc holds the operator's project id; .firebaserc.example is the template.
+firebase/.firebaserc

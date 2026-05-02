@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../bridge.dart';
 import '../models/server_entry.dart';
 import '../models/session_event.dart';
+import 'flavor.dart';
 
 /// One Riverpod-friendly active session. Owns a session id from the
 /// bridge plus a buffered output stream the UI can consume.
@@ -16,17 +17,32 @@ class PeershSession {
 
   /// Open a signaling-mediated session against [server] targeting
   /// [server.targetDeviceId].
+  ///
+  /// In Firebase-enabled builds (kFirebaseEnabled), [firebaseIdToken]
+  /// must be supplied (typically obtained via FirebaseAuthService.resolve).
+  /// In PSK builds it is ignored and the server entry's PSK is used.
   static Future<PeershSession> open({
     required PeershBridge bridge,
     required ServerEntry server,
+    String? firebaseIdToken,
   }) async {
-    final id = await bridge.openSignalingSession(
-      signaling: server.wsUrl,
-      user: server.userId,
-      pskHex: server.pskHex,
-      targetDeviceId: server.targetDeviceId,
-      stunServer: server.stunServer,
-    );
+    final int id;
+    if (kFirebaseEnabled && firebaseIdToken != null && firebaseIdToken.isNotEmpty) {
+      id = await bridge.openFirebaseSignalingSession(
+        signaling: server.wsUrl,
+        idToken: firebaseIdToken,
+        targetDeviceId: server.targetDeviceId,
+        stunServer: server.stunServer,
+      );
+    } else {
+      id = await bridge.openSignalingSession(
+        signaling: server.wsUrl,
+        user: server.userId,
+        pskHex: server.pskHex,
+        targetDeviceId: server.targetDeviceId,
+        stunServer: server.stunServer,
+      );
+    }
     final controller = StreamController<SessionEvent>.broadcast();
     final sub = bridge.events().listen(null);
     final session = PeershSession._(bridge, id, server.id, sub).._sink = controller;
