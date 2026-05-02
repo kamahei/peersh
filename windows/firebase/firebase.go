@@ -48,13 +48,18 @@ type AuthSource struct {
 }
 
 // New returns an AuthSource bound to the supplied service-account JSON
-// and target uid. apiKey is the Firebase Web API key (find it under the
-// Firebase console → Project settings → General → Your apps → Web app →
-// "apiKey"). It's required because the signInWithCustomToken REST
-// endpoint authenticates the request via ?key=API_KEY.
-func New(ctx context.Context, projectID, credentialsJSONPath, uid, apiKey string) (*AuthSource, error) {
-	if uid == "" {
-		return nil, errors.New("firebase: empty uid")
+// and target Firebase identity. apiKey is the Firebase Web API key
+// (find it under the Firebase console → Project settings → General →
+// Your apps → Web app → "apiKey"). It's required because the
+// signInWithCustomToken REST endpoint authenticates the request via
+// ?key=API_KEY.
+//
+// The identity is one of `email` or `uid`; supply email when possible
+// (more readable in operator-side configuration). New() resolves
+// email → uid via the Firebase Admin SDK at construction time.
+func New(ctx context.Context, projectID, credentialsJSONPath, email, uid, apiKey string) (*AuthSource, error) {
+	if email == "" && uid == "" {
+		return nil, errors.New("firebase: supply -firebase-email or -firebase-uid")
 	}
 	if apiKey == "" {
 		return nil, errors.New("firebase: empty apiKey")
@@ -68,10 +73,20 @@ func New(ctx context.Context, projectID, credentialsJSONPath, uid, apiKey string
 	if err != nil {
 		return nil, fmt.Errorf("firebase: Auth client: %w", err)
 	}
+	resolvedUID := uid
+	if resolvedUID == "" {
+		// Resolve email -> uid via Admin SDK. Cheaper than the user
+		// guessing their Firebase uid from the console.
+		rec, err := authClient.GetUserByEmail(ctx, email)
+		if err != nil {
+			return nil, fmt.Errorf("firebase: lookup uid for %q: %w", email, err)
+		}
+		resolvedUID = rec.UID
+	}
 	return &AuthSource{
 		app:    app,
 		auth:   authClient,
-		uid:    uid,
+		uid:    resolvedUID,
 		apiKey: apiKey,
 	}, nil
 }

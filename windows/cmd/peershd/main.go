@@ -102,7 +102,8 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	stunServer := fs.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
 	firebaseProjectID := fs.String("firebase-project", "", "Firebase project id (Firebase signaling mode)")
 	firebaseCredentials := fs.String("firebase-credentials", "", "path to Firebase service-account JSON (Firebase signaling mode)")
-	firebaseUID := fs.String("firebase-uid", "", "Firebase uid this peershd registers under (Firebase signaling mode)")
+	firebaseEmail := fs.String("firebase-email", "", "email of the Firebase account this peershd registers under (Firebase signaling mode); resolved to uid via Admin SDK")
+	firebaseUID := fs.String("firebase-uid", "", "explicit Firebase uid (alternative to -firebase-email)")
 	firebaseAPIKey := fs.String("firebase-api-key", "", "Firebase Web API key for signInWithCustomToken (Firebase signaling mode)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -128,6 +129,7 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 		stunServer:          *stunServer,
 		firebaseProjectID:   *firebaseProjectID,
 		firebaseCredentials: *firebaseCredentials,
+		firebaseEmail:       *firebaseEmail,
 		firebaseUID:         *firebaseUID,
 		firebaseAPIKey:      *firebaseAPIKey,
 	})
@@ -139,6 +141,7 @@ type runOpts struct {
 	displayName, stunServer       string
 	firebaseProjectID             string
 	firebaseCredentials           string
+	firebaseEmail                 string
 	firebaseUID                   string
 	firebaseAPIKey                string
 }
@@ -239,12 +242,12 @@ func run(serviceCtx context.Context, opts runOpts) error {
 		}
 		// Pick auth mode: PSK (default) vs Firebase (when
 		// -firebase-credentials supplied).
-		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseUID != ""
+		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseEmail != "" || opts.firebaseUID != ""
 		if useFirebase {
-			if opts.firebaseProjectID == "" || opts.firebaseCredentials == "" || opts.firebaseUID == "" || opts.firebaseAPIKey == "" {
-				return errors.New("-firebase-* requires -firebase-project, -firebase-credentials, -firebase-uid, and -firebase-api-key")
+			if opts.firebaseProjectID == "" || opts.firebaseCredentials == "" || (opts.firebaseEmail == "" && opts.firebaseUID == "") || opts.firebaseAPIKey == "" {
+				return errors.New("-firebase-* requires -firebase-project, -firebase-credentials, one of -firebase-email or -firebase-uid, and -firebase-api-key")
 			}
-			src, err := fbpeershd.New(ctx, opts.firebaseProjectID, opts.firebaseCredentials, opts.firebaseUID, opts.firebaseAPIKey)
+			src, err := fbpeershd.New(ctx, opts.firebaseProjectID, opts.firebaseCredentials, opts.firebaseEmail, opts.firebaseUID, opts.firebaseAPIKey)
 			if err != nil {
 				return fmt.Errorf("firebase auth source: %w", err)
 			}

@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../bridge.dart';
 import '../models/server_entry.dart';
 import '../models/session_event.dart';
-import 'flavor.dart';
 
 /// One Riverpod-friendly active session. Owns a session id from the
 /// bridge plus a buffered output stream the UI can consume.
@@ -18,16 +17,19 @@ class PeershSession {
   /// Open a signaling-mediated session against [server] targeting
   /// [server.targetDeviceId].
   ///
-  /// In Firebase-enabled builds (kFirebaseEnabled), [firebaseIdToken]
-  /// must be supplied (typically obtained via FirebaseAuthService.resolve).
-  /// In PSK builds it is ignored and the server entry's PSK is used.
+  /// For Firebase server entries, [firebaseIdToken] must be supplied
+  /// (typically obtained via FirebaseAuthService.resolve). PSK entries
+  /// ignore it and use the server entry's PSK.
   static Future<PeershSession> open({
     required PeershBridge bridge,
     required ServerEntry server,
     String? firebaseIdToken,
   }) async {
     final int id;
-    if (kFirebaseEnabled && firebaseIdToken != null && firebaseIdToken.isNotEmpty) {
+    if (server.authMode == ServerAuthMode.firebase) {
+      if (firebaseIdToken == null || firebaseIdToken.isEmpty) {
+        throw StateError('Firebase server requires a fresh ID token; sign in first.');
+      }
       id = await bridge.openFirebaseSignalingSession(
         signaling: server.wsUrl,
         idToken: firebaseIdToken,

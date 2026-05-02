@@ -1,19 +1,9 @@
 plugins {
     id "com.android.application"
+    id "com.google.gms.google-services"
     id "kotlin-android"
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id "dev.flutter.flutter-gradle-plugin"
-}
-
-// Phase 5b: the google-services plugin is opt-in. Applying it requires
-// a google-services.json in app/ — for the default (PSK) build that
-// file is absent, and we do not want to bake operator-specific Firebase
-// config into the OSS source tree. Setting the PEERSH_FIREBASE env var
-// to "true" before `flutter build` applies the plugin; without it the
-// build skips Firebase wiring entirely.
-def peershFirebaseEnabled = System.getenv('PEERSH_FIREBASE') == 'true'
-if (peershFirebaseEnabled) {
-    apply plugin: 'com.google.gms.google-services'
 }
 
 android {

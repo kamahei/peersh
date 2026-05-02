@@ -16,14 +16,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/pty_file.dart';
 import '../models/server_entry.dart';
-import '../services/flavor.dart';
+import '../services/flavor.dart' as flavor;
 import '../services/peersh_session.dart';
 import '../state/persisted_pty_handles.dart';
 import '../state/settings.dart';
 import '../widgets/special_keys_bar.dart';
 import 'file_browser_screen.dart';
+import 'firebase_signin.dart';
 import 'ime_input_sheet.dart';
-import 'signin_screen.dart';
 import 'terminal_pane.dart';
 import 'text_viewer_screen.dart';
 
@@ -54,10 +54,17 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     final bridge = ref.read(bridgeProvider);
     try {
       String? idToken;
-      if (kFirebaseEnabled) {
-        // Force-refresh so Register frame travels with a fresh token.
-        final user = ref.read(firebaseAuthServiceProvider).currentUser;
-        idToken = user == null ? null : await user.getIdToken(true);
+      if (widget.server.authMode == ServerAuthMode.firebase) {
+        if (!flavor.kFirebaseInitialized) {
+          throw StateError(
+            'Firebase server entry but Firebase is not initialized in this APK. '
+            'Run `flutterfire configure` and rebuild to enable Firebase mode.',
+          );
+        }
+        idToken = await ensureSignedInAndGetIdToken(context, ref);
+        if (idToken == null) {
+          throw StateError('Sign-in cancelled.');
+        }
       }
       final session = await PeershSession.open(
         bridge: bridge,

@@ -1,8 +1,9 @@
 // Phase 5b — Firebase Google sign-in screen.
 //
-// Shown on first launch (or after sign-out) when kFirebaseEnabled is
-// true. Once the user has signed in, the auth state listener in
-// app.dart routes them to ServersScreen.
+// Surfaced from the connect flow when the user opens a server entry
+// with `authMode = ServerAuthMode.firebase` and no existing Firebase
+// session. With `modal: true` the screen pops with `true` on success
+// (used as a navigator-pushed page from the connect flow).
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -19,7 +20,11 @@ final authStateProvider = StreamProvider<User?>(
 );
 
 class SignInScreen extends ConsumerStatefulWidget {
-  const SignInScreen({super.key});
+  const SignInScreen({super.key, this.modal = false});
+
+  /// When true, the screen pops with `true` on successful sign-in
+  /// (used as a navigator-pushed page from the connect flow).
+  final bool modal;
 
   @override
   ConsumerState<SignInScreen> createState() => _SignInScreenState();
@@ -36,6 +41,8 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     });
     try {
       await ref.read(firebaseAuthServiceProvider).signInWithGoogle();
+      if (!mounted) return;
+      if (widget.modal) Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '$e');
@@ -47,6 +54,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: widget.modal ? AppBar(title: const Text('Sign in')) : null,
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -61,7 +69,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Sign in to access your remote shells.',
+                'Sign in with Google to use a Firebase server.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),

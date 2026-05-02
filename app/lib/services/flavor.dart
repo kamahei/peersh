@@ -1,12 +1,18 @@
-// Compile-time toggle between PSK-only and PSK + Firebase builds.
+// Runtime detection of whether Firebase is wired up.
 //
-// Set via dart-define at build time:
-//   flutter build apk --debug --dart-define=PEERSH_FIREBASE=true
+// peersh ships a single APK that supports both PSK and Firebase signaling
+// servers. The mobile app always tries to initialize Firebase at startup;
+// if the bundled `firebase_options.dart` is the placeholder stub, init
+// throws and we run in PSK-only mode (Firebase server entries surface
+// an error to the user). When the operator has run
+// `flutterfire configure` and rebuilt, init succeeds and both modes
+// work side by side.
 //
-// Default (no dart-define) keeps the PSK-only path so an APK without
-// google-services.json still builds and runs. The kFirebaseEnabled
-// flag is read at runtime by the main app shell + Riverpod providers
-// to pick between PskAuthService / FirebaseAuthService etc.
+// The companion file flavor_runtime.dart holds the mutable
+// `firebaseInitialized` flag, set by main.dart after attempting init.
 
-const bool kFirebaseEnabled =
-    bool.fromEnvironment('PEERSH_FIREBASE', defaultValue: false);
+import 'flavor_runtime.dart' as r;
+
+/// True when Firebase.initializeApp succeeded at startup. Determined at
+/// runtime by main.dart after a try/catch around initializeApp.
+bool get kFirebaseInitialized => r.firebaseInitialized;

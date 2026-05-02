@@ -26,6 +26,7 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
   final _stun = TextEditingController(text: 'stun.l.google.com:19302');
   bool _busy = false;
   String? _discoveryStatus;
+  ServerAuthMode _authMode = ServerAuthMode.psk;
 
   @override
   void initState() {
@@ -38,6 +39,7 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
       _psk.text = e.pskHex;
       _target.text = e.targetDeviceId;
       _stun.text = e.stunServer;
+      _authMode = e.authMode;
     }
   }
 
@@ -71,6 +73,12 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
       }
       if (doc.wsUrl.isNotEmpty) _wsUrl.text = doc.wsUrl;
       if (doc.stunServers.isNotEmpty) _stun.text = doc.stunServers.first;
+      // Auto-pick auth mode from advertised providers.
+      if (doc.authProviders.contains('firebase')) {
+        _authMode = ServerAuthMode.firebase;
+      } else if (doc.authProviders.contains('psk')) {
+        _authMode = ServerAuthMode.psk;
+      }
       _discoveryStatus = 'Loaded discovery v${doc.version}.';
     });
   }
@@ -84,6 +92,7 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
       pskHex: _psk.text.trim(),
       targetDeviceId: _target.text.trim(),
       stunServer: _stun.text.trim(),
+      authMode: _authMode,
     );
     final notifier = ref.read(serversProvider.notifier);
     if (widget.existing == null) {
@@ -95,11 +104,15 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
     Navigator.pop(context);
   }
 
-  bool get _canSave =>
-      _wsUrl.text.trim().isNotEmpty &&
-      _userId.text.trim().isNotEmpty &&
-      _psk.text.trim().isNotEmpty &&
-      _target.text.trim().isNotEmpty;
+  bool get _canSave {
+    if (_wsUrl.text.trim().isEmpty || _target.text.trim().isEmpty) return false;
+    if (_authMode == ServerAuthMode.psk) {
+      return _userId.text.trim().isNotEmpty && _psk.text.trim().isNotEmpty;
+    }
+    // Firebase mode: User/PSK fields are not required (Google sign-in
+    // happens at connect time).
+    return true;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -166,21 +179,39 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 16),
-          TextField(
-            controller: _userId,
-            decoration: const InputDecoration(labelText: 'User ID'),
-            onChanged: (_) => setState(() {}),
+          DropdownButtonFormField<ServerAuthMode>(
+            value: _authMode,
+            decoration: const InputDecoration(labelText: 'Auth provider'),
+            items: const [
+              DropdownMenuItem(
+                value: ServerAuthMode.psk,
+                child: Text('PSK (self-host)'),
+              ),
+              DropdownMenuItem(
+                value: ServerAuthMode.firebase,
+                child: Text('Firebase (Google sign-in)'),
+              ),
+            ],
+            onChanged: (v) => setState(() => _authMode = v ?? ServerAuthMode.psk),
           ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _psk,
-            decoration: const InputDecoration(
-              labelText: 'PSK (hex)',
-              hintText: '64 hex chars',
+          if (_authMode == ServerAuthMode.psk) ...[
+            const SizedBox(height: 16),
+            TextField(
+              controller: _userId,
+              decoration: const InputDecoration(labelText: 'User ID'),
+              onChanged: (_) => setState(() {}),
             ),
-            obscureText: true,
-            onChanged: (_) => setState(() {}),
-          ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _psk,
+              decoration: const InputDecoration(
+                labelText: 'PSK (hex)',
+                hintText: '64 hex chars',
+              ),
+              obscureText: true,
+              onChanged: (_) => setState(() {}),
+            ),
+          ],
           const SizedBox(height: 16),
           TextField(
             controller: _target,
