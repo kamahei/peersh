@@ -8,12 +8,14 @@
 // PTY reattach across reconnects (and matching server-side persistence
 // + scrollback ring buffer) is Tier 2 of Phase 6b.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/pty_event.dart';
 import '../models/pty_file.dart';
 import '../models/server_entry.dart';
 import '../services/flavor.dart' as flavor;
@@ -40,12 +42,28 @@ class TerminalTabsScreen extends ConsumerStatefulWidget {
       _TerminalTabsScreenState();
 }
 
+enum _ConnState { connecting, connected, reconnecting, error }
+
 class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   PeershSession? _session;
   String? _connectError;
   final List<TerminalTabModel> _tabs = [];
   int _activeIndex = 0;
   int _tabSeq = 1;
+
+  // Reconnect bookkeeping. _connState drives the spinner / banner; the
+  // backoff schedule is base * 2^attempt, capped at _maxBackoff.
+  _ConnState _connState = _ConnState.connecting;
+  int _reconnectAttempts = 0;
+  Timer? _reconnectTimer;
+  StreamSubscription<PtyEvent>? _ptyExitWatcher;
+  bool _probingDisconnect = false;
+  ServerEntry? _resolvedServer; // server with picked device id baked in
+  bool _showResumedBanner = false;
+  Timer? _resumedBannerTimer;
+  static const _maxReconnectAttempts = 6;
+  static const _baseBackoff = Duration(milliseconds: 500);
+  static const _maxBackoff = Duration(seconds: 30);
 
   @override
   void initState() {
@@ -57,13 +75,22 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _connectSession();
     });
+    // Screen-wide observer of PTY exits. When an exit lands with a
+    // non-empty error, a panel-level closePty hasn't been issued, and
+    // the connection state is "connected", probe the session to decide
+    // between "child died on its own" and "QUIC dropped".
+    _ptyExitWatcher = ref.read(bridgeProvider).ptyEvents().listen((evt) {
+      if (evt is PtyExitEvent && evt.isError) {
+        _probeOrReconnect();
+      }
+    });
   }
 
-  Future<void> _connectSession() async {
+  Future<void> _connectSession({bool isReconnect = false}) async {
     final bridge = ref.read(bridgeProvider);
     try {
       String? idToken;
-      ServerEntry connectServer = widget.server;
+      ServerEntry connectServer = _resolvedServer ?? widget.server;
       if (widget.server.authMode == ServerAuthMode.firebase) {
         if (!flavor.kFirebaseInitialized) {
           throw StateError(
@@ -75,20 +102,19 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         if (idToken == null) {
           throw StateError('Sign-in cancelled.');
         }
-        // For Firebase entries, ask the user which PC to connect to
-        // (skip if a default has been picked previously). Wait for the
-        // sign-in screen's pop transition to finish before opening the
-        // picker bottom sheet, otherwise nested Navigator activity
-        // triggers the !_debugLocked assertion.
-        if (widget.server.targetDeviceId.isEmpty) {
+        // Picker only fires on the very first connect to a Firebase
+        // entry that has no remembered device. Reconnect uses the
+        // already-resolved server.
+        if (!isReconnect && connectServer.targetDeviceId.isEmpty) {
           await WidgetsBinding.instance.endOfFrame;
           if (!mounted) return;
-          final picked = await _pickDevice(widget.server);
+          final picked = await _pickDevice(connectServer);
           if (picked == null) throw StateError('No PC selected.');
-          connectServer = widget.server.copyWith(targetDeviceId: picked);
+          connectServer = connectServer.copyWith(targetDeviceId: picked);
           await ref.read(serversProvider.notifier).replace(connectServer);
         }
       }
+      _resolvedServer = connectServer;
       final session = await PeershSession.open(
         bridge: bridge,
         server: connectServer,
@@ -107,6 +133,9 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
       } catch (_) {}
       setState(() {
         _session = session;
+        _connState = _ConnState.connected;
+        _reconnectAttempts = 0;
+        _connectError = null;
         if (_tabs.isNotEmpty) return;
         if (persisted.where((p) => !p.attached).isEmpty) {
           // No reattachable PTYs — auto-spawn a fresh shell.
@@ -114,12 +143,94 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         }
         // Otherwise leave _tabs empty so the user picks via the prompt.
       });
+      if (isReconnect) _showReattachBanner();
       if (mounted && _tabs.isEmpty) {
         await _maybeOfferReattach(persisted);
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => _connectError = '$e');
+      _scheduleReconnectOrFail('$e');
+    }
+  }
+
+  /// On a connect failure, schedule the next backoff attempt unless we
+  /// have exhausted [_maxReconnectAttempts]. Some errors (sign-in
+  /// cancelled, no PC selected) are user-driven and don't deserve a
+  /// retry storm — those go straight to the manual error state.
+  void _scheduleReconnectOrFail(String error) {
+    final isUserCancel = error.contains('Sign-in cancelled') ||
+        error.contains('No PC selected');
+    if (isUserCancel || _reconnectAttempts >= _maxReconnectAttempts) {
+      setState(() {
+        _connState = _ConnState.error;
+        _connectError = error;
+      });
+      return;
+    }
+    _reconnectAttempts++;
+    final shift = _reconnectAttempts - 1;
+    var delay = _baseBackoff * (1 << shift);
+    if (delay > _maxBackoff) delay = _maxBackoff;
+    setState(() {
+      _connState = _ConnState.reconnecting;
+      _connectError = error;
+    });
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, () {
+      if (mounted) _connectSession(isReconnect: true);
+    });
+  }
+
+  void _showReattachBanner() {
+    setState(() => _showResumedBanner = true);
+    _resumedBannerTimer?.cancel();
+    _resumedBannerTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _showResumedBanner = false);
+    });
+  }
+
+  /// Cancel the current backoff loop and surface the last error so the
+  /// user can manually retry from the error screen.
+  void _cancelReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    setState(() {
+      _connState = _ConnState.error;
+    });
+  }
+
+  /// Probe the existing session via a cheap RPC. If the call fails, the
+  /// QUIC connection is presumed dead — tear down and start the
+  /// reconnect loop. Called from the screen-wide PTY observer when an
+  /// exit event with a non-empty error arrives.
+  Future<void> _probeOrReconnect() async {
+    final session = _session;
+    if (session == null || _probingDisconnect) return;
+    if (_connState != _ConnState.connected) return;
+    _probingDisconnect = true;
+    try {
+      await ref
+          .read(bridgeProvider)
+          .listPtys(sessionId: session.id)
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      // Connection is dead — drop the session and try to reconnect.
+      _session = null;
+      try {
+        await session.close();
+      } catch (_) {}
+      // Detach all tabs from their PTY ids so the next connect either
+      // reattaches or spawns fresh shells.
+      for (final tab in _tabs) {
+        tab.ptyId = null;
+        // Keep the reattach handle so the host's persisted PTY (if
+        // any) will be picked up by openPty's reattach branch on the
+        // next attempt.
+      }
+      if (!mounted) return;
+      _scheduleReconnectOrFail('connection dropped: $e');
+    } finally {
+      _probingDisconnect = false;
     }
   }
 
@@ -184,6 +295,9 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
 
   @override
   void dispose() {
+    _reconnectTimer?.cancel();
+    _resumedBannerTimer?.cancel();
+    _ptyExitWatcher?.cancel();
     final bridge = ref.read(bridgeProvider);
     for (final tab in _tabs) {
       final id = tab.ptyId;
@@ -386,18 +500,31 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_connectError != null) {
+    if (_connState == _ConnState.error) {
       return Scaffold(
         appBar: AppBar(title: Text(widget.server.name)),
         body: _ConnectError(
-          message: _connectError!,
+          message: _connectError ?? 'Connection failed.',
           onRetry: () {
             setState(() {
               _connectError = null;
               _session = null;
+              _reconnectAttempts = 0;
+              _connState = _ConnState.connecting;
             });
             _connectSession();
           },
+        ),
+      );
+    }
+    if (_connState == _ConnState.reconnecting && _session == null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(widget.server.name)),
+        body: _ReconnectingScreen(
+          attempt: _reconnectAttempts,
+          maxAttempts: _maxReconnectAttempts,
+          lastError: _connectError,
+          onCancel: _cancelReconnect,
         ),
       );
     }
@@ -442,6 +569,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 children: [
+                  if (_showResumedBanner) const _ResumedBanner(),
                   _TabBar(
                     tabs: _tabs,
                     activeIndex: _activeIndex,
@@ -470,6 +598,35 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+class _ResumedBanner extends StatelessWidget {
+  const _ResumedBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      color: scheme.primaryContainer,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Icon(Icons.cable, color: scheme.onPrimaryContainer, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Session resumed',
+              style: TextStyle(
+                color: scheme.onPrimaryContainer,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -659,6 +816,62 @@ class _ConnectError extends StatelessWidget {
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
               onPressed: onRetry,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReconnectingScreen extends StatelessWidget {
+  const _ReconnectingScreen({
+    required this.attempt,
+    required this.maxAttempts,
+    required this.onCancel,
+    this.lastError,
+  });
+
+  final int attempt;
+  final int maxAttempts;
+  final String? lastError;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 40,
+              height: 40,
+              child: CircularProgressIndicator(),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Reconnecting…  ($attempt / $maxAttempts)',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            if (lastError != null) ...[
+              const SizedBox(height: 8),
+              SelectableText(
+                lastError!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.close),
+              label: const Text('Stop trying'),
+              onPressed: onCancel,
             ),
           ],
         ),
