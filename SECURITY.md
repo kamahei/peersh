@@ -42,17 +42,19 @@ also qualify if they would let an attacker run up an operator's bill.
 
 ## Trust model snapshot
 
-Current implementation status: as of May 2, 2026, the direct QUIC path
-still uses the development self-signed TLS helper for peer connections.
-Full peer certificate verification / mTLS binding to trusted device IDs
-is design intent, not complete production behavior yet.
-
 - Signaling servers cannot read PowerShell command content. All command
-  bytes flow peer-to-peer over QUIC with TLS 1.3.
+  bytes flow peer-to-peer over QUIC with TLS 1.3, and the QUIC handshake
+  is mutually authenticated (mTLS): both peers present a self-signed
+  cert whose private key is the device's long-lived ed25519 keypair, and
+  the client side pins the host's expected `device_id` so a server
+  presenting a different key fails the handshake. See
+  `core/transport/peertls/`.
 - Device identity is derived from a public key
   (`device_id = base32(sha256(publicKey)[:10])`). Register frames are
   rejected if the advertised device ID does not match the advertised
-  public key.
+  public key. The same ed25519 key drives both signaling Register and
+  the QUIC mTLS cert, so the host sees one consistent identity on both
+  channels.
 - The `peersh-signaling` operator can see who is connected to whom and
   when (signaling metadata) but not the commands or their output.
 - PSK secrets are stored as raw bytes in the SQLite store. Operators

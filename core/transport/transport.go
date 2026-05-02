@@ -32,7 +32,8 @@ type Transport struct {
 // New wraps an externally-supplied PacketConn for use by QUIC.
 //
 // The tlsConfig must include ALPN entries that match the peersh wire
-// contract; helpers in core/transport/devtls produce conformant configs.
+// contract; production callers use helpers in core/transport/peertls.
+// core/transport/devtls produces conformant configs for tests.
 //
 // The caller retains ownership of pc. Calling (*Transport).Close does NOT
 // close pc — that is the caller's responsibility.

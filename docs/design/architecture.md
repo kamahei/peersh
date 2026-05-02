@@ -29,7 +29,7 @@ The signaling server is **only used for connection setup**. All actual data flow
 
 The mobile track is implemented as:
 
-- `mobile-core/` — a Go package with a gomobile-friendly API surface: `OpenDirectSession`, `OpenSignalingSession` (PSK), `OpenFirebaseSignalingSession`, `Session.OpenPTY` / `OpenPTYReattach`, `Session.Exec`, `Session.ReadFile`, plus the `Output` and `PTYHandler` callback interfaces. Internally `mobile-core` reuses `core/transport`, `core/transport/devtls`, `core/wire`, `core/protocol/peersh/v1`, `core/punching`, and `core/signaling`.
+- `mobile-core/` — a Go package with a gomobile-friendly API surface: `OpenDirectSession`, `OpenSignalingSession` (PSK), `OpenFirebaseSignalingSession`, `Session.OpenPTY` / `OpenPTYReattach`, `Session.Exec`, `Session.ReadFile`, plus the `Output` and `PTYHandler` callback interfaces. Internally `mobile-core` reuses `core/transport`, `core/transport/peertls`, `core/wire`, `core/protocol/peersh/v1`, `core/punching`, and `core/signaling`.
 - `scripts/build-mobile-core.{sh,cmd}` — wraps `gomobile bind` to produce `app/android/app/libs/peersh.aar` and `app/ios/Frameworks/peersh.xcframework` (iOS host on macOS only).
 - `app/` — Flutter project (`flutter create app --org dev.peersh`). Riverpod + flutter_secure_storage + http + xterm + firebase plugins are pinned in `pubspec.yaml`.
 - **MethodChannel `dev.peersh/bridge`** carries control-plane calls (session lifecycle, PTY lifecycle, file API, foreground-service start/stop).
@@ -73,10 +73,9 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 ## Transport
 
 - **QUIC over UDP** via `github.com/quic-go/quic-go`. QUIC mandates TLS 1.3, which gives end-to-end encryption for free.
-- **mTLS design target.** Both ends authenticate to each other using their device keypairs. The same keypair that produces the device ID (see "Device identity") is used as the TLS credential.
-- **Current implementation status.** The checked-in direct QUIC path still uses `core/transport/devtls` self-signed TLS helpers and does not yet complete production peer-certificate verification. Treat mTLS as an open implementation item, not shipped behavior.
+- **mTLS bound to device IDs.** Both ends authenticate to each other using their long-lived ed25519 keypair — the same keypair that produces the device ID (see "Device identity"). Production code uses `core/transport/peertls`: each peer presents a self-signed cert whose private key is its device key, the server requires a client cert (`tls.RequireAnyClientCert`), and the client side pins the server's expected `device_id` so a host that presents a different key fails the TLS handshake.
 - **External `net.PacketConn` requirement.** The QUIC wrapper in `core/transport/` accepts an externally-supplied `net.PacketConn` so the punched UDP socket can be reused as the underlying transport for QUIC. A regression test (`TestExternalPacketConnContract`) exercises the path with `quic.Transport`.
-- **Self-signed certs in development.** `core/transport/devtls` generates self-signed certs and the client uses `InsecureSkipVerify`, clearly marked as dev-only via the grep-able `DevSelfSignedOnly` constant.
+- **`devtls` is now test-only.** `core/transport/devtls` still generates self-signed certs and a client config with `InsecureSkipVerify`, marked as dev-only via the grep-able `DevSelfSignedOnly` constant. Production code paths no longer import it; new code should use `peertls` instead.
 
 ## NAT traversal
 

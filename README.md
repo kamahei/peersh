@@ -4,7 +4,7 @@ Run PowerShell on your home Windows PC from your phone, peer-to-peer, without a 
 
 > **Status:** OSS — self-hosted by design. There is no official hosted instance. Bring your own signaling server (or Firebase project) and your own peershd binary. See [Quick start](#quick-start).
 >
-> **Security implementation status:** current builds are experimental. The data path is direct QUIC/TLS and signaling still does not carry command content, but full peer certificate verification / mTLS binding is not complete yet. Do not treat the current source as a production-ready remote shell until that work lands.
+> **Security implementation status:** the data path is direct QUIC/TLS, signaling does not carry command content, and mTLS is now bound to ed25519-derived device IDs on both ends — clients pin the host's expected `device_id` at the TLS layer and the host requires a client cert. The project is still pre-1.0 and does not yet have an audited production deployment; treat it as beta-quality until 1.0 ships.
 
 ## What it is
 
