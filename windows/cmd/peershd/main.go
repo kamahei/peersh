@@ -141,6 +141,7 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	firebasePairCode := fs.String("pair-code", "", "one-time 6-digit pairing code shown by the mobile app's Pair PC screen; consumed once and replaced by a persisted refresh token")
 	firebaseTokenFile := fs.String("firebase-token-file", "", "path to the persisted Firebase refresh token (default: %LOCALAPPDATA%\\peersh\\firebase-refresh-token.txt)")
 	firebaseLogin := fs.Bool("firebase-login", false, "open the default browser to sign in with Google (one-shot bootstrap; replaces -pair-code on desktops with a browser)")
+	firebaseLoginOnly := fs.Bool("firebase-login-only", false, "exit successfully after persisting the refresh token, without starting the wake listener; for use by install scripts")
 	googleClientID := fs.String("google-client-id", embeddedGoogleClientID, "OAuth 2.0 'Desktop app' client id (required with -firebase-login)")
 	googleClientSecret := fs.String("google-client-secret", embeddedGoogleClientSecret, "OAuth 2.0 'Desktop app' client secret (required with -firebase-login)")
 	metricsAddr := fs.String("metrics-addr", "127.0.0.1:9101", "Prometheus /metrics bind address; empty disables; non-loopback requires -metrics-token")
@@ -185,6 +186,7 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 		firebasePairCode:    *firebasePairCode,
 		firebaseTokenFile:   *firebaseTokenFile,
 		firebaseLogin:       *firebaseLogin,
+		firebaseLoginOnly:   *firebaseLoginOnly,
 		googleClientID:      *googleClientID,
 		googleClientSecret:  *googleClientSecret,
 		metricsAddr:         envOr("PEERSH_METRICS_ADDR", *metricsAddr),
@@ -218,6 +220,7 @@ type runOpts struct {
 	firebasePairCode               string
 	firebaseTokenFile              string
 	firebaseLogin                  bool
+	firebaseLoginOnly              bool
 	googleClientID                 string
 	googleClientSecret             string
 	metricsAddr                    string
@@ -391,6 +394,14 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			if err != nil {
 				return err
 			}
+			// One-shot bootstrap mode: install scripts call peershd
+			// with -firebase-login -firebase-login-only to acquire and
+			// persist the refresh token, then expect a clean exit so
+			// the script can move on to register the service / task.
+			if opts.firebaseLoginOnly {
+				slog.Info("firebase login complete; exiting (firebase-login-only set)", "uid", src.UID())
+				return nil
+			}
 			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, deviceID, fbMetrics)
 			if err != nil {
 				return fmt.Errorf("start wake runtime: %w", err)
@@ -402,6 +413,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 				notifier:     rt,
 				hostDeviceID: deviceID,
 				hostName:     displayName,
+				metrics:      fbMetrics,
 			}
 		} else {
 			if userID == "" || pskFile == "" {
@@ -437,6 +449,7 @@ type notifyCtx struct {
 	notifier     fbpeershd.Notifier
 	hostDeviceID string
 	hostName     string
+	metrics      *fbpeershd.Metrics
 }
 
 // runSignaling dials the signaling server, registers, and replies to

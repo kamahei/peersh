@@ -42,6 +42,17 @@ type Metrics struct {
 	// RtdbListenerActive is 0 / 1 — is the SSE stream currently
 	// connected to firebasedatabase.app.
 	RtdbListenerActive prometheus.Gauge
+
+	// NotificationDispatched counts v2-B push notifications the host
+	// successfully wrote into RTDB (i.e. the Cloud Function will pick
+	// them up). Labelled by reason ("prompt" / "idle").
+	NotificationDispatched *prometheus.CounterVec
+
+	// NotificationDispatchFailures counts dispatch attempts that
+	// errored before reaching RTDB (token mint / Push call). Labelled
+	// by reason. Failures here mean the user does NOT get an OS
+	// notification — investigate.
+	NotificationDispatchFailures *prometheus.CounterVec
 }
 
 // NewMetrics builds the metric collectors but does not register them.
@@ -79,6 +90,14 @@ func NewMetrics() *Metrics {
 			Name: "peersh_rtdb_listener_active",
 			Help: "0 / 1 — is the RTDB SSE stream currently connected.",
 		}),
+		NotificationDispatched: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "peersh_notification_dispatched_total",
+			Help: "v2-B push notifications successfully written to RTDB.",
+		}, []string{"reason"}),
+		NotificationDispatchFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "peersh_notification_dispatch_failures_total",
+			Help: "v2-B push notification attempts that errored before reaching RTDB.",
+		}, []string{"reason"}),
 	}
 }
 
@@ -91,6 +110,8 @@ func (m *Metrics) Register(reg prometheus.Registerer) error {
 		m.Heartbeat,
 		m.RtdbListenerReconnect,
 		m.RtdbListenerActive,
+		m.NotificationDispatched,
+		m.NotificationDispatchFailures,
 	} {
 		if err := reg.Register(c); err != nil {
 			return err
@@ -157,4 +178,21 @@ func (m *Metrics) SetRtdbListenerActive(active bool) {
 	} else {
 		m.RtdbListenerActive.Set(0)
 	}
+}
+
+// ObserveNotificationDispatched records one successful RTDB notification
+// write. reason is "prompt" or "idle".
+func (m *Metrics) ObserveNotificationDispatched(reason string) {
+	if m == nil {
+		return
+	}
+	m.NotificationDispatched.WithLabelValues(reason).Inc()
+}
+
+// ObserveNotificationDispatchFailure records one failed dispatch attempt.
+func (m *Metrics) ObserveNotificationDispatchFailure(reason string) {
+	if m == nil {
+		return
+	}
+	m.NotificationDispatchFailures.WithLabelValues(reason).Inc()
 }

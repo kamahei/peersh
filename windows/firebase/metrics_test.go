@@ -20,6 +20,25 @@ func TestMetrics_NilSafeNoOps(t *testing.T) {
 	m.ObserveHeartbeat(false)
 	m.ObserveRtdbReconnect()
 	m.SetRtdbListenerActive(true)
+	m.ObserveNotificationDispatched("prompt")
+	m.ObserveNotificationDispatchFailure("prompt")
+}
+
+func TestMetrics_NotificationCounters(t *testing.T) {
+	m := NewMetrics()
+	m.ObserveNotificationDispatched("prompt")
+	m.ObserveNotificationDispatched("prompt")
+	m.ObserveNotificationDispatched("idle")
+	m.ObserveNotificationDispatchFailure("prompt")
+	if got := testutil.ToFloat64(m.NotificationDispatched.WithLabelValues("prompt")); got != 2 {
+		t.Errorf("dispatched prompt = %v; want 2", got)
+	}
+	if got := testutil.ToFloat64(m.NotificationDispatched.WithLabelValues("idle")); got != 1 {
+		t.Errorf("dispatched idle = %v; want 1", got)
+	}
+	if got := testutil.ToFloat64(m.NotificationDispatchFailures.WithLabelValues("prompt")); got != 1 {
+		t.Errorf("failures prompt = %v; want 1", got)
+	}
 }
 
 func TestMetrics_CountersIncrement(t *testing.T) {
@@ -89,18 +108,22 @@ func TestMetrics_RegisterAddsAll(t *testing.T) {
 	m.ObserveHeartbeat(false)
 	m.ObserveRtdbReconnect()
 	m.SetRtdbListenerActive(true)
+	m.ObserveNotificationDispatched("prompt")
+	m.ObserveNotificationDispatchFailure("prompt")
 
 	mfs, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
 	want := map[string]bool{
-		"peersh_wake_event_received_total":     true,
-		"peersh_wake_event_latency_seconds":    true,
-		"peersh_signaling_ws_open_seconds":     true,
-		"peersh_heartbeat_total":               true,
-		"peersh_rtdb_listener_reconnect_total": true,
-		"peersh_rtdb_listener_active":          true,
+		"peersh_wake_event_received_total":            true,
+		"peersh_wake_event_latency_seconds":           true,
+		"peersh_signaling_ws_open_seconds":            true,
+		"peersh_heartbeat_total":                      true,
+		"peersh_rtdb_listener_reconnect_total":        true,
+		"peersh_rtdb_listener_active":                 true,
+		"peersh_notification_dispatched_total":        true,
+		"peersh_notification_dispatch_failures_total": true,
 	}
 	for _, mf := range mfs {
 		delete(want, mf.GetName())

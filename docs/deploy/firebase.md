@@ -152,6 +152,18 @@ gcloud projects add-iam-policy-binding <your-project-id> \
   --role="roles/cloudbuild.builds.builder"
 ```
 
+`mintPairingCode` mints Firebase Custom Tokens via `admin.auth().createCustomToken()`, which calls Google IAM `signBlob` on the runtime service account. In Cloud Functions Gen2 the runtime SA is the Compute default SA, and it needs the `iam.serviceAccountTokenCreator` role on **itself** — without it, every `mintPairingCode` call returns `500 Internal Server Error` with `auth/insufficient-permission` in the function logs:
+
+```sh
+gcloud iam service-accounts add-iam-policy-binding \
+  ${PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountTokenCreator" \
+  --project=<your-project-id>
+```
+
+This is a one-time per-project grant. Reference: [Firebase Admin — service account permissions](https://firebase.google.com/docs/auth/admin/create-custom-tokens#service_account_does_not_have_required_permissions).
+
 ### 7. Deploy peersh-signaling to Cloud Run in Firebase mode
 
 ```sh

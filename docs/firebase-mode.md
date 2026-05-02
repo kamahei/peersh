@@ -218,6 +218,8 @@ mandates `-metrics-token` (or `PEERSH_METRICS_TOKEN` env).
 | `peersh_heartbeat_total{result}` | counter vec | RTDB `last_seen_at` write outcomes. `failure` rate > 0 means RTDB connectivity issue. |
 | `peersh_rtdb_listener_reconnect_total` | counter | SSE stream re-establishments (token refresh + transient errors). |
 | `peersh_rtdb_listener_active` | gauge | 0 / 1 — is the SSE stream currently connected. |
+| `peersh_notification_dispatched_total{reason}` | counter vec | v2-B push notifications successfully written to RTDB. `reason` = `prompt` or `idle`. |
+| `peersh_notification_dispatch_failures_total{reason}` | counter vec | Dispatch attempts that errored before reaching RTDB. >0 means users miss notifications — investigate. |
 
 ### Example PromQL
 

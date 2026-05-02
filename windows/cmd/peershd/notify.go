@@ -222,9 +222,11 @@ func (s *ptyNotifyState) dispatch(ctx context.Context, mobileDeviceID, tabLabel,
 		},
 	}
 	if err := s.nctx.notifier.NotifyCommandReady(ctx, payload); err != nil {
+		s.nctx.metrics.ObserveNotificationDispatchFailure(reason)
 		s.log.Warn("notify dispatch failed", "err", err, "reason", reason, "pty_id", s.ptyID)
 		return
 	}
+	s.nctx.metrics.ObserveNotificationDispatched(reason)
 	s.log.Info("notify dispatched", "reason", reason, "pty_id", s.ptyID, "duration_s", fmt.Sprintf("%.1f", durationSeconds))
 }
 

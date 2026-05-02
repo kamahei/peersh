@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/peersh/peersh/core/protocol/peersh/v1"
 	signalv1 "github.com/peersh/peersh/core/protocol/peersh/signal/v1"
 )
 
@@ -153,6 +154,43 @@ func TestNegotiateConnectWithRetry_GivesUpAfterMaxAttempts(t *testing.T) {
 	}
 	if calls := fake.calls.Load(); calls != 5 {
 		t.Errorf("fake called %d times; want 5 (initial + 4 retries)", calls)
+	}
+}
+
+func TestBuildNotificationConfigFrame(t *testing.T) {
+	frame := buildNotificationConfigFrame(true, 30, 5, "claude", "device-uuid-abc")
+	cfg, ok := frame.GetKind().(*v1.PTYFrame_NotificationConfig)
+	if !ok {
+		t.Fatalf("frame kind = %T; want *v1.PTYFrame_NotificationConfig", frame.GetKind())
+	}
+	nc := cfg.NotificationConfig
+	if !nc.GetEnabled() {
+		t.Errorf("Enabled = false; want true")
+	}
+	if nc.GetThresholdSeconds() != 30 {
+		t.Errorf("ThresholdSeconds = %d; want 30", nc.GetThresholdSeconds())
+	}
+	if nc.GetIdleSeconds() != 5 {
+		t.Errorf("IdleSeconds = %d; want 5", nc.GetIdleSeconds())
+	}
+	if nc.GetTabLabel() != "claude" {
+		t.Errorf("TabLabel = %q; want %q", nc.GetTabLabel(), "claude")
+	}
+	if nc.GetMobileDeviceId() != "device-uuid-abc" {
+		t.Errorf("MobileDeviceId = %q; want %q", nc.GetMobileDeviceId(), "device-uuid-abc")
+	}
+}
+
+func TestBuildNotificationConfigFrame_DisabledKeepsFields(t *testing.T) {
+	// Disabling the bell still carries threshold/idle so the host can
+	// re-enable with the same parameters by flipping the flag.
+	frame := buildNotificationConfigFrame(false, 10, 0, "shell", "")
+	nc := frame.GetKind().(*v1.PTYFrame_NotificationConfig).NotificationConfig
+	if nc.GetEnabled() {
+		t.Errorf("Enabled = true; want false")
+	}
+	if nc.GetThresholdSeconds() != 10 {
+		t.Errorf("ThresholdSeconds = %d; want 10", nc.GetThresholdSeconds())
 	}
 }
 

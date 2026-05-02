@@ -72,6 +72,21 @@ Output: `local/peershd.exe`. Verify the embedded values:
 strings local/peershd.exe | grep -E "AIza|cloudfunctions|googleusercontent"
 ```
 
+### Auto-start peershd at logon or boot
+
+Two helper batch scripts ship under `scripts/` and wrap `schtasks` / `sc`:
+
+| What | Install | Uninstall | Runs as |
+|---|---|---|---|
+| Per-user logon task | `scripts\install-peershd-task.cmd` | `scripts\uninstall-peershd-task.cmd` | the user who installed it |
+| Windows service (boot-time) | `scripts\install-peershd-service.cmd` | `scripts\uninstall-peershd-service.cmd` | LocalSystem (run elevated) |
+
+Both install scripts:
+
+1. Detect the peershd binary (default `local\peershd.exe`; pass an absolute path as the first argument to override, e.g. `install-peershd-task.cmd "C:\Program Files\peersh\peershd.exe"`).
+2. In Firebase mode, run `peershd -firebase-login -firebase-login-only` once to open a Google sign-in browser window. The persisted refresh token is reused on every subsequent run — no further prompts. PSK-mode binaries skip this step automatically.
+3. Register the schtasks / sc entry; the service variant also locks down `C:\ProgramData\peersh\` to SYSTEM + Administrators because the refresh token lives there (LocalSystem can't see the install user's `%LOCALAPPDATA%`).
+
 ### Run the tests
 
 ```sh

@@ -1,26 +1,29 @@
 // peersh Firebase Functions entry point.
 //
-// Phase 5 ships:
-//   onSessionCreated   — Firestore trigger that fires when the signaling
-//                        server creates users/{uid}/sessions/{sessionId}.
-//                        Sends a high-priority FCM data message so the
-//                        host can wake / re-establish its UDP socket.
-//   mintPairingCode    — HTTPS callable. Authenticated mobile clients
-//                        request a 6-digit code; the function mints a
-//                        Custom Token for the calling uid and stores it
-//                        in pairing_codes/{code} with a 5-min TTL.
-//   claimPairingCode   — HTTPS callable. Unauthenticated peershd hosts
-//                        post the code; the function returns the cached
-//                        Custom Token and deletes the doc (one-shot).
-//   budgetGuard        — Pub/Sub triggered by Cloud Billing budget
-//                        alerts. Writes ops/budget-state with
-//                        {triggered: true, ...} when a configured
-//                        threshold fires; onSessionCreated checks the
-//                        flag and short-circuits the FCM send so a
-//                        runaway loop can't burn quota past the budget.
+// Currently deployed:
+//   mintPairingCode        — HTTPS callable. Authenticated mobile
+//                            clients request a 6-digit code; the
+//                            function mints a Custom Token for the
+//                            calling uid and stores it in
+//                            pairing_codes/{code} with a 5-min TTL.
+//   claimPairingCode       — HTTPS callable. Unauthenticated peershd
+//                            hosts post the code; the function returns
+//                            the cached Custom Token and deletes the
+//                            doc (one-shot).
+//   budgetGuard            — Pub/Sub triggered by Cloud Billing budget
+//                            alerts. Writes ops/budget-state with
+//                            {triggered: true, ...} when a configured
+//                            threshold fires; onNotificationCreated
+//                            checks the flag and short-circuits the
+//                            FCM send so a runaway loop can't burn
+//                            quota past the budget.
+//   onNotificationCreated  — RTDB trigger that fires on
+//                            users/{uid}/notifications/{id} writes.
+//                            Reads the target mobile FCM token, sends
+//                            an FCM notification message, deletes the
+//                            source doc.
 
 import * as admin from 'firebase-admin';
-import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { onRequest } from 'firebase-functions/v2/https';
 import { onMessagePublished } from 'firebase-functions/v2/pubsub';
 import { onValueCreated } from 'firebase-functions/v2/database';
@@ -41,88 +44,6 @@ setGlobalOptions({
   // FCM send.
   memory: '256MiB',
 });
-
-// onSessionCreated is currently dead code: no client writes
-// users/{uid}/sessions/{sid}. The wake path used by service-account-mode
-// peershd reads users/{uid}/wake_requests/{rid} (written directly by the
-// mobile client, see app/lib/services/peersh_session.dart). This trigger
-// is kept for a future v2 that may centralize wake fan-out and budget
-// enforcement on the server side.
-export const onSessionCreated = onDocumentCreated(
-  'users/{userId}/sessions/{sessionId}',
-  async (event) => {
-    const snap = event.data;
-    if (!snap) {
-      logger.warn('onSessionCreated: no snapshot');
-      return;
-    }
-    const data = snap.data();
-    const userId = event.params.userId;
-    const sessionId = event.params.sessionId;
-
-    // Cost guardrail: when budgetGuard has marked the project as over
-    // budget, skip the FCM send entirely. Mobile clients still get
-    // their own copy of the session via Firestore — they just won't
-    // wake up an idle host. Operator clears the flag to resume.
-    const guard = await admin.firestore().doc('ops/budget-state').get();
-    if (guard.exists && guard.get('triggered') === true) {
-      logger.warn('onSessionCreated: skipped, budget guard active', {
-        userId,
-        sessionId,
-        threshold: guard.get('threshold'),
-      });
-      return;
-    }
-
-    const hostDeviceId = data.host_device_id as string | undefined;
-    if (!hostDeviceId) {
-      logger.warn('onSessionCreated: session has no host_device_id', {
-        userId,
-        sessionId,
-      });
-      return;
-    }
-
-    const deviceRef = admin.firestore().doc(
-      `users/${userId}/devices/${hostDeviceId}`,
-    );
-    const deviceSnap = await deviceRef.get();
-    const token = deviceSnap.get('fcm_token') as string | undefined;
-    if (!token) {
-      logger.info('onSessionCreated: host has no fcm_token registered', {
-        userId,
-        hostDeviceId,
-      });
-      return;
-    }
-
-    try {
-      await admin.messaging().send({
-        token,
-        // Data-only message: the host process handles wake-up itself
-        // (no user-visible notification).
-        data: {
-          peerSh: 'wake',
-          userId,
-          sessionId,
-          mobileDeviceId: data.mobile_device_id ?? '',
-        },
-        android: {
-          priority: 'high',
-          ttl: 30 * 1000, // wake-up is meaningful for ~30 s only
-        },
-        apns: {
-          headers: {
-            'apns-priority': '10',
-          },
-        },
-      });
-      logger.info('FCM wake sent', { userId, hostDeviceId, sessionId });
-    } catch (err) {
-      logger.error('FCM send failed', { err, userId, hostDeviceId });
-    }
-  },
-);
 
 // ---------------------------------------------------------------------
 // Pairing flow

@@ -647,7 +647,16 @@ func (p *PTYSession) SendNotificationConfig(enabled bool, thresholdSeconds, idle
 	p.mu.Unlock()
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
-	return wire.Write(p.stream, &v1.PTYFrame{
+	return wire.Write(p.stream, buildNotificationConfigFrame(
+		enabled, thresholdSeconds, idleSeconds, tabLabel, mobileDeviceID,
+	))
+}
+
+// buildNotificationConfigFrame is the wire-level builder behind
+// SendNotificationConfig. Pulled out so tests can verify the framing
+// without needing a real transport.Stream.
+func buildNotificationConfigFrame(enabled bool, thresholdSeconds, idleSeconds int, tabLabel, mobileDeviceID string) *v1.PTYFrame {
+	return &v1.PTYFrame{
 		Kind: &v1.PTYFrame_NotificationConfig{
 			NotificationConfig: &v1.PTYNotificationConfig{
 				Enabled:          enabled,
@@ -657,7 +666,7 @@ func (p *PTYSession) SendNotificationConfig(enabled bool, thresholdSeconds, idle
 				MobileDeviceId:   mobileDeviceID,
 			},
 		},
-	})
+	}
 }
 
 // Close terminates the PTY by closing the underlying QUIC stream. The
