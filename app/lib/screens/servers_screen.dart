@@ -152,6 +152,11 @@ class ServersScreen extends ConsumerWidget {
     if (idToken == null) return;
     final user = ref.read(firebaseAuthServiceProvider).currentUser;
     if (user == null || !context.mounted) return;
+    // Let the sign-in screen's pop transition (if any) settle before
+    // opening the picker — back-to-back navigator ops trip
+    // !_debugLocked.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!context.mounted) return;
     final picked = await showDevicePickerSheet(
       context: context,
       server: server,

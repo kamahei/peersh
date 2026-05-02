@@ -50,7 +50,13 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   @override
   void initState() {
     super.initState();
-    _connectSession();
+    // Defer the connect-flow's first navigator op (sign-in screen,
+    // device picker) until after this screen's own push transition
+    // settles — otherwise nested Navigator.push during transition
+    // trips the !_debugLocked assertion.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _connectSession();
+    });
   }
 
   Future<void> _connectSession() async {
@@ -70,8 +76,13 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
           throw StateError('Sign-in cancelled.');
         }
         // For Firebase entries, ask the user which PC to connect to
-        // (skip if a default has been picked previously).
+        // (skip if a default has been picked previously). Wait for the
+        // sign-in screen's pop transition to finish before opening the
+        // picker bottom sheet, otherwise nested Navigator activity
+        // triggers the !_debugLocked assertion.
         if (widget.server.targetDeviceId.isEmpty) {
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted) return;
           final picked = await _pickDevice(widget.server);
           if (picked == null) throw StateError('No PC selected.');
           connectServer = widget.server.copyWith(targetDeviceId: picked);
