@@ -73,16 +73,15 @@ func TestPeerDeviceID_EmptyOnNoPeerCert(t *testing.T) {
 }
 
 func TestPeerDeviceID_MatchesExpected(t *testing.T) {
-	priv := mustKey(t)
-	pub := priv.Public().(ed25519.PublicKey)
-	want := devid.Derive(pub)
+	cliKey := mustKey(t)
+	wantClientID := devid.Derive(cliKey.Public().(ed25519.PublicKey))
 
 	hostKey := mustKey(t)
 	hostCert, err := peertls.CertFromEd25519(hostKey)
 	if err != nil {
 		t.Fatalf("CertFromEd25519 host: %v", err)
 	}
-	cliCert, err := peertls.CertFromEd25519(priv)
+	cliCert, err := peertls.CertFromEd25519(cliKey)
 	if err != nil {
 		t.Fatalf("CertFromEd25519 cli: %v", err)
 	}
@@ -109,6 +108,7 @@ func TestPeerDeviceID_MatchesExpected(t *testing.T) {
 	}
 	defer listener.Close()
 
+	gotChan := make(chan string, 1)
 	errChan := make(chan error, 1)
 	go func() {
 		conn, err := listener.Accept(context.Background())
@@ -116,17 +116,15 @@ func TestPeerDeviceID_MatchesExpected(t *testing.T) {
 			errChan <- err
 			return
 		}
+		// Drive the handshake to completion before reading TLSState; on
+		// quic-go a successful AcceptStream proves the handshake closed.
 		s, err := conn.AcceptStream(context.Background())
 		if err != nil {
 			errChan <- err
 			return
 		}
 		_, _ = io.ReadAll(s)
-		// We do not currently expose tls.ConnectionState from the
-		// transport wrapper. Application-layer code that needs the peer
-		// device_id will plumb it via a future accessor; this test is
-		// satisfied by confirming the handshake succeeds, which means
-		// the host accepted a valid mTLS client cert.
+		gotChan <- peertls.PeerDeviceID(conn.TLSState())
 		errChan <- nil
 	}()
 
@@ -154,9 +152,9 @@ func TestPeerDeviceID_MatchesExpected(t *testing.T) {
 		t.Fatal("server goroutine timed out")
 	}
 
-	// Sanity: the client's public key produces the device_id we expected.
-	if got := devid.Derive(pub); got != want {
-		t.Fatalf("devid mismatch: got %q want %q", got, want)
+	got := <-gotChan
+	if got != wantClientID {
+		t.Fatalf("server-side PeerDeviceID: got %q want %q", got, wantClientID)
 	}
 }
 

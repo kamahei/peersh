@@ -124,6 +124,11 @@ func (c *Conn) LocalAddr() net.Addr { return c.qc.LocalAddr() }
 // RemoteAddr returns the remote end of the connection.
 func (c *Conn) RemoteAddr() net.Addr { return c.qc.RemoteAddr() }
 
+// TLSState returns the underlying TLS connection state of the QUIC
+// session. Useful for application-layer code that needs to read the
+// authenticated peer identity (see core/transport/peertls.PeerDeviceID).
+func (c *Conn) TLSState() tls.ConnectionState { return c.qc.ConnectionState().TLS }
+
 // CloseWithError closes the QUIC connection and signals the given application
 // error code to the peer. err may be nil for a clean close.
 func (c *Conn) CloseWithError(code uint64, msg string) error {
