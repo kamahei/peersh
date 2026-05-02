@@ -46,6 +46,7 @@ const (
 
 func main() {
 	addr := flag.String("addr", "", "(direct mode) peershd host (host:port)")
+	hostDevice := flag.String("host-device", "", "(direct mode, optional) expected peershd device_id to pin at the TLS layer")
 
 	signalingURL := flag.String("signaling", "", "(signaling mode) signaling server URL (ws:// or wss://)")
 	userID := flag.String("user", "", "(signaling mode) user_id under which to register")
@@ -69,14 +70,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "exactly one of -addr or -signaling must be supplied")
 		os.Exit(2)
 	}
+	if *hostDevice != "" && *signalingURL != "" {
+		fmt.Fprintln(os.Stderr, "-host-device only applies to direct mode (-addr); use -target in signaling mode")
+		os.Exit(2)
+	}
 
-	if err := run(*addr, *signalingURL, *userID, *pskFile, *target, *stunServer, *ptyMode, *ptyCmd); err != nil {
+	if err := run(*addr, *signalingURL, *userID, *pskFile, *target, *stunServer, *ptyMode, *ptyCmd, *hostDevice); err != nil {
 		slog.Error("peersh-cli exiting on error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode bool, ptyCmd string) error {
+func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode bool, ptyCmd, hostDevice string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -112,13 +117,14 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 	}
 
 	// Signaling mode pins the target's device_id at the TLS layer.
-	// Direct mode (-addr) cannot pin: the operator typically doesn't know
-	// the host's device_id ahead of time, so we accept any pubkey-bound
-	// server cert. Both modes still present a client cert; peershd now
+	// Direct mode (-addr) pins only if the operator passed -host-device;
+	// otherwise we accept any pubkey-bound server cert, which is the
+	// dev workflow where the host's device_id is not known ahead of
+	// time. Both modes still present a client cert because peershd
 	// requires one regardless.
 	pin := target
 	if signalingURL == "" {
-		pin = ""
+		pin = hostDevice
 	}
 	tr := transport.New(pc, peertls.ClientTLSConfig(clientCert, pin))
 	defer tr.Close()
