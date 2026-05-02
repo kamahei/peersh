@@ -287,6 +287,11 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 	return &Session{pc: pc, tr: tr, conn: conn, ctx: sCtx, cancel: sCancel}, nil
 }
 
+// negotiateConnectFn is the negotiator the retry wrapper invokes. Tests
+// override it with a fake to exercise the retry policy without real
+// signaling traffic.
+var negotiateConnectFn = negotiateConnect
+
 // negotiateConnectWithRetry runs negotiateConnect with up to 5 attempts
 // (200/400/800/1600 ms backoff between them) so a wake-mode host that
 // is still bringing its WS up can register before the mobile gives up.
@@ -303,7 +308,7 @@ func negotiateConnectWithRetry(
 	backoff := 200 * time.Millisecond
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
-		reply, err := negotiateConnect(ctx, signalingURL, userID, secret, firebaseIDToken, firebaseAppCheckToken, deviceID, pub, targetDeviceID, cands)
+		reply, err := negotiateConnectFn(ctx, signalingURL, userID, secret, firebaseIDToken, firebaseAppCheckToken, deviceID, pub, targetDeviceID, cands)
 		if err == nil {
 			return reply, nil
 		}
