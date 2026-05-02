@@ -116,6 +116,50 @@ the entries are tiny.
   the mobile app sources the URL from the helper above instead of
   FirebaseOptions.
 
+## Observability
+
+### Server-side (Cloud Run `/metrics`)
+
+Token-gated; set `PEERSH_SIGNALING_METRICS_TOKEN` and scrape with
+`Authorization: Bearer <token>`. Metrics relevant to v2-A:
+
+| Metric | Type | What it tells you |
+|---|---|---|
+| `peersh_ws_active_connections` | gauge | Currently-registered WebSockets. Steady state should be near 0 in Firebase mode. |
+| `peersh_ws_session_duration_seconds` | histogram | Per-connection WS lifetime. v2-A target: P95 < 20 s. |
+| `peersh_ws_register_to_first_connect_seconds` | histogram | Server-side proxy for "how cold was the host" — high P95 means mobile is racing ahead of host wake. |
+| `peersh_ws_idle_closed_total` | counter | Connections the server tore down for inactivity (defense layer; should be near 0). |
+
+### Host-side (peershd `/metrics`, default `127.0.0.1:9101`)
+
+Bound to loopback by default — no token required. Set
+`-metrics-addr 0.0.0.0:9101` for remote scraping; that path
+mandates `-metrics-token` (or `PEERSH_METRICS_TOKEN` env).
+
+| Metric | Type | What it tells you |
+|---|---|---|
+| `peersh_wake_event_received_total` | counter | Wake events the SSE listener surfaced. |
+| `peersh_wake_event_latency_seconds` | histogram | Mobile-write → host-receive elapsed. Target P95 < 1 s. |
+| `peersh_signaling_ws_open_seconds` | histogram | Per-wake host-side WS lifetime. Target P95 < 20 s (capped by `wakeShortTTL` + drain). |
+| `peersh_heartbeat_total{result}` | counter vec | RTDB `last_seen_at` write outcomes. `failure` rate > 0 means RTDB connectivity issue. |
+| `peersh_rtdb_listener_reconnect_total` | counter | SSE stream re-establishments (token refresh + transient errors). |
+| `peersh_rtdb_listener_active` | gauge | 0 / 1 — is the SSE stream currently connected. |
+
+### Example PromQL
+
+```promql
+# P50 / P95 wake-event delivery latency over 5 minutes
+histogram_quantile(0.50, rate(peersh_wake_event_latency_seconds_bucket[5m]))
+histogram_quantile(0.95, rate(peersh_wake_event_latency_seconds_bucket[5m]))
+
+# Heartbeat failure ratio
+rate(peersh_heartbeat_total{result="failure"}[5m])
+  / ignoring(result) sum without (result) (rate(peersh_heartbeat_total[5m]))
+
+# Server idle-close rate (frozen-client indicator)
+rate(peersh_ws_idle_closed_total[5m])
+```
+
 ## Operational metrics worth watching
 
 - Cloud Run `request_count` and `request_latencies`: should drop

@@ -24,9 +24,14 @@ import (
 )
 
 // WakeEvent is a single wake notification surfaced to the consumer.
+//
+// CreatedAt is the RTDB ServerValue.timestamp the mobile client wrote
+// (epoch ms). Zero means the field was missing or unparseable —
+// callers compute end-to-end wake latency only when CreatedAt > 0.
 type WakeEvent struct {
 	RequestID      string
 	MobileDeviceID string
+	CreatedAt      int64
 }
 
 // tokenRefreshLead is how far ahead of token expiry we proactively
@@ -55,6 +60,12 @@ type WakeListener struct {
 	uid      string
 	deviceID string
 	out      chan WakeEvent
+
+	// metrics is set by StartWakeRuntime; nil disables observation
+	// (the *Metrics helpers are nil-safe). Field is exported via the
+	// constructor pattern: tests construct WakeListener directly and
+	// leave metrics nil.
+	metrics *Metrics
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -115,10 +126,15 @@ func (w *WakeListener) run(ctx context.Context) {
 	defer close(w.done)
 	backoff := 200 * time.Millisecond
 	const maxBackoff = 30 * time.Second
+	first := true
 	for {
 		if err := ctx.Err(); err != nil {
 			return
 		}
+		if !first {
+			w.metrics.ObserveRtdbReconnect()
+		}
+		first = false
 		err := w.consume(ctx)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
@@ -159,6 +175,8 @@ func (w *WakeListener) consume(ctx context.Context) error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	defer stream.Close()
+	w.metrics.SetRtdbListenerActive(true)
+	defer w.metrics.SetRtdbListenerActive(false)
 
 	for {
 		select {
@@ -226,6 +244,11 @@ func (w *WakeListener) maybeEmit(ctx context.Context, rid string, raw json.RawMe
 	var doc struct {
 		TargetDeviceID string `json:"target_device_id"`
 		MobileDeviceID string `json:"mobile_device_id"`
+		// CreatedAt is the RTDB ServerValue.timestamp the mobile
+		// client wrote (epoch ms). Missing in older app builds; zero
+		// is the safe default — consumers compute end-to-end latency
+		// only when CreatedAt > 0.
+		CreatedAt int64 `json:"created_at"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		slog.Warn("wake listener: cannot decode wake_request", "err", err, "rid", rid)
@@ -235,7 +258,12 @@ func (w *WakeListener) maybeEmit(ctx context.Context, rid string, raw json.RawMe
 		return
 	}
 	select {
-	case w.out <- WakeEvent{RequestID: rid, MobileDeviceID: doc.MobileDeviceID}:
+	case w.out <- WakeEvent{
+		RequestID:      rid,
+		MobileDeviceID: doc.MobileDeviceID,
+		CreatedAt:      doc.CreatedAt,
+	}:
+		w.metrics.ObserveWakeReceived()
 	case <-ctx.Done():
 	}
 }

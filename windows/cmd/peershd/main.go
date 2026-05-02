@@ -43,6 +43,8 @@ import (
 	"github.com/peersh/peersh/core/wire"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	fbpeershd "github.com/peersh/peersh/windows/firebase"
 	"github.com/peersh/peersh/windows/peerauth"
 	"github.com/peersh/peersh/windows/ptyhost"
@@ -141,6 +143,8 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	firebaseLogin := fs.Bool("firebase-login", false, "open the default browser to sign in with Google (one-shot bootstrap; replaces -pair-code on desktops with a browser)")
 	googleClientID := fs.String("google-client-id", embeddedGoogleClientID, "OAuth 2.0 'Desktop app' client id (required with -firebase-login)")
 	googleClientSecret := fs.String("google-client-secret", embeddedGoogleClientSecret, "OAuth 2.0 'Desktop app' client secret (required with -firebase-login)")
+	metricsAddr := fs.String("metrics-addr", "127.0.0.1:9101", "Prometheus /metrics bind address; empty disables; non-loopback requires -metrics-token")
+	metricsToken := fs.String("metrics-token", "", "bearer token gating /metrics; required for non-loopback binds (env PEERSH_METRICS_TOKEN takes precedence)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -183,7 +187,20 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 		firebaseLogin:       *firebaseLogin,
 		googleClientID:      *googleClientID,
 		googleClientSecret:  *googleClientSecret,
+		metricsAddr:         envOr("PEERSH_METRICS_ADDR", *metricsAddr),
+		metricsToken:        envOr("PEERSH_METRICS_TOKEN", *metricsToken),
 	})
+}
+
+// envOr returns the env var value when non-empty, otherwise fallback.
+// Used for flags that should also accept an env override (typically
+// because the value is sensitive — e.g. metrics bearer token — or
+// service-deploy-friendly).
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 type runOpts struct {
@@ -203,6 +220,8 @@ type runOpts struct {
 	firebaseLogin                  bool
 	googleClientID                 string
 	googleClientSecret             string
+	metricsAddr                    string
+	metricsToken                   string
 }
 
 func effectiveListen(listen, signalingURL string, listenExplicit bool) string {
@@ -322,6 +341,21 @@ func run(serviceCtx context.Context, opts runOpts) error {
 	}
 	defer listener.Close()
 
+	// Optional Prometheus /metrics endpoint. Default 127.0.0.1:9101
+	// stays loopback-only; remote scraping requires -metrics-token.
+	// Disabled when -metrics-addr is empty.
+	var fbMetrics *fbpeershd.Metrics
+	if opts.metricsAddr != "" {
+		fbMetrics = fbpeershd.NewMetrics()
+		reg := prometheus.NewRegistry()
+		if err := fbMetrics.Register(reg); err != nil {
+			return fmt.Errorf("metrics: register: %w", err)
+		}
+		if err := startMetricsServer(opts.metricsAddr, opts.metricsToken, reg); err != nil {
+			return fmt.Errorf("metrics: %w", err)
+		}
+	}
+
 	// Phase 6: SessionManager keeps pwsh.Host instances alive across
 	// QUIC reconnects so a client presenting a known session_id resumes
 	// where it left off (cwd, variables intact). Idle sessions are
@@ -356,7 +390,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			if err != nil {
 				return err
 			}
-			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, deviceID)
+			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, deviceID, fbMetrics)
 			if err != nil {
 				return fmt.Errorf("start wake runtime: %w", err)
 			}
@@ -600,6 +634,16 @@ func handleWakeBatch(
 	log *slog.Logger,
 ) error {
 	log.Info("wake received; opening signaling WS", "request", first.RequestID, "from", first.MobileDeviceID)
+
+	// Wake-event delivery latency: ServerValue.timestamp on the
+	// mobile side → host receive. Skipped when the wake_request
+	// lacked a created_at field (older mobile builds).
+	if first.CreatedAt > 0 {
+		latency := time.Since(time.UnixMilli(first.CreatedAt)).Seconds()
+		rt.Metrics.ObserveWakeLatencySeconds(latency)
+	}
+
+	wsOpenedAt := time.Now()
 	idToken, err := src.Token(ctx)
 	if err != nil {
 		return fmt.Errorf("mint id token: %w", err)
@@ -616,7 +660,10 @@ func handleWakeBatch(
 	if err != nil {
 		return fmt.Errorf("signaling dial: %w", err)
 	}
-	defer sc.Close()
+	defer func() {
+		_ = sc.Close()
+		rt.Metrics.ObserveWSOpenSeconds(time.Since(wsOpenedAt).Seconds())
+	}()
 	log.Info("registered with signaling server", "server_id", sc.ServerID())
 
 	deadline := time.Now().Add(wakeShortTTL)

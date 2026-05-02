@@ -339,6 +339,22 @@ If the refresh token is lost (file deleted, machine reset) or revoked (mobile ap
 
 > **RTDB region.** peershd's wake-listener targets `<project>-default-rtdb.<region>.firebasedatabase.app` where `<region>` defaults to `asia-southeast1` (Singapore). If your RTDB instance lives elsewhere, pass `-firebase-rtdb-region <region>` (or set `PEERSH_BUILD_FIREBASE_RTDB_REGION` at build time so the binary embeds it). The same value must match the hard-coded `_rtdbRegion` in `app/lib/services/rtdb.dart` on the mobile side.
 
+### Optional: peershd Prometheus /metrics
+
+peershd ships a Prometheus exposition endpoint that defaults to `127.0.0.1:9101/metrics` — operator-only, no firewall surface. Useful for confirming wake-event delivery latency, heartbeat failures, and SSE listener reconnects without grepping logs. See [`docs/firebase-mode.md`](../firebase-mode.md#observability) for the full metric inventory and example PromQL.
+
+To scrape from a remote Prometheus, bind to a non-loopback address and set a bearer token:
+
+```sh
+peershd \
+  -firebase-project <your-project-id> \
+  -firebase-api-key <api-key> \
+  -metrics-addr 0.0.0.0:9101 \
+  -metrics-token <bearer-token-or-set-PEERSH_METRICS_TOKEN-env>
+```
+
+peershd refuses to start when `-metrics-addr` is non-loopback and the token is empty, mirroring the `PEERSH_SIGNALING_METRICS_TOKEN` fail-closed contract on the signaling server.
+
 ### Advanced: service-account JSON path
 
 For multi-host deployments where a single operator wants to provision dozens of peershds without each one touching the mobile app, peershd still accepts the service-account-JSON flow:

@@ -83,9 +83,10 @@ func TestDispatch_SingleChildAddedOnly(t *testing.T) {
 	wl := NewWakeListener(nil, &fakeTokenSource{uid: "u1"}, "u1", "host-A")
 	defer close(wl.out)
 
-	doc := map[string]string{
+	doc := map[string]any{
 		"target_device_id": "host-A",
 		"mobile_device_id": "m9",
+		"created_at":       int64(1735689600000),
 	}
 	raw, _ := json.Marshal(doc)
 	ctx := context.Background()
@@ -95,6 +96,31 @@ func TestDispatch_SingleChildAddedOnly(t *testing.T) {
 	case ev := <-wl.out:
 		if ev.RequestID != "r9" || ev.MobileDeviceID != "m9" {
 			t.Errorf("bad event: %+v", ev)
+		}
+		if ev.CreatedAt != 1735689600000 {
+			t.Errorf("CreatedAt = %d; want 1735689600000", ev.CreatedAt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no event surfaced")
+	}
+}
+
+func TestDispatch_OmitsCreatedAtWhenAbsent(t *testing.T) {
+	wl := NewWakeListener(nil, &fakeTokenSource{uid: "u1"}, "u1", "host-A")
+	defer close(wl.out)
+
+	doc := map[string]string{
+		"target_device_id": "host-A",
+		"mobile_device_id": "m-old-app",
+	}
+	raw, _ := json.Marshal(doc)
+	ctx := context.Background()
+	go wl.dispatch(ctx, SSEEvent{Kind: "put", Path: "/r-old", Data: raw})
+
+	select {
+	case ev := <-wl.out:
+		if ev.CreatedAt != 0 {
+			t.Errorf("CreatedAt = %d; want 0 for old app builds", ev.CreatedAt)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no event surfaced")

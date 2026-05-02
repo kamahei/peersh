@@ -77,12 +77,16 @@ func DeleteWakeRequest(ctx context.Context, client *Client, src TokenSource, uid
 // Runtime bundles the RTDB Client, the TokenSource, and the
 // WakeListener so the rest of peershd doesn't need to thread three
 // values through every call site.
+//
+// Metrics is optional; nil disables observation calls (the helpers
+// on *Metrics are nil-safe).
 type Runtime struct {
 	Client   *Client
 	Listener *WakeListener
 	Source   TokenSource
 	UID      string
 	DeviceID string
+	Metrics  *Metrics
 }
 
 // StartWakeRuntime opens an RTDB client (project + region from the
@@ -97,7 +101,9 @@ type Runtime struct {
 // until the first Token() call, so this materialization step is
 // mandatory — relying on src.UID() before this would silently
 // produce empty "/users//..." paths that fail RTDB rules with 401.
-func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSource, deviceID string) (*Runtime, error) {
+//
+// metrics is optional; pass nil to disable observation.
+func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSource, deviceID string, metrics *Metrics) (*Runtime, error) {
 	if _, err := src.Token(ctx); err != nil {
 		return nil, fmt.Errorf("firebase: mint id token: %w", err)
 	}
@@ -110,9 +116,12 @@ func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSo
 		return nil, err
 	}
 	if err := RegisterDevice(ctx, client, src, uid, deviceID); err != nil {
+		metrics.ObserveHeartbeat(false)
 		return nil, err
 	}
+	metrics.ObserveHeartbeat(true)
 	listener := NewWakeListener(client, src, uid, deviceID)
+	listener.metrics = metrics
 	listener.Start(ctx)
 	return &Runtime{
 		Client:   client,
@@ -120,6 +129,7 @@ func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSo
 		Source:   src,
 		UID:      uid,
 		DeviceID: deviceID,
+		Metrics:  metrics,
 	}, nil
 }
 
@@ -128,7 +138,9 @@ func (r *Runtime) Events() <-chan WakeEvent { return r.Listener.C() }
 
 // Heartbeat refreshes the device's last_seen_at timestamp.
 func (r *Runtime) Heartbeat(ctx context.Context) error {
-	return Heartbeat(ctx, r.Client, r.Source, r.UID, r.DeviceID)
+	err := Heartbeat(ctx, r.Client, r.Source, r.UID, r.DeviceID)
+	r.Metrics.ObserveHeartbeat(err == nil)
+	return err
 }
 
 // DeleteWakeRequest removes the wake_request that was just handled.

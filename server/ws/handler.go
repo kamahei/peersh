@@ -182,7 +182,9 @@ type Connection struct {
 	userID   string
 	deviceID string
 
-	registered bool
+	registered       bool
+	registeredAt     time.Time // for SessionDuration observation
+	firstConnectSeen bool      // tracks the first Connect on this conn
 }
 
 // UserID implements room.Conn.
@@ -214,6 +216,7 @@ func (c *Connection) run(ctx context.Context) {
 		if c.registered {
 			c.server.Registry.Unregister(c)
 			c.log.Info("ws: connection closed", "user", c.userID, "device", c.deviceID)
+			c.server.Metrics.observeSessionDuration(time.Since(c.registeredAt).Seconds())
 		}
 		_ = c.ws.Close(websocket.StatusNormalClosure, "")
 		c.server.Metrics.observeConnectionClosed()
@@ -226,6 +229,7 @@ func (c *Connection) run(ctx context.Context) {
 		return
 	}
 	c.registered = true
+	c.registeredAt = time.Now()
 	c.server.Metrics.observeRegisterAccepted()
 	if prev := c.server.Registry.Register(c); prev != nil {
 		c.log.Info("ws: replaced previous registration", "user", c.userID, "device", c.deviceID)
@@ -428,6 +432,10 @@ func (c *Connection) handshake(ctx context.Context) error {
 func (c *Connection) dispatch(ctx context.Context, f *signalv1.Frame) error {
 	switch body := f.GetBody().(type) {
 	case *signalv1.Frame_Connect:
+		if !c.firstConnectSeen {
+			c.firstConnectSeen = true
+			c.server.Metrics.observeRegisterToFirstConnect(time.Since(c.registeredAt).Seconds())
+		}
 		if !c.server.DeviceLimit.Allow(c.deviceID) {
 			c.server.Metrics.observeConnectRejected("rate_limit")
 			return fmt.Errorf("device rate limit")

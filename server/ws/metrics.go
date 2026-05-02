@@ -25,6 +25,17 @@ type Metrics struct {
 	// non-zero rate hints at a misbehaving / frozen client (or a
 	// timeout setting that's too aggressive).
 	IdleClosed prometheus.Counter
+
+	// SessionDuration observes how long each registered connection
+	// stayed open (Register accepted → connection close). In v2-A
+	// Firebase mode the expectation is < 20 s P95.
+	SessionDuration prometheus.Histogram
+
+	// RegisterToFirstConnect observes the time from Register accepted
+	// to the first Connect frame on the same connection. Server-side
+	// proxy for "how cold was the host" — a high P95 indicates the
+	// mobile is racing ahead of the host's wake-up.
+	RegisterToFirstConnect prometheus.Histogram
 }
 
 // NewMetrics builds the Prometheus collectors. NewMetrics does NOT
@@ -64,6 +75,16 @@ func NewMetrics() *Metrics {
 			Name: "peersh_ws_idle_closed_total",
 			Help: "Connections the server closed because no frame arrived within IdleTimeout.",
 		}),
+		SessionDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "peersh_ws_session_duration_seconds",
+			Help:    "Per-connection WebSocket lifetime (Register accepted → close).",
+			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 60, 300},
+		}),
+		RegisterToFirstConnect: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "peersh_ws_register_to_first_connect_seconds",
+			Help:    "Time from Register accepted to the first Connect frame on the same connection.",
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20},
+		}),
 	}
 	return m
 }
@@ -80,6 +101,8 @@ func (m *Metrics) Register(reg prometheus.Registerer) error {
 		m.ConnectsRejected,
 		m.ActiveConnections,
 		m.IdleClosed,
+		m.SessionDuration,
+		m.RegisterToFirstConnect,
 	} {
 		if err := reg.Register(c); err != nil {
 			return err
@@ -144,4 +167,18 @@ func (m *Metrics) observeConnectionIdleClosed() {
 		return
 	}
 	m.IdleClosed.Inc()
+}
+
+func (m *Metrics) observeSessionDuration(seconds float64) {
+	if m == nil || seconds < 0 {
+		return
+	}
+	m.SessionDuration.Observe(seconds)
+}
+
+func (m *Metrics) observeRegisterToFirstConnect(seconds float64) {
+	if m == nil || seconds < 0 {
+		return
+	}
+	m.RegisterToFirstConnect.Observe(seconds)
 }
