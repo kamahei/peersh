@@ -2,166 +2,141 @@ package firebase
 
 import (
 	"context"
-	"os"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestAsString(t *testing.T) {
-	cases := []struct {
-		name string
-		in   any
-		want string
-	}{
-		{"string", "hello", "hello"},
-		{"empty string", "", ""},
-		{"nil", nil, ""},
-		{"int", 42, ""},
-		{"bool", true, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := asString(tc.in)
-			if got != tc.want {
-				t.Errorf("asString(%v) = %q; want %q", tc.in, got, tc.want)
-			}
-		})
-	}
+// fakeTokenSource is a TokenSource for tests.
+type fakeTokenSource struct {
+	uid   string
+	token string
 }
 
-func TestAsBool(t *testing.T) {
+func (f *fakeTokenSource) Token(ctx context.Context) (string, error) { return f.token, nil }
+func (f *fakeTokenSource) UID() string                               { return f.uid }
+
+func TestWakeListener_CloseBeforeStart(t *testing.T) {
+	wl := NewWakeListener(nil, &fakeTokenSource{uid: "u1"}, "u1", "d1")
+	wl.Close()
+	wl.Close()
+}
+
+func TestIsJSONNull(t *testing.T) {
 	cases := []struct {
-		name string
-		in   any
+		raw  string
 		want bool
 	}{
-		{"true", true, true},
-		{"false", false, false},
-		{"nil", nil, false},
-		{"string", "true", false},
-		{"int", 1, false},
+		{"null", true},
+		{"", true},
+		{"{}", false},
+		{"true", false},
+		{`"foo"`, false},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := asBool(tc.in)
-			if got != tc.want {
-				t.Errorf("asBool(%v) = %v; want %v", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
-// CloseIsIdempotent verifies the listener can be Close()d before Start
-// and multiple times safely.
-func TestWakeListener_CloseBeforeStart(t *testing.T) {
-	wl := NewWakeListener(nil, "u1", "d1")
-	wl.Close()
-	wl.Close() // second call must not panic
-}
-
-// --- emulator-gated integration tests --------------------------------------
-//
-// Run only when FIRESTORE_EMULATOR_HOST is set. See devices_test.go for
-// setup instructions.
-
-func TestWakeListener_DeliversAddedDoc(t *testing.T) {
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		t.Skip("FIRESTORE_EMULATOR_HOST not set; skipping emulator integration test")
-	}
-	c := newEmulatorClient(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	uid, dev := "u1", "wake-listener-1"
-	wl := NewWakeListener(c, uid, dev)
-	wl.Start(ctx)
-	defer wl.Close()
-
-	// Allow the listener to subscribe before we write.
-	time.Sleep(200 * time.Millisecond)
-
-	rid := "wake-event-1"
-	_, err := c.Collection("users").Doc(uid).Collection("wake_requests").Doc(rid).Set(ctx, map[string]any{
-		"target_device_id": dev,
-		"mobile_device_id": "mob-1",
-		"consumed":         false,
-	})
-	if err != nil {
-		t.Fatalf("seed wake_request: %v", err)
-	}
-
-	select {
-	case ev := <-wl.C():
-		if ev.RequestID != rid {
-			t.Errorf("RequestID = %q; want %q", ev.RequestID, rid)
+	for _, c := range cases {
+		got := isJSONNull(json.RawMessage(c.raw))
+		if got != c.want {
+			t.Errorf("isJSONNull(%q) = %v; want %v", c.raw, got, c.want)
 		}
-		if ev.MobileDeviceID != "mob-1" {
-			t.Errorf("MobileDeviceID = %q; want %q", ev.MobileDeviceID, "mob-1")
+	}
+}
+
+func TestDispatch_FullSubtree(t *testing.T) {
+	wl := NewWakeListener(nil, &fakeTokenSource{uid: "u1"}, "u1", "host-A")
+	defer close(wl.out) // we never start the run loop, so close to unblock dispatch
+	go func() {
+		// small drainer in case dispatch sends more than one event
+	}()
+
+	subtree := map[string]map[string]string{
+		"r1": {"target_device_id": "host-A", "mobile_device_id": "m1"},
+		"r2": {"target_device_id": "host-B", "mobile_device_id": "m2"},
+		"r3": {"target_device_id": "host-A", "mobile_device_id": "m3"},
+	}
+	raw, _ := json.Marshal(subtree)
+	ctx := context.Background()
+	go wl.dispatch(ctx, SSEEvent{Kind: "put", Path: "/", Data: raw})
+
+	got := map[string]string{}
+	deadline := time.After(time.Second)
+	for i := 0; i < 2; i++ {
+		select {
+		case ev := <-wl.out:
+			got[ev.RequestID] = ev.MobileDeviceID
+		case <-deadline:
+			t.Fatalf("only collected %d events", len(got))
 		}
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for wake event")
+	}
+	if got["r1"] != "m1" {
+		t.Errorf("missing r1: %v", got)
+	}
+	if got["r3"] != "m3" {
+		t.Errorf("missing r3: %v", got)
+	}
+	if _, leaked := got["r2"]; leaked {
+		t.Errorf("r2 (host-B) leaked through filter")
 	}
 }
 
-func TestWakeListener_FiltersConsumedDocs(t *testing.T) {
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		t.Skip("FIRESTORE_EMULATOR_HOST not set; skipping emulator integration test")
+func TestDispatch_SingleChildAddedOnly(t *testing.T) {
+	wl := NewWakeListener(nil, &fakeTokenSource{uid: "u1"}, "u1", "host-A")
+	defer close(wl.out)
+
+	doc := map[string]string{
+		"target_device_id": "host-A",
+		"mobile_device_id": "m9",
 	}
-	c := newEmulatorClient(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	uid, dev := "u1", "wake-listener-2"
-
-	// Pre-seed an already-consumed doc; it must NOT surface to C().
-	_, err := c.Collection("users").Doc(uid).Collection("wake_requests").Doc("old").Set(ctx, map[string]any{
-		"target_device_id": dev,
-		"consumed":         true,
-	})
-	if err != nil {
-		t.Fatalf("seed consumed doc: %v", err)
-	}
-
-	wl := NewWakeListener(c, uid, dev)
-	wl.Start(ctx)
-	defer wl.Close()
+	raw, _ := json.Marshal(doc)
+	ctx := context.Background()
+	go wl.dispatch(ctx, SSEEvent{Kind: "put", Path: "/r9", Data: raw})
 
 	select {
-	case ev := <-wl.C():
-		t.Errorf("unexpected event for consumed doc: %+v", ev)
-	case <-time.After(1 * time.Second):
-		// Expected: no event delivered.
+	case ev := <-wl.out:
+		if ev.RequestID != "r9" || ev.MobileDeviceID != "m9" {
+			t.Errorf("bad event: %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no event surfaced")
 	}
 }
 
-func TestWakeListener_IgnoresOtherDevices(t *testing.T) {
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		t.Skip("FIRESTORE_EMULATOR_HOST not set; skipping emulator integration test")
-	}
-	c := newEmulatorClient(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+func TestDispatch_SkipsDeletion(t *testing.T) {
+	wl := NewWakeListener(nil, &fakeTokenSource{uid: "u1"}, "u1", "host-A")
+	defer close(wl.out)
 
-	uid, dev := "u1", "wake-listener-3"
-	wl := NewWakeListener(c, uid, dev)
-	wl.Start(ctx)
-	defer wl.Close()
-
-	time.Sleep(200 * time.Millisecond)
-
-	// Write a wake aimed at a different device.
-	_, err := c.Collection("users").Doc(uid).Collection("wake_requests").Doc("misdirected").Set(ctx, map[string]any{
-		"target_device_id": "some-other-device",
-		"consumed":         false,
-	})
-	if err != nil {
-		t.Fatalf("seed mismatched doc: %v", err)
-	}
-
+	ctx := context.Background()
+	go wl.dispatch(ctx, SSEEvent{Kind: "put", Path: "/r9", Data: json.RawMessage("null")})
 	select {
-	case ev := <-wl.C():
-		t.Errorf("listener picked up a wake for another device: %+v", ev)
-	case <-time.After(1 * time.Second):
-		// Expected: query filter prevented delivery.
+	case ev := <-wl.out:
+		t.Errorf("unexpected event for deletion: %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+		// expected
+	}
+}
+
+func TestDispatch_SkipsWrongTarget(t *testing.T) {
+	wl := NewWakeListener(nil, &fakeTokenSource{uid: "u1"}, "u1", "host-A")
+	defer close(wl.out)
+
+	doc := map[string]string{
+		"target_device_id": "host-B",
+		"mobile_device_id": "m9",
+	}
+	raw, _ := json.Marshal(doc)
+	ctx := context.Background()
+	go wl.dispatch(ctx, SSEEvent{Kind: "put", Path: "/r9", Data: raw})
+	select {
+	case ev := <-wl.out:
+		t.Errorf("unexpected event for wrong target: %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+		// expected
+	}
+}
+
+func TestListenerSubscribePath(t *testing.T) {
+	got := listenerSubscribePath("alice")
+	if !strings.HasSuffix(got, "/alice/wake_requests") {
+		t.Errorf("subscribe path = %q", got)
 	}
 }

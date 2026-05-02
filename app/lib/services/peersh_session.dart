@@ -1,15 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../bridge.dart';
 import '../models/server_entry.dart';
 import '../models/session_event.dart';
+import 'rtdb.dart';
 
 /// One Riverpod-friendly active session. Owns a session id from the
 /// bridge plus a buffered output stream the UI can consume.
@@ -83,10 +84,6 @@ class PeershSession {
     return session;
   }
 
-  // wake_requests TTL applied client-side; Firestore TTL policy on the
-  // expires_at field cleans up old docs.
-  static const _wakeRequestExpiry = Duration(seconds: 30);
-
   // Heartbeat interval on the host is 5 min; allow 2x + 60s grace
   // before declaring presence stale. Stale doesn't block the dial —
   // it only logs a hint (the connection itself is best-effort with
@@ -98,14 +95,10 @@ class PeershSession {
     required String hostDeviceId,
   }) async {
     try {
-      final db = FirebaseFirestore.instance;
-      final col = db.collection('users').doc(uid).collection('wake_requests');
-      await col.doc().set({
+      final ref = peershDatabase.ref('users/$uid/wake_requests').push();
+      await ref.set({
         'target_device_id': hostDeviceId,
-        'created_at': FieldValue.serverTimestamp(),
-        'expires_at': Timestamp.fromDate(
-            DateTime.now().toUtc().add(_wakeRequestExpiry)),
-        'consumed': false,
+        'created_at': ServerValue.timestamp,
       });
     } catch (e) {
       debugPrint('peersh: wake_request write failed: $e');
@@ -117,16 +110,15 @@ class PeershSession {
     required String hostDeviceId,
   }) async {
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('devices')
-          .doc(hostDeviceId)
+      final snap = await peershDatabase
+          .ref('users/$uid/devices/$hostDeviceId/last_seen_at')
           .get();
       if (!snap.exists) return;
-      final ts = snap.data()?['last_seen_at'];
-      if (ts is! Timestamp) return;
-      final age = DateTime.now().toUtc().difference(ts.toDate().toUtc());
+      final raw = snap.value;
+      // RTDB ServerValue.timestamp resolves to an int (epoch ms).
+      if (raw is! int) return;
+      final age = DateTime.now().toUtc().difference(
+          DateTime.fromMillisecondsSinceEpoch(raw, isUtc: true));
       if (age > _presenceStaleAfter) {
         debugPrint(
             'peersh: host last_seen_at is ${age.inMinutes}min stale; attempting connect anyway');

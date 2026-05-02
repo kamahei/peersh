@@ -2,170 +2,123 @@ package firebase
 
 import (
 	"context"
-	"errors"
-	"os"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	fs "cloud.google.com/go/firestore"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
-func TestIsNotFound(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil", nil, false},
-		{"plain error", errors.New("boom"), false},
-		{"grpc not found", status.Error(codes.NotFound, "missing"), true},
-		{"grpc internal", status.Error(codes.Internal, "internal"), false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := isNotFound(tc.err)
-			if got != tc.want {
-				t.Errorf("isNotFound(%v) = %v; want %v", tc.err, got, tc.want)
-			}
-		})
+func TestDevicePath(t *testing.T) {
+	if got := devicePath("alice", "dev-1"); got != "/users/alice/devices/dev-1" {
+		t.Errorf("devicePath = %q", got)
 	}
 }
 
-func TestOpenFirestoreClient_RejectsEmptyProject(t *testing.T) {
-	_, err := OpenFirestoreClient(context.Background(), "", "")
-	if err == nil {
-		t.Fatal("expected error on empty project id")
-	}
-	if !strings.Contains(err.Error(), "empty project id") {
-		t.Errorf("unexpected error message: %v", err)
+func TestWakeRequestPath(t *testing.T) {
+	if got := wakeRequestPath("alice", "wake-1"); got != "/users/alice/wake_requests/wake-1" {
+		t.Errorf("wakeRequestPath = %q", got)
 	}
 }
 
-// --- emulator-gated integration tests --------------------------------------
-//
-// These run only when FIRESTORE_EMULATOR_HOST is set (the standard env
-// var honored by cloud.google.com/go/firestore). Start an emulator
-// with:
-//
-//	gcloud emulators firestore start --host-port=127.0.0.1:8080
-//
-// then export FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 before
-// `go test ./...`.
+func TestRegisterDevice_WritesServerTimestamp(t *testing.T) {
+	var gotPath, gotBody string
+	var gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
-func newEmulatorClient(t *testing.T) *fs.Client {
-	t.Helper()
-	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
-		t.Skip("FIRESTORE_EMULATOR_HOST not set; skipping emulator integration test")
-	}
-	ctx := context.Background()
-	c, err := fs.NewClient(ctx, "peersh-test")
-	if err != nil {
-		t.Fatalf("emulator NewClient: %v", err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-	return c
-}
-
-func TestRegisterDevice_StampsLastSeenAt(t *testing.T) {
-	c := newEmulatorClient(t)
-	ctx := context.Background()
-	uid, dev := "u1", "dev-register-1"
-	if err := RegisterDevice(ctx, c, uid, dev); err != nil {
-		t.Fatalf("RegisterDevice: %v", err)
-	}
-	snap, err := c.Collection("users").Doc(uid).Collection("devices").Doc(dev).Get(ctx)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if _, ok := snap.Data()["last_seen_at"]; !ok {
-		t.Errorf("expected last_seen_at field; got data=%v", snap.Data())
-	}
-}
-
-func TestRegisterDevice_IsIdempotent(t *testing.T) {
-	c := newEmulatorClient(t)
-	ctx := context.Background()
-	uid, dev := "u1", "dev-register-2"
-	for i := 0; i < 3; i++ {
-		if err := RegisterDevice(ctx, c, uid, dev); err != nil {
-			t.Fatalf("RegisterDevice attempt %d: %v", i, err)
-		}
-	}
-	snap, err := c.Collection("users").Doc(uid).Collection("devices").Doc(dev).Get(ctx)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if _, ok := snap.Data()["last_seen_at"]; !ok {
-		t.Errorf("expected last_seen_at after repeated upserts; got %v", snap.Data())
-	}
-}
-
-func TestHeartbeat_BumpsLastSeenAt(t *testing.T) {
-	c := newEmulatorClient(t)
-	ctx := context.Background()
-	uid, dev := "u1", "dev-heartbeat"
-	if err := RegisterDevice(ctx, c, uid, dev); err != nil {
-		t.Fatalf("RegisterDevice: %v", err)
-	}
-	first, err := c.Collection("users").Doc(uid).Collection("devices").Doc(dev).Get(ctx)
-	if err != nil {
+	c := &Client{baseURL: srv.URL, http: srv.Client()}
+	src := &fakeTokenSource{uid: "alice", token: "tok"}
+	if err := RegisterDevice(context.Background(), c, src, "alice", "dev-1"); err != nil {
 		t.Fatal(err)
 	}
-	firstTs := first.Data()["last_seen_at"].(time.Time)
-
-	// Server timestamps tick at millisecond granularity; sleep to
-	// ensure the second write resolves to a later instant.
-	time.Sleep(10 * time.Millisecond)
-
-	if err := Heartbeat(ctx, c, uid, dev); err != nil {
-		t.Fatalf("Heartbeat: %v", err)
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q; want PUT", gotMethod)
 	}
-	second, err := c.Collection("users").Doc(uid).Collection("devices").Doc(dev).Get(ctx)
-	if err != nil {
+	if !strings.HasPrefix(gotPath, "/users/alice/devices/dev-1/last_seen_at.json?") {
+		t.Errorf("path = %q", gotPath)
+	}
+	if !strings.Contains(gotPath, "auth=tok") {
+		t.Errorf("missing auth: %q", gotPath)
+	}
+	if !strings.Contains(gotBody, `".sv":"timestamp"`) {
+		t.Errorf("body did not include server-timestamp sentinel: %q", gotBody)
+	}
+}
+
+func TestHeartbeat_WritesServerTimestamp(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, http: srv.Client()}
+	src := &fakeTokenSource{uid: "alice", token: "tok"}
+	if err := Heartbeat(context.Background(), c, src, "alice", "dev-1"); err != nil {
 		t.Fatal(err)
 	}
-	secondTs := second.Data()["last_seen_at"].(time.Time)
-	if !secondTs.After(firstTs) {
-		t.Errorf("Heartbeat did not advance last_seen_at: first=%v second=%v", firstTs, secondTs)
+	if gotPath != "/users/alice/devices/dev-1/last_seen_at.json" {
+		t.Errorf("path = %q", gotPath)
 	}
 }
 
-func TestMarkConsumed_FlipsConsumed(t *testing.T) {
-	c := newEmulatorClient(t)
-	ctx := context.Background()
-	uid, rid := "u1", "wake-mark-1"
-	_, err := c.Collection("users").Doc(uid).Collection("wake_requests").Doc(rid).Set(ctx, map[string]any{
-		"target_device_id": "dev-x",
-		"consumed":         false,
-	})
-	if err != nil {
-		t.Fatalf("seed wake_request: %v", err)
+func TestDeleteWakeRequest_SendsDELETE(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, http: srv.Client()}
+	src := &fakeTokenSource{uid: "alice", token: "tok"}
+	if err := DeleteWakeRequest(context.Background(), c, src, "alice", "wake-1"); err != nil {
+		t.Fatal(err)
 	}
-	if err := MarkConsumed(ctx, c, uid, rid); err != nil {
-		t.Fatalf("MarkConsumed: %v", err)
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q; want DELETE", gotMethod)
 	}
-	snap, err := c.Collection("users").Doc(uid).Collection("wake_requests").Doc(rid).Get(ctx)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if v, _ := snap.Data()["consumed"].(bool); !v {
-		t.Errorf("consumed not flipped: %v", snap.Data())
-	}
-	if _, ok := snap.Data()["consumed_at"]; !ok {
-		t.Errorf("consumed_at not stamped: %v", snap.Data())
+	if gotPath != "/users/alice/wake_requests/wake-1.json" {
+		t.Errorf("path = %q", gotPath)
 	}
 }
 
-func TestMarkConsumed_OnMissingDocIsNoop(t *testing.T) {
-	c := newEmulatorClient(t)
+func TestRuntime_DelegatesAll(t *testing.T) {
+	calls := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls[r.Method+" "+r.URL.Path]++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &Client{baseURL: srv.URL, http: srv.Client()}
+	src := &fakeTokenSource{uid: "alice", token: "tok"}
+	rt := &Runtime{
+		Client:   c,
+		Source:   src,
+		UID:      "alice",
+		DeviceID: "dev-1",
+	}
 	ctx := context.Background()
-	// MarkConsumed uses Set+MergeAll which creates the doc if it
-	// doesn't exist (Firestore semantics). The contract is "no
-	// error"; we don't require that the doc remain absent.
-	if err := MarkConsumed(ctx, c, "u1", "wake-never-existed"); err != nil {
-		t.Fatalf("MarkConsumed on missing doc: %v", err)
+	if err := rt.Heartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.DeleteWakeRequest(ctx, "wake-1"); err != nil {
+		t.Fatal(err)
+	}
+	if calls["PUT /users/alice/devices/dev-1/last_seen_at.json"] != 1 {
+		t.Errorf("Heartbeat did not PUT last_seen_at: %v", calls)
+	}
+	if calls["DELETE /users/alice/wake_requests/wake-1.json"] != 1 {
+		t.Errorf("DeleteWakeRequest did not DELETE: %v", calls)
 	}
 }

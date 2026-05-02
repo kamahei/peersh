@@ -131,6 +131,11 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 	firebaseUID := fs.String("firebase-uid", "", "explicit Firebase uid (alternative to -firebase-email)")
 	firebaseAPIKey := fs.String("firebase-api-key", embeddedFirebaseAPIKey, "Firebase Web API key for signInWithCustomToken / token refresh (Firebase signaling mode)")
 	firebaseRegion := fs.String("firebase-region", defaultRegion, "region of the deployed Cloud Functions (claimPairingCode)")
+	defaultRtdbRegion := embeddedFirebaseRtdbRegion
+	if defaultRtdbRegion == "" {
+		defaultRtdbRegion = "asia-southeast1"
+	}
+	firebaseRtdbRegion := fs.String("firebase-rtdb-region", defaultRtdbRegion, "region of the Firebase Realtime Database instance hosting wake_requests / devices")
 	firebasePairCode := fs.String("pair-code", "", "one-time 6-digit pairing code shown by the mobile app's Pair PC screen; consumed once and replaced by a persisted refresh token")
 	firebaseTokenFile := fs.String("firebase-token-file", "", "path to the persisted Firebase refresh token (default: %LOCALAPPDATA%\\peersh\\firebase-refresh-token.txt)")
 	firebaseLogin := fs.Bool("firebase-login", false, "open the default browser to sign in with Google (one-shot bootstrap; replaces -pair-code on desktops with a browser)")
@@ -172,6 +177,7 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 		firebaseUID:         *firebaseUID,
 		firebaseAPIKey:      *firebaseAPIKey,
 		firebaseRegion:      *firebaseRegion,
+		firebaseRtdbRegion:  *firebaseRtdbRegion,
 		firebasePairCode:    *firebasePairCode,
 		firebaseTokenFile:   *firebaseTokenFile,
 		firebaseLogin:       *firebaseLogin,
@@ -191,6 +197,7 @@ type runOpts struct {
 	firebaseUID                    string
 	firebaseAPIKey                 string
 	firebaseRegion                 string
+	firebaseRtdbRegion             string
 	firebasePairCode               string
 	firebaseTokenFile              string
 	firebaseLogin                  bool
@@ -337,29 +344,25 @@ func run(serviceCtx context.Context, opts runOpts) error {
 		if displayName == "" {
 			displayName, _ = os.Hostname()
 		}
-		// Pick auth mode: PSK (default), Firebase pairing (recommended),
-		// or Firebase service-account (advanced).
+		// Pick auth mode: PSK (default) or Firebase. Firebase mode
+		// always uses the wake-listener path — Realtime Database SSE
+		// keeps the signaling WebSocket closed except during a wake
+		// window. The same path serves both pair-code (or browser
+		// login) and service-account credentials, since both produce
+		// Firebase ID tokens via the TokenSource interface.
 		useFirebase := opts.firebaseCredentials != "" || opts.firebaseProjectID != "" || opts.firebaseEmail != "" || opts.firebaseUID != "" || opts.firebasePairCode != "" || opts.firebaseTokenFile != "" || opts.firebaseLogin
 		if useFirebase {
 			src, err := buildFirebaseTokenSource(ctx, opts)
 			if err != nil {
 				return err
 			}
-			// service-account mode is the only path that can use the Go
-			// Firestore client (it requires GCP IAM credentials, not
-			// Firebase ID tokens). Pair-code / browser-login hosts fall
-			// back to the persistent-WS path.
-			if opts.firebaseCredentials != "" {
-				rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseCredentials, src.UID(), deviceID)
-				if err != nil {
-					return fmt.Errorf("start wake runtime: %w", err)
-				}
-				defer rt.Close()
-				go runHeartbeat(ctx, rt)
-				go runWakePump(ctx, rt, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
-			} else {
-				go runSignalingFirebase(ctx, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
+			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, src.UID(), deviceID)
+			if err != nil {
+				return fmt.Errorf("start wake runtime: %w", err)
 			}
+			defer rt.Close()
+			go runHeartbeat(ctx, rt)
+			go runWakePump(ctx, rt, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
 		} else {
 			if userID == "" || pskFile == "" {
 				return errors.New("-signaling requires -user and -psk-file (PSK mode), or -pair-code + -firebase-project + -firebase-api-key (Firebase pairing mode)")
@@ -514,62 +517,6 @@ func buildFirebaseTokenSource(ctx context.Context, opts runOpts) (fbpeershd.Toke
 	return src, nil
 }
 
-// runSignalingFirebase is the Firebase-mode counterpart to runSignaling.
-// Mints an ID token via the TokenSource and uses it on the Register
-// frame; otherwise the Connect-handling loop is identical.
-func runSignalingFirebase(ctx context.Context, url string, src fbpeershd.TokenSource, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn, authz *peerauth.Authz) {
-	log := slog.With("signaling", url, "uid", src.UID(), "device", deviceID)
-	if srflx != nil {
-		log.Info("srflx ready for advertisement", "srflx", srflx)
-	}
-	idToken, err := src.Token(ctx)
-	if err != nil {
-		log.Error("firebase id token mint failed", "err", err)
-		return
-	}
-	sc, err := signaling.Dial(ctx, signaling.DialOptions{
-		URL:             url,
-		FirebaseIDToken: idToken,
-		DeviceID:        deviceID,
-		PublicKey:       pub,
-		Kind:            signalv1.DeviceKind_DEVICE_KIND_WINDOWS_HOST,
-		DisplayName:     displayName,
-		ClientID:        "peershd/0.1+firebase",
-	})
-	if err != nil {
-		log.Error("signaling dial failed", "err", err)
-		return
-	}
-	defer sc.Close()
-	log.Info("registered with signaling server (firebase mode)", "server_id", sc.ServerID())
-
-	for {
-		conn, err := sc.Recv(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-			log.Info("signaling closed", "err", err)
-			return
-		}
-		from := conn.GetFromDeviceId()
-		log.Info("connect request received", "from", from, "candidates", len(conn.GetCandidates()))
-		if authz != nil {
-			authz.Allow(from)
-		}
-		peerCands := punching.SortCandidates(conn.GetCandidates())
-		if err := punching.Punch(ctx, pc, punching.CandidatesToUDPAddrs(peerCands), punching.Options{}); err != nil {
-			log.Warn("punch failed", "err", err)
-		}
-		cands := enumerateCandidates(listenAddr, srflx)
-		if err := sc.SendConnect(ctx, from, cands); err != nil {
-			log.Warn("send Connect reply", "err", err)
-			continue
-		}
-		log.Info("sent local candidates", "to", from, "count", len(cands))
-	}
-}
-
 // Wake-pump tunables. SHORT_TTL caps how long a freshly opened WS waits
 // for the first Connect; DRAIN_TTL is the grace window after each
 // Connect during which we keep the WS open for additional wakes and
@@ -598,14 +545,15 @@ func runHeartbeat(ctx context.Context, rt *fbpeershd.Runtime) {
 	}
 }
 
-// runWakePump consumes wake events from the Firestore listener and,
-// for each batch of events, opens a short-lived signaling WS to receive
-// the matching Connect frames. The WS closes after wakeShortTTL of idle
-// (no Connect arriving) or wakeDrainTTL after the last Connect, leaving
-// peershd in IDLE state with only the listener stream open.
+// runWakePump consumes wake events from the Realtime Database listener
+// and, for each batch of events, opens a short-lived signaling WS to
+// receive the matching Connect frames. The WS closes after wakeShortTTL
+// of idle (no Connect arriving) or wakeDrainTTL after the last Connect,
+// leaving peershd in IDLE state with only the RTDB SSE stream open.
 //
-// Service-account-mode only: pair-code mode keeps runSignalingFirebase
-// for compatibility.
+// Both pair-code and service-account modes use this single path; the
+// only difference is which TokenSource implementation produces the
+// Firebase ID token used to authenticate the RTDB stream.
 func runWakePump(
 	ctx context.Context,
 	rt *fbpeershd.Runtime,
@@ -711,8 +659,8 @@ func handleWakeBatch(
 		}
 	}
 
-	if err := rt.MarkConsumed(ctx, first.RequestID); err != nil {
-		log.Warn("mark consumed failed", "err", err, "request", first.RequestID)
+	if err := rt.DeleteWakeRequest(ctx, first.RequestID); err != nil {
+		log.Warn("wake_request delete failed", "err", err, "request", first.RequestID)
 	}
 	return nil
 }

@@ -1,110 +1,129 @@
 # Firebase mode operations
 
 Firebase mode replaces PSK signing with Firebase Auth on the signaling
-WebSocket. It also unlocks an optional cost-saving path on the host:
-the *wake listener*, which lets `peershd` keep the signaling WS closed
-between sessions and only open it for a few seconds in response to a
-mobile-side wake request.
+WebSocket. Cost-sensitive deployments also benefit from the *wake
+listener*: peershd keeps the signaling WS closed between sessions and
+opens it for a few seconds in response to a mobile-side wake request
+written to the Realtime Database.
 
 ## Host modes
 
-There are two Firebase host configurations. The choice is determined by
-which credentials the operator gave to `peershd`.
+The host has three Firebase bootstrap paths. All three converge on the
+same wake-listener runtime and the same RTDB-backed wake events.
 
-### Service-account mode (wake-listener path)
+### `-firebase-login` (Google sign-in via browser)
 
-Set up with `-firebase-credentials path/to/service-account.json`.
+Run once on a desktop with a browser. Opens an OAuth consent flow,
+exchanges the result for a Firebase refresh token, persists it to
+`%LOCALAPPDATA%\peersh\firebase-refresh-token.txt`. Subsequent runs
+mint Firebase ID tokens from the persisted refresh token.
 
-`peershd` opens a Firestore `Listen` gRPC stream over
-`users/{uid}/wake_requests`. The signaling WebSocket is closed except
-during a short wake window (~15 s after each wake event, with a 5 s
-drain after each Connect). Cloud Run request-time billing is
-proportional to the number of sessions, not to host uptime.
+### `-pair-code 123456`
 
-The Go Firestore SDK (`cloud.google.com/go/firestore`) uses GCP IAM
-credentials, which is why this path is gated on a service-account JSON.
+Headless / no-browser variant. The mobile app's Pair PC screen issues
+a 6-digit code via the `mintPairingCode` Cloud Function; peershd
+exchanges it for a refresh token via `claimPairingCode`. Same
+persisted refresh token output.
 
-### Pair-code mode (persistent-WS fallback)
+### `-firebase-credentials path/to/sa.json`
 
-Set up with `-pair-code 123456` (or the persisted refresh token from a
-prior pairing).
+Operator-managed service account JSON. The service account can mint
+custom tokens for any Firebase user; peershd narrows that to a single
+uid via `-firebase-email` or `-firebase-uid`. Useful for fully
+unattended hosts with no browser and no human-typed pairing.
 
-`peershd` holds the signaling WebSocket open for the whole process
-lifetime. Mobile-side wake requests are written but ignored; the host
-already has an active registration and receives Connect frames
-directly. Cloud Run is billed for the duration of the WS.
+All three modes produce Firebase ID tokens via the same `TokenSource`
+interface; the wake-listener runtime is mode-agnostic.
 
-This path exists because pair-code hosts have only Firebase ID tokens
-(via the Identity Toolkit refresh-token flow), and the Go Firestore
-SDK does not accept those tokens.
-
-If you want the wake-listener cost benefit, configure a
-service-account JSON. A future v2 may add a Firestore REST listener
-that accepts Firebase ID tokens to lift this restriction.
-
-## Wake sequence (service-account mode)
+## Wake sequence
 
 ```
-mobile               Firestore                       peershd
-  | Firebase sign-in    |                              | wake listener (gRPC stream) idle
-  | wake_request write -> snapshot push -------------> | WS Dial -> Hello -> Register
-  |                                                    | Recv Connect, Punch, SendConnect
+mobile               Realtime Database               peershd
+  | Firebase sign-in    |                              | RTDB SSE listener (idle):
+  |                     |                              |   GET /users/{uid}/wake_requests.json
+  |                     |                              |   Accept: text/event-stream
+  |                     |                              |   ?auth=<firebase id token>
+  | wake_request push -> event: put ----------------->| WS Dial -> Hello -> Register
+  |                                                    | Recv Connect, peerauth.Allow
+  |                                                    | Punch, SendConnect (host cands)
   |<------ Connect (host candidates) -----------------|
-  | Punch / QUIC handshake                             |
-  |== QUIC up =========================================| WS close, wake_request consumed
+  | Punch, QUIC handshake                              |
+  |== QUIC up =========================================| WS close, DELETE wake_request
   | pty / exec ...
 ```
 
-WS open time on each side is on the order of a few seconds. Cloud Run's
-60-minute request timeout is irrelevant in this mode.
+WS open time on each side is on the order of a few seconds. The RTDB
+SSE stream goes to `*.firebasedatabase.app` (not Cloud Run), so the
+persistent connection contributes nothing to Cloud Run billing.
 
-## Firestore TTL on wake_requests
+## Realtime Database setup (one-time, per Firebase project)
 
-Wake-request documents expire 30 s after creation. Configure a TTL
-policy in the Firebase console so old documents are garbage-collected
-automatically:
+The Go RTDB client targets a single database instance per project.
+Create it manually before the first deploy:
 
-1. Open the Firebase console -> Firestore Database -> TTL.
-2. Add a policy on collection group `wake_requests`, field
-   `expires_at`.
-3. Status takes ~24 hours to apply but is no-op for fresh documents in
-   the meantime — the host's `consumed` filter ignores stale entries.
+1. Firebase Console -> Build -> Realtime Database -> Create Database.
+2. Region: pick `asia-southeast1` (Singapore) for jp users; `europe-west1`
+   or `us-central1` are the other Firebase RTDB regions.
+   `asia-northeast1` is **not** a valid RTDB region.
+3. Start in "Locked mode". The `firebase deploy --only database` step
+   below uploads the real rules.
+4. Deploy rules + verify:
+
+   ```
+   firebase deploy --only database --project <project-id>
+   ```
+
+If the project has multiple Firebase apps (e.g. Android + iOS), the
+single default database is shared by all of them.
 
 ## Presence model
 
-`users/{uid}/devices/{deviceId}.last_seen_at` is refreshed by `peershd`
-every 5 minutes. Mobile clients use it as a freshness hint before
-attempting to connect:
+`/users/{uid}/devices/{deviceId}/last_seen_at` (RTDB, epoch ms) is
+refreshed by peershd every 5 minutes via a single PUT. Mobile clients
+read this once before issuing a wake request and warn (but still
+attempt) when the timestamp is older than 11 minutes (5 min heartbeat
+x 2 + 60 s buffer).
 
-- If the timestamp is within 11 minutes (5 min heartbeat × 2 + 60 s
-  buffer), the host is treated as online.
-- Older timestamps are reported in the debug log; the dial still
-  proceeds (mobile-core's SendConnect retry covers cold-start races).
-- Missing documents are treated as "unknown" and the dial proceeds
-  optimistically (preserving compatibility with pair-code-mode hosts
-  that don't update this field).
+## Wake request payload
+
+```
+/users/{uid}/wake_requests/{auto-id}
+{
+  target_device_id: <16-char base32 deviceId>,
+  created_at: ServerValue.timestamp,
+  mobile_device_id?: <optional, for log correlation>
+}
+```
+
+The host deletes the entry immediately after handling the wake. RTDB
+SSE then propagates the deletion as `event: put` with `data: null`,
+which the listener ignores. Crashed hosts leave dead entries; they
+are harmless because the listener filters by `target_device_id` and
+the entries are tiny.
 
 ## Known limitations
 
-- **PC sleep / hibernation.** `peershd` must be running to receive
-  wake requests. Sleeping or hibernating the PC drops the Firestore
-  listener; wake-up from a fully suspended state is out of scope for
-  v1. Configure the Windows power plan so the PC stays awake.
-- **Pair-code mode does not benefit from cost reduction.** It keeps
-  the persistent WS for compatibility. Use `-firebase-credentials`
-  if Cloud Run billing matters.
-- **Hard crash leaves last_seen_at stale.** Without a graceful
-  shutdown, `last_seen_at` keeps the value from the last heartbeat.
-  Mobile clients fall back to the SendConnect retry loop after a
-  failed connection attempt and surface a user-visible error within a
-  few seconds.
+- **PC sleep / hibernation.** peershd must be running to receive wake
+  requests. Sleeping or hibernating the PC drops the SSE stream;
+  wake-up from a fully suspended state is out of scope. Configure the
+  Windows power plan so the PC stays awake.
+- **Single RTDB region per project.** The mobile app constructs the
+  database URL from the Firebase project id + a hard-coded region
+  (`asia-southeast1` today). Operators in other regions need to edit
+  `app/lib/services/rtdb.dart` and rebuild the APK.
+- **No automatic firebase_options.dart `databaseURL` field.** Until
+  `flutterfire configure` is re-run after creating the RTDB instance,
+  the mobile app sources the URL from the helper above instead of
+  FirebaseOptions.
 
 ## Operational metrics worth watching
 
 - Cloud Run `request_count` and `request_latencies`: should drop
-  sharply once service-account-mode hosts are deployed.
-- Firestore document writes: the dominant new write is the host
-  heartbeat (~12/hour/device). Wake_requests are small and TTL-bounded.
-- Firebase Cloud Functions invocations: `onSessionCreated` is
-  currently dead code (no caller writes `users/{uid}/sessions`); it
-  remains for a future v2 path.
+  sharply once Firebase-mode hosts are deployed.
+- Firestore writes: the dominant remaining writer is the signaling
+  server's Register handler (one PutDevice per wake — same as v1).
+- RTDB writes: ~12/hour/device for heartbeats; one PUT + one DELETE
+  per wake from the host; one POST per session from the mobile.
+- RTDB reads: one snapshot read per session from the mobile (presence
+  freshness check). Wake delivery counts are tracked under "open
+  connections" rather than read units.

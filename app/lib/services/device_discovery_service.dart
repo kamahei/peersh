@@ -5,15 +5,19 @@
 // server entry and that's what the mobile app dialed. Useful for one
 // host but tedious for several.
 //
-// Phase 5b lifts this restriction by reading a Firestore-backed
-// device list. peersh-signaling writes
-// `users/{uid}/devices/{deviceId}` on each Register frame (with kind,
-// display_name, last_seen_at); the mobile app reads the same
-// collection and surfaces a picker.
+// Phase 5b lifts this restriction by reading a Realtime-Database-backed
+// device list. peershd writes
+// `users/{uid}/devices/{deviceId}/last_seen_at` from its wake-listener
+// runtime; the mobile app reads the same subtree and surfaces a picker.
+// Display name and kind ride alongside last_seen_at when the signaling
+// server's Register handler propagates them (today the server still
+// writes those to Firestore — we treat their absence in RTDB as a
+// missing field and fall back to the deviceId as the display label).
 
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 import '../models/server_entry.dart';
+import 'rtdb.dart';
 
 /// One device the mobile app may dial.
 class DiscoveredDevice {
@@ -46,8 +50,6 @@ abstract class DeviceDiscoveryService {
 }
 
 /// PSK fallback — returns whatever the user typed into ServerEntry.
-/// Phase 4b's behaviour, lifted into this interface so the rest of
-/// the app can consume the abstraction.
 class PskDeviceDiscoveryService implements DeviceDiscoveryService {
   const PskDeviceDiscoveryService();
 
@@ -63,53 +65,44 @@ class PskDeviceDiscoveryService implements DeviceDiscoveryService {
   }
 }
 
-/// Firestore-backed discovery for Firebase-mode servers. Reads
-/// `users/{uid}/devices` and returns Windows-host entries sorted by
-/// most-recently-seen. Caller must already be signed in (the rules
-/// require auth.uid == userId).
+/// Realtime-Database-backed discovery for Firebase-mode servers. Reads
+/// `users/{uid}/devices` and returns entries sorted by most-recently-seen.
+/// Caller must already be signed in (RTDB rules require auth.uid == uid).
 class FirebaseDeviceDiscoveryService implements DeviceDiscoveryService {
-  FirebaseDeviceDiscoveryService({required this.uid, FirebaseFirestore? db})
-      : _db = db ?? FirebaseFirestore.instance;
+  FirebaseDeviceDiscoveryService({required this.uid, FirebaseDatabase? db})
+      : _db = db ?? peershDatabase;
 
   final String uid;
-  final FirebaseFirestore _db;
-
-  /// Server-side `core/proto/peersh/signal/v1.DeviceKind` enum:
-  ///   0 = unspecified
-  ///   1 = windows host
-  ///   2 = mobile client
-  ///   3 = cli
-  static const int _kindWindowsHost = 1;
+  final FirebaseDatabase _db;
 
   @override
   Future<List<DiscoveredDevice>> list(ServerEntry server) async {
-    final snap = await _db
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .get();
+    final snap = await _db.ref('users/$uid/devices').get();
+    if (!snap.exists) return const [];
+    final raw = snap.value;
+    if (raw is! Map) return const [];
     final out = <DiscoveredDevice>[];
-    for (final d in snap.docs) {
-      final data = d.data();
-      final kind = (data['kind'] as num?)?.toInt() ?? 0;
-      if (kind != _kindWindowsHost) continue;
+    raw.forEach((key, value) {
+      if (key is! String) return;
+      String? displayName;
+      int lastSeen = 0;
+      if (value is Map) {
+        final dn = value['display_name'];
+        if (dn is String && dn.trim().isNotEmpty) displayName = dn;
+        final ls = value['last_seen_at'];
+        if (ls is int) lastSeen = ls;
+      } else if (value is int) {
+        // Host wrote only last_seen_at as a leaf int.
+        lastSeen = value;
+      }
       out.add(DiscoveredDevice(
-        deviceId: d.id,
-        displayName: (data['display_name'] as String?)?.trim().isNotEmpty == true
-            ? data['display_name'] as String
-            : d.id,
+        deviceId: key,
+        displayName: displayName ?? key,
         kind: 'host',
-        lastSeenUnixMs: _readMillis(data['last_seen_at']),
+        lastSeenUnixMs: lastSeen,
       ));
-    }
+    });
     out.sort((a, b) => b.lastSeenUnixMs.compareTo(a.lastSeenUnixMs));
     return out;
-  }
-
-  static int _readMillis(Object? v) {
-    if (v is Timestamp) return v.millisecondsSinceEpoch;
-    if (v is DateTime) return v.millisecondsSinceEpoch;
-    if (v is int) return v;
-    return 0;
   }
 }

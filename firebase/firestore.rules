@@ -24,12 +24,9 @@ service cloud.firestore {
       match /sessions/{sessionId} {
         allow read, write: if isOwner(userId);
       }
-      // wake_requests/* are short-lived per-session wake notifications
-      // written by the mobile client and consumed by the host via the
-      // service-account-mode Firestore listener.
-      match /wake_requests/{requestId} {
-        allow read, write: if isOwner(userId);
-      }
+      // Wake events moved to Realtime Database in v2-A. See
+      // database.rules.json. Firestore wake_requests rule is no
+      // longer needed.
     }
 
     // ops/* is internal state owned by the Cloud Functions / signaling

@@ -64,7 +64,7 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 ### Windows host (`peershd`)
 
 - Single Go binary, runnable as a console app or a Windows Service / scheduled logon task (`peershd -install` / `-install-logon-task`).
-- Owns: device keypair generation and persistence, signaling registration, NAT-punched UDP socket, QUIC server, ConPTY-backed PowerShell host, session manager (idle timeout, ring buffer, reattach), Firestore wake listener (Firebase service-account mode only — replaces the persistent signaling WebSocket on cost-sensitive deployments; pair-code mode keeps the persistent WS), self-update subcommand.
+- Owns: device keypair generation and persistence, signaling registration, NAT-punched UDP socket, QUIC server, ConPTY-backed PowerShell host, session manager (idle timeout, ring buffer, reattach), Realtime Database wake listener (Firebase mode — replaces the persistent signaling WebSocket; works for both pair-code and service-account credentials via the SSE REST API and Firebase ID tokens), self-update subcommand.
 
 ### CLI client (`peersh-cli`)
 

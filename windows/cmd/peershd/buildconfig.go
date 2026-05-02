@@ -31,12 +31,13 @@ package main
 // should hold any value that would be dangerous in a binary an end user
 // can grep through.
 var (
-	embeddedFirebaseAPIKey     string
-	embeddedFirebaseProjectID  string
-	embeddedFirebaseRegion     string
-	embeddedSignalingURL       string
-	embeddedGoogleClientID     string
-	embeddedGoogleClientSecret string
+	embeddedFirebaseAPIKey      string
+	embeddedFirebaseProjectID   string
+	embeddedFirebaseRegion      string
+	embeddedFirebaseRtdbRegion  string
+	embeddedSignalingURL        string
+	embeddedGoogleClientID      string
+	embeddedGoogleClientSecret  string
 
 	// Self-update bookkeeping. embeddedVersion is checked against the
 	// latest release tag at update-time; embeddedUpdateRepo is the

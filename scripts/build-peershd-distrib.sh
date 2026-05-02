@@ -30,6 +30,7 @@ fi
 : "${PEERSH_BUILD_GOOGLE_CLIENT_ID:?required}"
 : "${PEERSH_BUILD_GOOGLE_CLIENT_SECRET:?required}"
 : "${PEERSH_BUILD_FIREBASE_REGION:=asia-northeast1}"
+: "${PEERSH_BUILD_FIREBASE_RTDB_REGION:=asia-southeast1}"
 : "${PEERSH_BUILD_SIGNALING_URL:=}"
 : "${PEERSH_BUILD_VERSION:=dev-$(git -C "$(dirname "$0")/.." rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 : "${PEERSH_BUILD_UPDATE_REPO:=}"
@@ -39,6 +40,7 @@ GOOS=windows GOARCH=amd64 go build -trimpath \
     -X 'main.embeddedFirebaseAPIKey=${PEERSH_BUILD_FIREBASE_API_KEY}'
     -X 'main.embeddedFirebaseProjectID=${PEERSH_BUILD_FIREBASE_PROJECT_ID}'
     -X 'main.embeddedFirebaseRegion=${PEERSH_BUILD_FIREBASE_REGION}'
+    -X 'main.embeddedFirebaseRtdbRegion=${PEERSH_BUILD_FIREBASE_RTDB_REGION}'
     -X 'main.embeddedSignalingURL=${PEERSH_BUILD_SIGNALING_URL}'
     -X 'main.embeddedGoogleClientID=${PEERSH_BUILD_GOOGLE_CLIENT_ID}'
     -X 'main.embeddedGoogleClientSecret=${PEERSH_BUILD_GOOGLE_CLIENT_SECRET}'
