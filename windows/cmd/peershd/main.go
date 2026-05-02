@@ -107,7 +107,8 @@ func main() {
 // (with a context that the SCM cancels at Stop time).
 func runWithCtx(serviceCtx context.Context, args []string) error {
 	fs := flag.NewFlagSet("peershd", flag.ExitOnError)
-	listen := fs.String("listen", ":7777", "UDP address to listen on for QUIC")
+	listen := fs.String("listen", "127.0.0.1:7777", "UDP address to listen on for QUIC; defaults to loopback so an unconfigured peershd is not reachable from the network")
+	insecureDirect := fs.Bool("insecure-direct", false, "explicitly allow binding a non-loopback -listen without -signaling; without this flag, non-loopback binds require signaling to be enabled so peershd is not a public no-auth shell")
 	certDir := fs.String("cert-dir", "", "directory for self-signed dev cert (default: platform-specific app data dir)")
 	debug := fs.Bool("debug", false, "enable debug logging")
 	defaultRegion := embeddedFirebaseRegion
@@ -146,6 +147,7 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 
 	return run(serviceCtx, runOpts{
 		listen:              *listen,
+		insecureDirect:      *insecureDirect,
 		certDir:             *certDir,
 		signalingURL:        *signalingURL,
 		userID:              *userID,
@@ -168,6 +170,7 @@ func runWithCtx(serviceCtx context.Context, args []string) error {
 
 type runOpts struct {
 	listen, certDir, signalingURL string
+	insecureDirect                bool
 	userID, pskFile               string
 	displayName, stunServer       string
 	firebaseProjectID             string
@@ -181,6 +184,20 @@ type runOpts struct {
 	firebaseLogin                 bool
 	googleClientID                string
 	googleClientSecret            string
+}
+
+// isLoopbackBind returns true when udpAddr resolves to a loopback IP.
+// "Unspecified" (0.0.0.0 / ::) does not count: an unspecified bind is
+// reachable on every interface, which is exactly what direct mode must
+// not do without -insecure-direct.
+func isLoopbackBind(udpAddr *net.UDPAddr) bool {
+	if udpAddr == nil || udpAddr.IP == nil {
+		return false
+	}
+	if udpAddr.IP.IsUnspecified() {
+		return false
+	}
+	return udpAddr.IP.IsLoopback()
 }
 
 func defaultCertDir() string {
@@ -235,6 +252,19 @@ func run(serviceCtx context.Context, opts runOpts) error {
 	if err != nil {
 		return fmt.Errorf("resolve listen %q: %w", listen, err)
 	}
+
+	// Direct (no-signaling) mode has no signaling channel to authorize
+	// the peer (peerauth runs nil; serveConn skips the check). Refuse to
+	// expose that combination on a non-loopback bind unless the operator
+	// explicitly opted in with -insecure-direct, so a default install
+	// does not become a public no-auth shell.
+	if signalingURL == "" && !isLoopbackBind(udpAddr) && !opts.insecureDirect {
+		return fmt.Errorf("refusing to bind non-loopback -listen %q without -signaling: peershd would be reachable from the network with no signaling-issued authorization. Either enable signaling, change -listen to a loopback address, or pass -insecure-direct if you really mean it", listen)
+	}
+	if opts.insecureDirect && signalingURL == "" && !isLoopbackBind(udpAddr) {
+		slog.Warn("INSECURE-DIRECT MODE: peershd is reachable from the network with no signaling authorization; any client presenting a valid ed25519 cert will get a shell", "listen", listen)
+	}
+
 	pc, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		return fmt.Errorf("listen udp %q: %w", listen, err)
