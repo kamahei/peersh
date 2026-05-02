@@ -44,6 +44,7 @@ import (
 	"sync"
 
 	fbpeershd "github.com/peersh/peersh/windows/firebase"
+	"github.com/peersh/peersh/windows/peerauth"
 	"github.com/peersh/peersh/windows/ptyhost"
 	"github.com/peersh/peersh/windows/pwsh"
 )
@@ -272,8 +273,17 @@ func run(serviceCtx context.Context, opts runOpts) error {
 	defer mgr.Close()
 	go mgr.Run(ctx)
 
-	// Optional signaling-mode goroutine.
+	// Authz bridges signaling Connect grants to the QUIC accept path.
+	// In direct (no-signaling) mode authz stays nil; the accept loop then
+	// only relies on peertls's pubkey-binding check, since there is no
+	// signaling channel to carry membership policy. The 60-second TTL is
+	// generous enough to cover NAT punching and a few dial retries while
+	// still expiring abandoned grants.
+	var authz *peerauth.Authz
 	if signalingURL != "" {
+		authz = peerauth.New(60 * time.Second)
+		go authz.RunSweeper(ctx, 10*time.Second)
+
 		if displayName == "" {
 			displayName, _ = os.Hostname()
 		}
@@ -285,7 +295,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			if err != nil {
 				return err
 			}
-			go runSignalingFirebase(ctx, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc)
+			go runSignalingFirebase(ctx, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
 		} else {
 			if userID == "" || pskFile == "" {
 				return errors.New("-signaling requires -user and -psk-file (PSK mode), or -pair-code + -firebase-project + -firebase-api-key (Firebase pairing mode)")
@@ -294,7 +304,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			if err != nil {
 				return fmt.Errorf("read psk: %w", err)
 			}
-			go runSignaling(ctx, signalingURL, userID, secret, deviceID, pub, displayName, listenAddr, srflx, pc)
+			go runSignaling(ctx, signalingURL, userID, secret, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
 		}
 	}
 
@@ -308,7 +318,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			}
 			return fmt.Errorf("Accept: %w", err)
 		}
-		go serveConn(ctx, conn, mgr)
+		go serveConn(ctx, conn, mgr, authz)
 	}
 }
 
@@ -318,7 +328,11 @@ func run(serviceCtx context.Context, opts runOpts) error {
 //
 // srflx, if non-nil, is included as a SERVER_REFLEXIVE candidate. pc is the
 // shared QUIC UDP socket; punching writes to it concurrently with QUIC reads.
-func runSignaling(ctx context.Context, url, userID string, secret []byte, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn) {
+//
+// authz is the bridge to the QUIC accept loop: every Connect that arrives
+// is recorded as an "allowed to dial me right now" grant. The accept loop
+// later consumes that grant when the matching mTLS handshake lands.
+func runSignaling(ctx context.Context, url, userID string, secret []byte, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn, authz *peerauth.Authz) {
 	log := slog.With("signaling", url, "user", userID, "device", deviceID)
 	if srflx != nil {
 		log.Info("srflx ready for advertisement", "srflx", srflx)
@@ -351,6 +365,13 @@ func runSignaling(ctx context.Context, url, userID string, secret []byte, device
 		}
 		from := conn.GetFromDeviceId()
 		log.Info("connect request received", "from", from, "candidates", len(conn.GetCandidates()))
+
+		// Authorize this device_id to land on the QUIC accept loop. The
+		// grant is one-shot and TTL-bounded (see peerauth) so a peer
+		// that fails to dial does not leave a lingering hole.
+		if authz != nil {
+			authz.Allow(from)
+		}
 
 		// Punch the peer's candidates first so our NAT installs the mapping
 		// for their address before they QUIC-dial us. Sorted by preferred
@@ -432,7 +453,7 @@ func buildFirebaseTokenSource(ctx context.Context, opts runOpts) (fbpeershd.Toke
 // runSignalingFirebase is the Firebase-mode counterpart to runSignaling.
 // Mints an ID token via the TokenSource and uses it on the Register
 // frame; otherwise the Connect-handling loop is identical.
-func runSignalingFirebase(ctx context.Context, url string, src fbpeershd.TokenSource, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn) {
+func runSignalingFirebase(ctx context.Context, url string, src fbpeershd.TokenSource, deviceID string, pub ed25519.PublicKey, displayName string, listenAddr *net.UDPAddr, srflx *net.UDPAddr, pc net.PacketConn, authz *peerauth.Authz) {
 	log := slog.With("signaling", url, "uid", src.UID(), "device", deviceID)
 	if srflx != nil {
 		log.Info("srflx ready for advertisement", "srflx", srflx)
@@ -469,6 +490,9 @@ func runSignalingFirebase(ctx context.Context, url string, src fbpeershd.TokenSo
 		}
 		from := conn.GetFromDeviceId()
 		log.Info("connect request received", "from", from, "candidates", len(conn.GetCandidates()))
+		if authz != nil {
+			authz.Allow(from)
+		}
 		peerCands := punching.SortCandidates(conn.GetCandidates())
 		if err := punching.Punch(ctx, pc, punching.CandidatesToUDPAddrs(peerCands), punching.Options{}); err != nil {
 			log.Warn("punch failed", "err", err)
@@ -540,14 +564,29 @@ func enumerateCandidates(listen *net.UDPAddr, srflx *net.UDPAddr) []*signalv1.En
 // ExecRequest. The host's pwsh process is owned by mgr, not by this
 // function — when the QUIC connection closes, the session is detached
 // (mgr's idle timer takes over) instead of killed.
-func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager) {
+func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager, authz *peerauth.Authz) {
 	remote := conn.RemoteAddr().String()
-	log := slog.With("peer", remote)
+	peerID := peertls.PeerDeviceID(conn.TLSState())
+	log := slog.With("peer", remote, "peer_device_id", peerID)
 	log.Info("connection accepted")
 	defer func() {
 		_ = conn.CloseWithError(0, "")
 		log.Info("connection closed")
 	}()
+
+	// authz is nil in direct (no-signaling) mode, where there is no
+	// signaling channel to issue grants. Production deployments always
+	// run with signaling enabled and the check is mandatory there.
+	if authz != nil {
+		if peerID == "" {
+			log.Warn("rejecting peer without ed25519 cert")
+			return
+		}
+		if !authz.Check(peerID) {
+			log.Warn("rejecting unauthorized peer device_id")
+			return
+		}
+	}
 
 	ctrl, err := conn.AcceptStream(ctx)
 	if err != nil {
