@@ -105,12 +105,16 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
   }
 
   bool get _canSave {
-    if (_wsUrl.text.trim().isEmpty || _target.text.trim().isEmpty) return false;
+    if (_wsUrl.text.trim().isEmpty) return false;
     if (_authMode == ServerAuthMode.psk) {
-      return _userId.text.trim().isNotEmpty && _psk.text.trim().isNotEmpty;
+      // PSK mode: target device id is required (no Firestore-backed
+      // device picker fallback).
+      return _target.text.trim().isNotEmpty &&
+          _userId.text.trim().isNotEmpty &&
+          _psk.text.trim().isNotEmpty;
     }
-    // Firebase mode: User/PSK fields are not required (Google sign-in
-    // happens at connect time).
+    // Firebase mode: target device id is optional — left empty, the
+    // connect flow surfaces a picker that reads users/{uid}/devices.
     return true;
   }
 
@@ -215,9 +219,13 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
           const SizedBox(height: 16),
           TextField(
             controller: _target,
-            decoration: const InputDecoration(
-              labelText: 'Target device_id',
-              hintText: '16 base32 chars from peershd startup log',
+            decoration: InputDecoration(
+              labelText: _authMode == ServerAuthMode.firebase
+                  ? 'Target device_id (optional — picker on connect)'
+                  : 'Target device_id',
+              hintText: _authMode == ServerAuthMode.firebase
+                  ? 'Leave empty to choose at connect time'
+                  : '16 base32 chars from peershd startup log',
             ),
             onChanged: (_) => setState(() {}),
           ),
