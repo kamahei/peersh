@@ -66,12 +66,43 @@ type Session struct {
 	lastPTYID int64 // monotonically increasing, used as PTYRequest.pty_id
 }
 
+// loadOrGeneratePriv returns an ed25519 private key sourced from keyDir
+// when non-empty (persistent identity), or freshly generated when empty
+// (ephemeral identity). All errors are wrapped with enough context for
+// the gomobile-bound caller to surface a useful message.
+func loadOrGeneratePriv(keyDir string) (ed25519.PrivateKey, error) {
+	if keyDir == "" {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generate device key: %w", err)
+		}
+		return priv, nil
+	}
+	priv, err := peertls.LoadOrGenerateKey(keyDir)
+	if err != nil {
+		return nil, fmt.Errorf("load device key from %q: %w", keyDir, err)
+	}
+	return priv, nil
+}
+
 // OpenDirectSession dials addr (host:port) over QUIC and runs Hello. No
 // signaling, no target device_id pin. Used by the spike screen and dev
 // workflows. peershd requires a client cert (mTLS) so we still present
 // one, but we cannot verify the server's identity without an expected
 // device_id supplied through some other channel.
 func OpenDirectSession(addr string) (*Session, error) {
+	return openDirectInternal(addr, "")
+}
+
+// OpenDirectSessionWithKey is OpenDirectSession with a persistent key
+// directory: pass a path under the platform's secure storage to keep
+// the same client device_id across reconnects. keyDir == "" matches
+// the ephemeral-key OpenDirectSession behavior.
+func OpenDirectSessionWithKey(addr, keyDir string) (*Session, error) {
+	return openDirectInternal(addr, keyDir)
+}
+
+func openDirectInternal(addr, keyDir string) (*Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
@@ -82,10 +113,10 @@ func OpenDirectSession(addr string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ListenUDP: %w", err)
 	}
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := loadOrGeneratePriv(keyDir)
 	if err != nil {
 		_ = pc.Close()
-		return nil, fmt.Errorf("generate device key: %w", err)
+		return nil, err
 	}
 	cert, err := peertls.CertFromEd25519(priv)
 	if err != nil {
@@ -120,7 +151,17 @@ func OpenDirectSession(addr string) (*Session, error) {
 // firebaseAppCheckToken is forwarded as the App Check token on the
 // Register frame; pass an empty string when App Check is not in use.
 func OpenFirebaseSignalingSession(signalingURL, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer string) (*Session, error) {
-	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer)
+	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, "")
+}
+
+// OpenFirebaseSignalingSessionWithKey is OpenFirebaseSignalingSession
+// with a persistent key directory: keyDir is a platform-supplied path
+// (typically under secure storage) where the device's long-lived
+// ed25519 key is loaded or generated. Reusing the same keyDir gives
+// the device a stable device_id across reconnects. keyDir == ""
+// matches the ephemeral-key OpenFirebaseSignalingSession behavior.
+func OpenFirebaseSignalingSessionWithKey(signalingURL, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir string) (*Session, error) {
+	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir)
 }
 
 // OpenSignalingSession registers with a signaling server, requests a
@@ -131,10 +172,21 @@ func OpenSignalingSession(signalingURL, userID, pskHex, targetDeviceID, stunServ
 	if err != nil {
 		return nil, fmt.Errorf("decode psk: %w", err)
 	}
-	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer)
+	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer, "")
 }
 
-func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer string) (*Session, error) {
+// OpenSignalingSessionWithKey is OpenSignalingSession with a persistent
+// key directory. See OpenFirebaseSignalingSessionWithKey for the keyDir
+// semantics; passing "" is equivalent to OpenSignalingSession.
+func OpenSignalingSessionWithKey(signalingURL, userID, pskHex, targetDeviceID, stunServer, keyDir string) (*Session, error) {
+	secret, err := hex.DecodeString(strings.TrimSpace(pskHex))
+	if err != nil {
+		return nil, fmt.Errorf("decode psk: %w", err)
+	}
+	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer, keyDir)
+}
+
+func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir string) (*Session, error) {
 	// targetDeviceID drives the QUIC mTLS pin; an empty string would
 	// silently fall through to "no pin" and undo the protection mTLS is
 	// supposed to provide. Reject at the API boundary so a misbehaving
@@ -148,11 +200,16 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 
 	// One ed25519 keypair drives both the signaling Register frame
 	// (via devid.Derive on the pubkey) and the QUIC mTLS client cert,
-	// so the host sees a single identity on both channels.
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	// so the host sees a single identity on both channels. keyDir != ""
+	// gives the device a stable identity across reconnects, which is
+	// what allows host-side allowlisting / per-device authorization to
+	// work; keyDir == "" reverts to ephemeral keys (every dial is a
+	// new device_id) for ad-hoc / dev workflows.
+	priv, err := loadOrGeneratePriv(keyDir)
 	if err != nil {
-		return nil, fmt.Errorf("generate device key: %w", err)
+		return nil, err
 	}
+	pub := priv.Public().(ed25519.PublicKey)
 	deviceID := devid.Derive(pub)
 	clientCert, err := peertls.CertFromEd25519(priv)
 	if err != nil {

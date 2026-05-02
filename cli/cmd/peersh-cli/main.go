@@ -53,6 +53,7 @@ func main() {
 	pskFile := flag.String("psk-file", "", "(signaling mode) path to a file containing a hex-encoded PSK")
 	target := flag.String("target", "", "(signaling mode) target peershd device_id to connect to")
 	stunServer := flag.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
+	keyDir := flag.String("key-dir", "", "directory holding the CLI's persistent ed25519 device key; empty = generate a fresh ephemeral key on every run")
 
 	ptyMode := flag.Bool("pty", false, "open an interactive PTY instead of the one-shot REPL (Phase 8 Tier 1)")
 	ptyCmd := flag.String("pty-cmd", "", "executable to spawn under the PTY; empty = operator-default shell")
@@ -75,13 +76,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*addr, *signalingURL, *userID, *pskFile, *target, *stunServer, *ptyMode, *ptyCmd, *hostDevice); err != nil {
+	if err := run(*addr, *signalingURL, *userID, *pskFile, *target, *stunServer, *ptyMode, *ptyCmd, *hostDevice, *keyDir); err != nil {
 		slog.Error("peersh-cli exiting on error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode bool, ptyCmd, hostDevice string) error {
+func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode bool, ptyCmd, hostDevice, keyDir string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -102,14 +103,18 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 		}
 	}
 
-	// Generate the CLI's ephemeral ed25519 keypair. The same key drives
-	// both the signaling Register frame (via devid.Derive on the pubkey)
-	// and the mTLS client cert presented to peershd, so the server sees
-	// a consistent identity on the QUIC and signaling sides.
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	// The CLI's ed25519 keypair drives both the signaling Register
+	// frame (via devid.Derive on the pubkey) and the mTLS client cert
+	// presented to peershd, so the server sees a consistent identity on
+	// the QUIC and signaling sides. -key-dir gives the CLI a stable
+	// device_id across runs (useful when peershd uses a per-client
+	// allowlist); empty -key-dir keeps the historical ephemeral
+	// behavior for ad-hoc / scripted invocations.
+	priv, err := loadOrGenerateKey(keyDir)
 	if err != nil {
-		return fmt.Errorf("generate device key: %w", err)
+		return err
 	}
+	pub := priv.Public().(ed25519.PublicKey)
 	deviceID := devid.Derive(pub)
 	clientCert, err := peertls.CertFromEd25519(priv)
 	if err != nil {
@@ -238,6 +243,24 @@ func rendezvousAndDial(ctx context.Context, tr *transport.Transport, pc net.Pack
 		slog.Info("candidate dial failed", "addr", p, "err", err)
 	}
 	return nil, punching.ErrTraversalFailed
+}
+
+// loadOrGenerateKey returns an ed25519 private key sourced from keyDir
+// when non-empty (persistent identity), or freshly generated when empty
+// (ephemeral identity, the legacy CLI behavior).
+func loadOrGenerateKey(keyDir string) (ed25519.PrivateKey, error) {
+	if keyDir == "" {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generate device key: %w", err)
+		}
+		return priv, nil
+	}
+	priv, err := peertls.LoadOrGenerateKey(keyDir)
+	if err != nil {
+		return nil, fmt.Errorf("load device key from %q: %w", keyDir, err)
+	}
+	return priv, nil
 }
 
 func readPSKFile(path string) ([]byte, error) {
