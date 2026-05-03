@@ -85,20 +85,27 @@ class FirebaseDeviceDiscoveryService implements DeviceDiscoveryService {
     raw.forEach((key, value) {
       if (key is! String) return;
       String? displayName;
+      String kind = 'host';
       int lastSeen = 0;
       if (value is Map) {
         final dn = value['display_name'];
         if (dn is String && dn.trim().isNotEmpty) displayName = dn;
         final ls = value['last_seen_at'];
         if (ls is int) lastSeen = ls;
+        final k = value['kind'];
+        if (k is String && k.trim().isNotEmpty) kind = k;
       } else if (value is int) {
         // Host wrote only last_seen_at as a leaf int.
         lastSeen = value;
       }
+      // The picker dials Windows hosts only. Mobile/CLI entries share
+      // the same users/{uid}/devices subtree (mobile_device_registry
+      // writes kind:'mobile' for this phone) and must be filtered out.
+      if (kind != 'host') return;
       out.add(DiscoveredDevice(
         deviceId: key,
         displayName: displayName ?? key,
-        kind: 'host',
+        kind: kind,
         lastSeenUnixMs: lastSeen,
       ));
     });
