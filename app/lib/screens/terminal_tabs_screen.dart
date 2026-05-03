@@ -22,6 +22,7 @@ import '../models/server_entry.dart';
 import '../services/flavor.dart' as flavor;
 import '../services/mobile_device_registry.dart';
 import '../services/peersh_session.dart';
+import '../state/persisted_bg_keepalive.dart';
 import '../state/persisted_idle_timeout.dart';
 import '../state/persisted_notify_config.dart';
 import '../state/persisted_pty_handles.dart';
@@ -182,16 +183,23 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         // Otherwise leave _tabs empty so the user picks via the prompt.
       });
       // Foreground service keeps the OS from freezing the app process
-      // (and the QUIC keepalive) when backgrounded. On the very first
-      // session start, prompt for POST_NOTIFICATIONS so the persistent
-      // notification is visible.
-      if (!isReconnect) {
-        unawaited(_ensureNotificationPermission(bridge));
+      // (and the QUIC keepalive) when backgrounded. Opt-in via the
+      // "Keep connection alive in background" setting (default off);
+      // when off we skip both the persistent notification and the
+      // POST_NOTIFICATIONS prompt — FCM-driven completion notices and
+      // the auto-reattach + ring-buffer replay cover the typical
+      // "left it backgrounded" case without the battery hit.
+      final keepAlive =
+          await ref.read(persistedBgKeepaliveProvider.future);
+      if (keepAlive) {
+        if (!isReconnect) {
+          unawaited(_ensureNotificationPermission(bridge));
+        }
+        unawaited(bridge.startForegroundService(
+          title: widget.server.name,
+          body: 'Connected — tap to return',
+        ));
       }
-      unawaited(bridge.startForegroundService(
-        title: widget.server.name,
-        body: 'Connected — tap to return',
-      ));
       if (isReconnect) _showReattachBanner();
       if (restored) _showReattachBanner();
       if (mounted && _tabs.isEmpty) {

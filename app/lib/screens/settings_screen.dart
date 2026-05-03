@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/flavor.dart' as flavor;
 import '../spike_screen.dart';
+import '../state/persisted_bg_keepalive.dart';
 import '../state/persisted_idle_timeout.dart';
 import '../state/settings.dart';
 import 'pair_pc_screen.dart';
@@ -24,6 +25,23 @@ String _idleTimeoutLabel(int sec) {
   if (sec >= 24 * 60 * 60) return '${sec ~/ (24 * 60 * 60)} d';
   if (sec >= 60 * 60) return '${sec ~/ (60 * 60)} h';
   return '${sec ~/ 60} min';
+}
+
+class _BgKeepaliveTile extends ConsumerWidget {
+  const _BgKeepaliveTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(persistedBgKeepaliveProvider);
+    final on = async.valueOrNull ?? PersistedBgKeepaliveNotifier.defaultValue;
+    return SwitchListTile(
+      title: const Text('Keep connection alive in background'),
+      subtitle: const Text('Applies on next connect.'),
+      value: on,
+      onChanged: (v) =>
+          ref.read(persistedBgKeepaliveProvider.notifier).set(v),
+    );
+  }
 }
 
 class _IdleTimeoutTile extends ConsumerWidget {
@@ -145,6 +163,24 @@ class SettingsScreen extends ConsumerWidget {
               padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
                 'Applies on next connect. Longer windows let the app survive being killed by the OS without losing your shells.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                'Background behavior',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            const _BgKeepaliveTile(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'Off (default): saves battery by letting the OS reclaim the connection when backgrounded. '
+                'Output streamed while you were away is replayed (up to ~1 MiB / tab) when you return.\n'
+                'On: keeps the QUIC connection alive via a persistent notification so you see real-time output even from the background.',
                 style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
             ),
