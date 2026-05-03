@@ -53,10 +53,10 @@ if ($proc.ExitCode -eq 0) {
   Write-Warning "Firebase login skipped/failed (exit $($proc.ExitCode)); assuming PSK or already paired."
 }
 
-# Wrapper .bat keeps the install layout self-contained: cd into install
+# Wrapper .cmd keeps the install layout self-contained: cd into install
 # dir so peershd resolves relative paths (refresh token, etc.) against
 # its own folder, append all stdout/stderr to logs/peershd.log.
-$runScript = Join-Path $InstallDir "run-logon-task.bat"
+$runScript = Join-Path $InstallDir "run-logon-task.cmd"
 $runScriptContent = @'
 @echo off
 setlocal
@@ -77,7 +77,7 @@ Dim shell, fso, scriptDir, runScript
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-runScript = fso.BuildPath(scriptDir, "run-logon-task.bat")
+runScript = fso.BuildPath(scriptDir, "run-logon-task.cmd")
 
 WScript.Quit shell.Run("""" & runScript & """", 0, True)
 '@

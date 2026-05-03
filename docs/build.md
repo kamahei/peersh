@@ -75,12 +75,12 @@ strings local/peershd.exe | grep -E "AIza|cloudfunctions|googleusercontent"
 ### Auto-start peershd at logon or boot
 
 Helper scripts under `scripts/` wrap `schtasks` / `sc.exe`. Each pair
-is a thin `.bat` wrapper plus a `.ps1` that does the actual work:
+is a thin `.cmd` wrapper plus a `.ps1` that does the actual work:
 
 | What | Install | Uninstall | Install dir | Runs as |
 |---|---|---|---|---|
-| Per-user logon task | `scripts\install-peershd-task.bat` | `scripts\uninstall-peershd-task.bat` | `%LOCALAPPDATA%\peersh` | the user who installed it (no admin needed) |
-| Windows service | `scripts\install-peershd-service.bat` | `scripts\uninstall-peershd-service.bat` | `C:\Program Files\peersh` | LocalSystem (run elevated) |
+| Per-user logon task | `scripts\install-peershd-task.cmd` | `scripts\uninstall-peershd-task.cmd` | `%LOCALAPPDATA%\peersh` | the user who installed it (no admin needed) |
+| Windows service | `scripts\install-peershd-service.cmd` | `scripts\uninstall-peershd-service.cmd` | `C:\Program Files\peersh` | LocalSystem (run elevated) |
 
 Both install flows:
 
