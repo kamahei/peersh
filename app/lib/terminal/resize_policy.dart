@@ -5,8 +5,10 @@
 // column. We work around that by pegging the remote PTY at >= 120 cols
 // when the local user is in wrap mode and the host shell is pwsh-like.
 
-/// Fixed remote column count used for scroll mode and as the floor for
-/// wrap mode against PowerShell.
+/// Fallback remote column count used when no user setting has loaded
+/// yet. Live code should pass the user-configured value via the
+/// `cols` parameter on [remoteColsFor]; this constant only exists for
+/// the legacy `_ScrollBody` initial layout pass and tests.
 const int kHorizontalScrollCols = 120;
 
 /// Returns true when [shell] looks like a PowerShell variant.
@@ -27,14 +29,20 @@ bool isPowerShellShell(String shell) {
 
 /// Computes the remote PTY's `cols` given the local visible cell count
 /// and the current wrap/scroll mode.
+///
+/// [terminalCols] is the user-configured fixed column count (used as
+/// the scroll-mode width and as the wrap-mode floor against PowerShell).
+/// Defaults to [kHorizontalScrollCols] for callers that haven't been
+/// updated yet.
 int remoteColsFor({
   required String shell,
   required bool lineWrap,
   required int visibleCols,
+  int terminalCols = kHorizontalScrollCols,
 }) {
   final cols = visibleCols.clamp(1, 500).toInt();
   if (lineWrap && isPowerShellShell(shell)) {
-    return cols < kHorizontalScrollCols ? kHorizontalScrollCols : cols;
+    return cols < terminalCols ? terminalCols : cols;
   }
   return cols;
 }

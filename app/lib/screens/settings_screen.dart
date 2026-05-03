@@ -103,6 +103,29 @@ class SettingsScreen extends ConsumerWidget {
               ),
               trailing: Text(s.fontSize.toStringAsFixed(0)),
             ),
+            ListTile(
+              title: const Text('Terminal width (cols)'),
+              subtitle: Slider(
+                value: s.terminalCols.toDouble(),
+                min: AppSettings.minTerminalCols.toDouble(),
+                max: AppSettings.maxTerminalCols.toDouble(),
+                divisions: (AppSettings.maxTerminalCols -
+                        AppSettings.minTerminalCols) ~/
+                    10,
+                label: '${s.terminalCols}',
+                onChanged: (v) => ref
+                    .read(settingsProvider.notifier)
+                    .setTerminalCols(v.round()),
+              ),
+              trailing: Text('${s.terminalCols}'),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'Scroll mode pins the terminal at this width; wrap mode treats it as the minimum so PowerShell tables stay aligned. Applies on next PTY resize.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
             const Divider(),
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 0),

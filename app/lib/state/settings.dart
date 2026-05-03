@@ -9,7 +9,15 @@ class AppSettings {
     this.fontSize = 13.0,
     this.defaultNotifyThresholdSec = 10,
     this.defaultNotifyIdleSec = 0,
+    this.terminalCols = defaultTerminalCols,
   });
+
+  /// Historic 120-col floor that PowerShell's table formatter caches on
+  /// startup; staying at or above it keeps Get-Process / Format-Table
+  /// columns from collapsing. Used as the default for fresh installs.
+  static const int defaultTerminalCols = 120;
+  static const int minTerminalCols = 60;
+  static const int maxTerminalCols = 240;
 
   final bool lineWrap;
   final double fontSize;
@@ -21,11 +29,16 @@ class AppSettings {
   /// Default output-silence window for the idle heuristic. 0 disables.
   final int defaultNotifyIdleSec;
 
+  /// Remote PTY column count used in scroll mode and as the floor in
+  /// wrap mode against PowerShell-like shells.
+  final int terminalCols;
+
   AppSettings copyWith({
     bool? lineWrap,
     double? fontSize,
     int? defaultNotifyThresholdSec,
     int? defaultNotifyIdleSec,
+    int? terminalCols,
   }) =>
       AppSettings(
         lineWrap: lineWrap ?? this.lineWrap,
@@ -34,6 +47,7 @@ class AppSettings {
             defaultNotifyThresholdSec ?? this.defaultNotifyThresholdSec,
         defaultNotifyIdleSec:
             defaultNotifyIdleSec ?? this.defaultNotifyIdleSec,
+        terminalCols: terminalCols ?? this.terminalCols,
       );
 
   Map<String, dynamic> toJson() => {
@@ -41,6 +55,7 @@ class AppSettings {
         'fontSize': fontSize,
         'defaultNotifyThresholdSec': defaultNotifyThresholdSec,
         'defaultNotifyIdleSec': defaultNotifyIdleSec,
+        'terminalCols': terminalCols,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
@@ -50,6 +65,8 @@ class AppSettings {
             (j['defaultNotifyThresholdSec'] as num?)?.toInt() ?? 10,
         defaultNotifyIdleSec:
             (j['defaultNotifyIdleSec'] as num?)?.toInt() ?? 0,
+        terminalCols: ((j['terminalCols'] as num?)?.toInt() ?? defaultTerminalCols)
+            .clamp(minTerminalCols, maxTerminalCols),
       );
 }
 
@@ -84,6 +101,15 @@ class AppSettingsNotifier extends AsyncNotifier<AppSettings> {
   Future<void> setDefaultNotifyIdleSec(int v) async {
     final next = (state.valueOrNull ?? const AppSettings())
         .copyWith(defaultNotifyIdleSec: v.clamp(0, 300));
+    await _store.writeSettings(next.toJson());
+    state = AsyncData(next);
+  }
+
+  Future<void> setTerminalCols(int v) async {
+    final next = (state.valueOrNull ?? const AppSettings()).copyWith(
+      terminalCols:
+          v.clamp(AppSettings.minTerminalCols, AppSettings.maxTerminalCols),
+    );
     await _store.writeSettings(next.toJson());
     state = AsyncData(next);
   }

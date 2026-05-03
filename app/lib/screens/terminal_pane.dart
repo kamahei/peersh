@@ -148,6 +148,11 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         );
   }
 
+  int _resolveTerminalCols() => ref.read(settingsProvider).maybeWhen(
+        data: (s) => s.terminalCols,
+        orElse: () => AppSettings.defaultTerminalCols,
+      );
+
   Future<void> _maybeOpenPty() async {
     if (_opening || widget.tab.ptyId != null) return;
     _opening = true;
@@ -157,11 +162,13 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         );
     final dims = estimateViewportCells(context, fontSize: fontSize);
     final lineWrap = _resolveLineWrap();
-    final visibleCols = lineWrap ? dims.cols : kHorizontalScrollCols;
+    final terminalCols = _resolveTerminalCols();
+    final visibleCols = lineWrap ? dims.cols : terminalCols;
     final remoteCols = remoteColsFor(
       shell: 'auto',
       lineWrap: lineWrap,
       visibleCols: visibleCols,
+      terminalCols: terminalCols,
     );
     try {
       final reattach = widget.tab.reattachHandle;
@@ -275,11 +282,13 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     final id = widget.tab.ptyId;
     if (id == null) return;
     final lineWrap = _resolveLineWrap();
-    final visibleCols = lineWrap ? cols : kHorizontalScrollCols;
+    final terminalCols = _resolveTerminalCols();
+    final visibleCols = lineWrap ? cols : terminalCols;
     final remoteCols = remoteColsFor(
       shell: 'auto',
       lineWrap: lineWrap,
       visibleCols: visibleCols,
+      terminalCols: terminalCols,
     );
     if (remoteCols == _lastSentCols && rows == _lastSentRows) return;
     _resizeDebounce?.cancel();
@@ -318,17 +327,21 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
 
   @override
   Widget build(BuildContext context) {
-    final fontSize = ref.watch(settingsProvider).maybeWhen(
-          data: (s) => s.fontSize,
-          orElse: () => 13.0,
-        );
+    final settings = ref.watch(settingsProvider).valueOrNull;
+    final fontSize = settings?.fontSize ?? 13.0;
+    final terminalCols =
+        settings?.terminalCols ?? AppSettings.defaultTerminalCols;
     final lineWrap = _resolveLineWrap();
     final showLoader = widget.tab.ptyId == null;
     return Stack(
       children: [
         lineWrap
             ? _WrapBody(tab: widget.tab, fontSize: fontSize)
-            : _ScrollBody(tab: widget.tab, fontSize: fontSize),
+            : _ScrollBody(
+                tab: widget.tab,
+                fontSize: fontSize,
+                cols: terminalCols,
+              ),
         if (showLoader)
           Positioned.fill(
             child: ColoredBox(
@@ -360,9 +373,14 @@ class _WrapBody extends StatelessWidget {
 }
 
 class _ScrollBody extends StatelessWidget {
-  const _ScrollBody({required this.tab, required this.fontSize});
+  const _ScrollBody({
+    required this.tab,
+    required this.fontSize,
+    required this.cols,
+  });
   final TerminalTabModel tab;
   final double fontSize;
+  final int cols;
 
   @override
   Widget build(BuildContext context) {
@@ -370,12 +388,12 @@ class _ScrollBody extends StatelessWidget {
       builder: (context, c) {
         final cellW = fontSize * 0.7;
         final cellH = fontSize * 1.2;
-        final width = kHorizontalScrollCols * cellW;
+        final width = cols * cellW;
         final rows = (c.maxHeight / cellH).floor().clamp(5, 200);
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (tab.terminal.viewWidth != kHorizontalScrollCols ||
+          if (tab.terminal.viewWidth != cols ||
               tab.terminal.viewHeight != rows) {
-            tab.terminal.resize(kHorizontalScrollCols, rows);
+            tab.terminal.resize(cols, rows);
           }
         });
         return SingleChildScrollView(
