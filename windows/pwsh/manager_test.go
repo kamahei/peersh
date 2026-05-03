@@ -30,7 +30,7 @@ func TestAttachOrCreateFreshThenReattach(t *testing.T) {
 	mgr := pwsh.NewSessionManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	id1, h1, reattached, err := mgr.AttachOrCreate(ctx, "")
+	id1, h1, reattached, err := mgr.AttachOrCreate(ctx, "", 0)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestAttachOrCreateFreshThenReattach(t *testing.T) {
 
 	mgr.Detach(id1)
 
-	id2, h2, reattached, err := mgr.AttachOrCreate(ctx, id1)
+	id2, h2, reattached, err := mgr.AttachOrCreate(ctx, id1, 0)
 	if err != nil {
 		t.Fatalf("reattach: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestAttachOrCreateUnknownSessionGetsFresh(t *testing.T) {
 	mgr := pwsh.NewSessionManager()
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	id, _, reattached, err := mgr.AttachOrCreate(ctx, "BOGUS00000000000")
+	id, _, reattached, err := mgr.AttachOrCreate(ctx, "BOGUS00000000000", 0)
 	if err != nil {
 		t.Fatalf("AttachOrCreate: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestSweepEvictsExpired(t *testing.T) {
 	mgr.SetIdleTimeout(50 * time.Millisecond)
 	t.Cleanup(func() { _ = mgr.Close() })
 
-	id, _, _, err := mgr.AttachOrCreate(ctx, "")
+	id, _, _, err := mgr.AttachOrCreate(ctx, "", 0)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestSweepEvictsExpired(t *testing.T) {
 
 	// Subsequent AttachOrCreate with the same id should be a fresh
 	// session (the old one was killed).
-	id2, _, reattached, err := mgr.AttachOrCreate(ctx, id)
+	id2, _, reattached, err := mgr.AttachOrCreate(ctx, id, 0)
 	if err != nil {
 		t.Fatalf("create after eviction: %v", err)
 	}

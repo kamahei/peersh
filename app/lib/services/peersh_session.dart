@@ -29,6 +29,7 @@ class PeershSession {
     required PeershBridge bridge,
     required ServerEntry server,
     String? firebaseIdToken,
+    int idleTimeoutSec = 0,
   }) async {
     final int id;
     if (server.authMode == ServerAuthMode.firebase) {
@@ -62,6 +63,7 @@ class PeershSession {
         appCheckToken: appCheckToken,
         targetDeviceId: server.targetDeviceId,
         stunServer: server.stunServer,
+        idleTimeoutSec: idleTimeoutSec,
       );
     } else {
       id = await bridge.openSignalingSession(
@@ -70,6 +72,7 @@ class PeershSession {
         pskHex: server.pskHex,
         targetDeviceId: server.targetDeviceId,
         stunServer: server.stunServer,
+        idleTimeoutSec: idleTimeoutSec,
       );
     }
     final controller = StreamController<SessionEvent>.broadcast();

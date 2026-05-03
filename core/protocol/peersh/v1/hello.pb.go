@@ -42,9 +42,16 @@ type ClientHello struct {
 	// Empty for "give me a fresh session". Added in Phase 6. The host may
 	// refuse the reattach (session expired, unknown id, server restart);
 	// ServerHello.reattached reports the outcome.
-	SessionId     string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SessionId string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// idle_timeout_sec is the client's preferred lifetime for detached
+	// sessions and PTYs on the host. 0 means "use the host default"
+	// (currently 24h). The host may clamp to its own minimum/maximum.
+	// Applies to both pwsh.SessionManager and ptyhost.Manager. Added so
+	// mobile clients can opt into longer-lived shells that survive OS
+	// backgrounding without the user re-pairing.
+	IdleTimeoutSec uint32 `protobuf:"varint,5,opt,name=idle_timeout_sec,json=idleTimeoutSec,proto3" json:"idle_timeout_sec,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ClientHello) Reset() {
@@ -103,6 +110,13 @@ func (x *ClientHello) GetSessionId() string {
 		return x.SessionId
 	}
 	return ""
+}
+
+func (x *ClientHello) GetIdleTimeoutSec() uint32 {
+	if x != nil {
+		return x.IdleTimeoutSec
+	}
+	return 0
 }
 
 // ServerHello is the server's response on the control stream.
@@ -192,13 +206,14 @@ var File_peersh_v1_hello_proto protoreflect.FileDescriptor
 
 const file_peersh_v1_hello_proto_rawDesc = "" +
 	"\n" +
-	"\x15peersh/v1/hello.proto\x12\tpeersh.v1\"\x98\x01\n" +
+	"\x15peersh/v1/hello.proto\x12\tpeersh.v1\"\xc2\x01\n" +
 	"\vClientHello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\"\n" +
 	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12\x1b\n" +
 	"\tclient_id\x18\x03 \x01(\tR\bclientId\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x04 \x01(\tR\tsessionId\"\xb8\x01\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\x12(\n" +
+	"\x10idle_timeout_sec\x18\x05 \x01(\rR\x0eidleTimeoutSec\"\xb8\x01\n" +
 	"\vServerHello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\"\n" +
 	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12\x1b\n" +

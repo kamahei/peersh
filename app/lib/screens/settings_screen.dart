@@ -3,8 +3,53 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/flavor.dart' as flavor;
 import '../spike_screen.dart';
+import '../state/persisted_idle_timeout.dart';
 import '../state/settings.dart';
 import 'pair_pc_screen.dart';
+
+/// Choices the user picks between for "Keep shells alive for". Aligned
+/// with peershd's pwsh.MinIdleTimeout (1 min) and MaxIdleTimeout (7 d)
+/// bounds — values outside that range get clamped server-side anyway.
+const _idleTimeoutChoices = <(String, int)>[
+  ('30 minutes', 30 * 60),
+  ('2 hours', 2 * 60 * 60),
+  ('24 hours', 24 * 60 * 60),
+  ('1 week', 7 * 24 * 60 * 60),
+];
+
+String _idleTimeoutLabel(int sec) {
+  for (final (label, value) in _idleTimeoutChoices) {
+    if (value == sec) return label;
+  }
+  if (sec >= 24 * 60 * 60) return '${sec ~/ (24 * 60 * 60)} d';
+  if (sec >= 60 * 60) return '${sec ~/ (60 * 60)} h';
+  return '${sec ~/ 60} min';
+}
+
+class _IdleTimeoutTile extends ConsumerWidget {
+  const _IdleTimeoutTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(persistedIdleTimeoutProvider);
+    final current = async.valueOrNull ??
+        PersistedIdleTimeoutNotifier.defaultSeconds;
+    return ListTile(
+      title: const Text('Keep shells alive for'),
+      subtitle: Text(_idleTimeoutLabel(current)),
+      trailing: PopupMenuButton<int>(
+        initialValue: current,
+        onSelected: (sec) =>
+            ref.read(persistedIdleTimeoutProvider.notifier).set(sec),
+        itemBuilder: (_) => [
+          for (final (label, value) in _idleTimeoutChoices)
+            PopupMenuItem(value: value, child: Text(label)),
+        ],
+        child: const Icon(Icons.more_horiz),
+      ),
+    );
+  }
+}
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -84,6 +129,22 @@ class SettingsScreen extends ConsumerWidget {
               padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
                 'Long-press the bell on a tab to override these per tab.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                'Shell lifetime',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            const _IdleTimeoutTile(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'Applies on next connect. Longer windows let the app survive being killed by the OS without losing your shells.',
                 style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
             ),

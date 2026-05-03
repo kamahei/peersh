@@ -45,12 +45,17 @@ class PeershBridge {
 
   /// Opens a signaling-mediated session. Throws on signaling failure or
   /// NAT-traversal failure.
+  ///
+  /// [idleTimeoutSec] is forwarded to the host on ClientHello as the
+  /// preferred lifetime for the detached session + its persisted PTYs.
+  /// 0 = "use host default" (24h).
   Future<int> openSignalingSession({
     required String signaling,
     required String user,
     required String pskHex,
     required String targetDeviceId,
     String stunServer = 'stun.l.google.com:19302',
+    int idleTimeoutSec = 0,
   }) async {
     final id = await _control.invokeMethod<int>('openSignalingSession', {
       'signaling': signaling,
@@ -58,6 +63,7 @@ class PeershBridge {
       'psk': pskHex,
       'target': targetDeviceId,
       'stun': stunServer,
+      'idleTimeoutSec': idleTimeoutSec,
     });
     if (id == null) throw StateError('bridge: openSignalingSession returned null');
     return id;
@@ -67,12 +73,14 @@ class PeershBridge {
   /// caller supplies a fresh Firebase ID token; the server resolves
   /// user_id from it. [appCheckToken] is forwarded to the server's
   /// App Check verifier; pass empty when App Check is not in use.
+  /// [idleTimeoutSec] semantics match openSignalingSession.
   Future<int> openFirebaseSignalingSession({
     required String signaling,
     required String idToken,
     required String targetDeviceId,
     String appCheckToken = '',
     String stunServer = 'stun.l.google.com:19302',
+    int idleTimeoutSec = 0,
   }) async {
     final id = await _control.invokeMethod<int>('openFirebaseSignalingSession', {
       'signaling': signaling,
@@ -80,6 +88,7 @@ class PeershBridge {
       'appCheckToken': appCheckToken,
       'target': targetDeviceId,
       'stun': stunServer,
+      'idleTimeoutSec': idleTimeoutSec,
     });
     if (id == null) throw StateError('bridge: openFirebaseSignalingSession returned null');
     return id;

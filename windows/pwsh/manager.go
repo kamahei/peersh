@@ -11,10 +11,40 @@ import (
 )
 
 // DefaultIdleTimeout is the duration a Session may sit idle (no client
-// attached AND no Exec activity) before SessionManager evicts it.
+// attached AND no Exec activity) before SessionManager evicts it when
+// the client did not specify a preference.
 //
-// 30 minutes matches the default discussed in `docs/plan/open-questions.md`.
-const DefaultIdleTimeout = 30 * time.Minute
+// 24 hours lets a phone client survive a full day of OS backgrounding
+// without re-pairing. Clients can opt into a shorter window (down to
+// MinIdleTimeout) via ClientHello.idle_timeout_sec.
+const DefaultIdleTimeout = 24 * time.Hour
+
+// MinIdleTimeout / MaxIdleTimeout are the bounds the host clamps any
+// client-supplied override to. The minimum keeps a single transient
+// disconnect from instantly evicting an in-flight shell; the maximum
+// prevents an unbounded leak if a client asks for "forever".
+const (
+	MinIdleTimeout = 1 * time.Minute
+	MaxIdleTimeout = 7 * 24 * time.Hour
+)
+
+// ClampIdleTimeoutSec returns the per-session idle timeout to apply
+// given a client-supplied seconds value. Zero falls back to the manager
+// default; non-zero values are clamped into [MinIdleTimeout,
+// MaxIdleTimeout].
+func ClampIdleTimeoutSec(sec uint32) time.Duration {
+	if sec == 0 {
+		return 0
+	}
+	d := time.Duration(sec) * time.Second
+	if d < MinIdleTimeout {
+		return MinIdleTimeout
+	}
+	if d > MaxIdleTimeout {
+		return MaxIdleTimeout
+	}
+	return d
+}
 
 // SessionManager keeps long-lived pwsh.Host instances around so a client
 // reconnecting with the same session_id can resume where it left off
@@ -50,18 +80,25 @@ func (m *SessionManager) SetIdleTimeout(d time.Duration) {
 // reattached = true) or starts a fresh pwsh.Host and assigns a new id.
 // Empty sessionID always produces a fresh session.
 //
+// idleTimeoutSec is the client's preferred lifetime for the session
+// when detached. 0 means "use the manager default". Non-zero values
+// are clamped via ClampIdleTimeoutSec. The override is stored on the
+// session and replaces any previous client preference on reattach.
+//
 // The caller MUST call Detach when its client connection ends so the
 // idle timer can start.
-func (m *SessionManager) AttachOrCreate(ctx context.Context, sessionID string) (id string, host *Host, reattached bool, err error) {
+func (m *SessionManager) AttachOrCreate(ctx context.Context, sessionID string, idleTimeoutSec uint32) (id string, host *Host, reattached bool, err error) {
+	override := ClampIdleTimeoutSec(idleTimeoutSec)
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return "", nil, false, errors.New("pwsh: session manager closed")
 	}
 	if sessionID != "" {
-		if s, ok := m.sessions[sessionID]; ok && !s.expiredLocked(m.now(), m.timeout) {
+		if s, ok := m.sessions[sessionID]; ok && !s.expiredLocked(m.now(), m.effectiveTimeoutLocked(s)) {
 			s.attached = true
 			s.lastActivity = m.now()
+			s.idleTimeout = override
 			m.mu.Unlock()
 			return sessionID, s.host, true, nil
 		}
@@ -85,9 +122,20 @@ func (m *SessionManager) AttachOrCreate(ctx context.Context, sessionID string) (
 		host:         h,
 		attached:     true,
 		lastActivity: now,
+		idleTimeout:  override,
 	}
 	m.mu.Unlock()
 	return id, h, false, nil
+}
+
+// effectiveTimeoutLocked returns the idle timeout that should apply to
+// the given session — its per-session override if set, else the
+// manager-wide default. Caller must hold m.mu.
+func (m *SessionManager) effectiveTimeoutLocked(s *managedSession) time.Duration {
+	if s.idleTimeout > 0 {
+		return s.idleTimeout
+	}
+	return m.timeout
 }
 
 // Detach marks the session as no longer attached and starts the idle
@@ -106,10 +154,9 @@ func (m *SessionManager) Detach(sessionID string) {
 func (m *SessionManager) Sweep() int {
 	m.mu.Lock()
 	now := m.now()
-	timeout := m.timeout
 	expired := make([]string, 0)
 	for id, s := range m.sessions {
-		if s.expiredLocked(now, timeout) {
+		if s.expiredLocked(now, m.effectiveTimeoutLocked(s)) {
 			expired = append(expired, id)
 		}
 	}
@@ -170,6 +217,10 @@ type managedSession struct {
 	host         *Host
 	attached     bool
 	lastActivity time.Time
+	// idleTimeout is the per-session override of the manager's default
+	// idle timeout. Zero means "fall back to manager default". Set from
+	// ClientHello.idle_timeout_sec on attach/create.
+	idleTimeout time.Duration
 }
 
 func (s *managedSession) expiredLocked(now time.Time, timeout time.Duration) bool {

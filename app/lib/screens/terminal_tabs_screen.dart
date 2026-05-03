@@ -22,8 +22,10 @@ import '../models/server_entry.dart';
 import '../services/flavor.dart' as flavor;
 import '../services/mobile_device_registry.dart';
 import '../services/peersh_session.dart';
+import '../state/persisted_idle_timeout.dart';
 import '../state/persisted_notify_config.dart';
 import '../state/persisted_pty_handles.dart';
+import '../state/persisted_tabs.dart';
 import '../state/servers.dart';
 import '../state/settings.dart';
 import '../widgets/special_keys_bar.dart';
@@ -79,6 +81,14 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   static const _baseBackoff = Duration(milliseconds: 500);
   static const _maxBackoff = Duration(seconds: 30);
 
+  // Tab snapshot persistence. Coalesces bursts of tab edits (label
+  // updates, reorders) into one SecureStore write per ~300ms.
+  Timer? _persistTabsTimer;
+  static const _persistTabsDebounce = Duration(milliseconds: 300);
+  // Set of tab models whose change-listener we've registered, so we
+  // don't double-subscribe when restoring vs. spawning.
+  final Set<TerminalTabModel> _tabsObserved = {};
+
   @override
   void initState() {
     super.initState();
@@ -129,22 +139,28 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         }
       }
       _resolvedServer = connectServer;
+      final idleSec = await ref.read(persistedIdleTimeoutProvider.future);
       final session = await PeershSession.open(
         bridge: bridge,
         server: connectServer,
         firebaseIdToken: idToken,
+        idleTimeoutSec: idleSec,
       );
       if (!mounted) {
         await session.close();
         return;
       }
       // Probe persisted PTYs the host is holding for this connection.
-      // If any are present (and not already attached to another tab),
-      // surface a reattach prompt instead of auto-spawning a fresh tab.
+      // If any match a tab snapshot we saved last run, restore the
+      // whole tab strip in one shot (handles + order + active index)
+      // without surfacing a picker.
       List<PtyHandleInfo> persisted = const [];
       try {
         persisted = await bridge.listPtys(sessionId: session.id);
       } catch (_) {}
+      final restored = isReconnect
+          ? false
+          : await _restoreTabsFromSnapshot(persisted);
       setState(() {
         _session = session;
         _connState = _ConnState.connected;
@@ -154,6 +170,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         if (persisted.where((p) => !p.attached).isEmpty) {
           // No reattachable PTYs — auto-spawn a fresh shell.
           _tabs.add(TerminalTabModel(initialLabel: 'shell'));
+          _observeTab(_tabs.last);
         }
         // Otherwise leave _tabs empty so the user picks via the prompt.
       });
@@ -169,6 +186,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         body: 'Connected — tap to return',
       ));
       if (isReconnect) _showReattachBanner();
+      if (restored) _showReattachBanner();
       if (mounted && _tabs.isEmpty) {
         await _maybeOfferReattach(persisted);
       }
@@ -325,6 +343,97 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     );
   }
 
+  /// On first connect (not reconnect), pull the stored TabsSnapshot for
+  /// this server and rebuild [_tabs] from any entries whose handle is
+  /// still alive on the host. Stale handles get silent-forgotten so the
+  /// snapshot doesn't keep retrying them. Returns true when at least
+  /// one tab was restored.
+  Future<bool> _restoreTabsFromSnapshot(
+      List<PtyHandleInfo> persisted) async {
+    final tabsState =
+        await ref.read(persistedTabsProvider.future);
+    final stored = tabsState.forServer(widget.server.id);
+    if (stored == null || stored.tabs.isEmpty) return false;
+    final liveHandles = {
+      for (final p in persisted) p.handle,
+    };
+    final restoredEntries = <TabEntry>[];
+    final stale = <String>[];
+    for (final entry in stored.tabs) {
+      if (entry.handle.isEmpty) continue;
+      if (liveHandles.contains(entry.handle)) {
+        restoredEntries.add(entry);
+      } else {
+        stale.add(entry.handle);
+      }
+    }
+    if (restoredEntries.isEmpty) {
+      // Whole snapshot has expired host-side. Drop it so the next
+      // round doesn't keep replaying ghost handles.
+      await ref
+          .read(persistedTabsProvider.notifier)
+          .clear(serverId: widget.server.id);
+      return false;
+    }
+    for (final h in stale) {
+      await ref
+          .read(persistedTabsProvider.notifier)
+          .forget(serverId: widget.server.id, handle: h);
+    }
+    final restoredTabs = <TerminalTabModel>[];
+    for (final entry in restoredEntries) {
+      final t = TerminalTabModel(
+          initialLabel: entry.label.isEmpty ? 'shell' : entry.label);
+      t.reattachHandle = entry.handle;
+      restoredTabs.add(t);
+      _observeTab(t);
+    }
+    setState(() {
+      _tabs.addAll(restoredTabs);
+      _activeIndex =
+          stored.activeIndex.clamp(0, restoredTabs.length - 1);
+    });
+    return true;
+  }
+
+  /// Subscribe to [tab]'s ChangeNotifier once so label / handle / cwd
+  /// updates trigger a debounced snapshot write. Idempotent — a tab
+  /// already in [_tabsObserved] is a no-op.
+  void _observeTab(TerminalTabModel tab) {
+    if (!_tabsObserved.add(tab)) return;
+    tab.addListener(_scheduleTabsPersist);
+  }
+
+  /// Coalesce a burst of mutations into a single SecureStore write.
+  void _scheduleTabsPersist() {
+    _persistTabsTimer?.cancel();
+    _persistTabsTimer = Timer(_persistTabsDebounce, _persistTabsNow);
+  }
+
+  Future<void> _persistTabsNow() async {
+    if (!mounted) return;
+    final entries = <TabEntry>[
+      for (final t in _tabs)
+        if (t.reattachHandle.isNotEmpty)
+          TabEntry(
+            handle: t.reattachHandle,
+            label: t.label,
+            lastCwd: t.lastCwd,
+          ),
+    ];
+    final active = entries.isEmpty
+        ? 0
+        : _activeIndex.clamp(0, entries.length - 1);
+    try {
+      await ref.read(persistedTabsProvider.notifier).save(
+            serverId: widget.server.id,
+            snapshot: TabsSnapshot(activeIndex: active, tabs: entries),
+          );
+    } catch (e) {
+      debugPrint('peersh: persist tabs failed: $e');
+    }
+  }
+
   Future<void> _maybeOfferReattach(List<PtyHandleInfo> persisted) async {
     final reattachable =
         persisted.where((p) => !p.attached).toList(growable: false);
@@ -363,14 +472,20 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     );
     if (!mounted) return;
     if (picked == null || picked.isEmpty) {
-      setState(() => _tabs.add(TerminalTabModel(initialLabel: 'shell')));
+      setState(() {
+        final t = TerminalTabModel(initialLabel: 'shell');
+        _tabs.add(t);
+        _observeTab(t);
+      });
     } else {
       setState(() {
         final tab = TerminalTabModel(initialLabel: 'reattaching…');
         tab.reattachHandle = picked;
         _tabs.add(tab);
+        _observeTab(tab);
       });
     }
+    _scheduleTabsPersist();
   }
 
   @override
@@ -378,10 +493,14 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     _reconnectTimer?.cancel();
     _resumedBannerTimer?.cancel();
     _deepLinkSelectTimer?.cancel();
+    _persistTabsTimer?.cancel();
     _ptyExitWatcher?.cancel();
     final bridge = ref.read(bridgeProvider);
     unawaited(bridge.stopForegroundService());
     for (final tab in _tabs) {
+      if (_tabsObserved.remove(tab)) {
+        tab.removeListener(_scheduleTabsPersist);
+      }
       final id = tab.ptyId;
       if (id != null) bridge.closePty(ptyId: id);
       tab.disposeModel();
@@ -444,16 +563,21 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         tab.reattachHandle = picked;
         _tabs.add(tab);
         _activeIndex = _tabs.length - 1;
+        _observeTab(tab);
       });
+      _scheduleTabsPersist();
     }
   }
 
   void _spawnNewTab() {
     setState(() {
       _tabSeq += 1;
-      _tabs.add(TerminalTabModel(initialLabel: 'tab $_tabSeq'));
+      final t = TerminalTabModel(initialLabel: 'tab $_tabSeq');
+      _tabs.add(t);
       _activeIndex = _tabs.length - 1;
+      _observeTab(t);
     });
+    _scheduleTabsPersist();
   }
 
   Future<void> _killTabPty(int idx) async {
@@ -486,6 +610,9 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         await ref.read(bridgeProvider).closePty(ptyId: id);
       } catch (_) {}
     }
+    if (_tabsObserved.remove(removed)) {
+      removed.removeListener(_scheduleTabsPersist);
+    }
     removed.disposeModel();
     if (!mounted) return;
     setState(() {
@@ -497,6 +624,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
       if (_activeIndex >= _tabs.length) _activeIndex = _tabs.length - 1;
       if (_activeIndex < 0) _activeIndex = 0;
     });
+    _scheduleTabsPersist();
   }
 
   Future<void> _toggleNotify(int idx) async {
@@ -649,6 +777,21 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     );
   }
 
+  String _keepAliveSubtitle() {
+    final sec = ref.read(persistedIdleTimeoutProvider).valueOrNull ??
+        PersistedIdleTimeoutNotifier.defaultSeconds;
+    if (sec >= 24 * 60 * 60) {
+      final days = sec ~/ (24 * 60 * 60);
+      return 'Server keeps the shell for ~$days day${days == 1 ? '' : 's'}.';
+    }
+    if (sec >= 60 * 60) {
+      final hours = sec ~/ (60 * 60);
+      return 'Server keeps the shell for ~$hours hour${hours == 1 ? '' : 's'}.';
+    }
+    final mins = sec ~/ 60;
+    return 'Server keeps the shell for ~$mins minute${mins == 1 ? '' : 's'}.';
+  }
+
   void _toggleWrap() {
     if (_tabs.isEmpty) return;
     final tab = _tabs[_activeIndex];
@@ -744,7 +887,11 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                   _TabBar(
                     tabs: _tabs,
                     activeIndex: _activeIndex,
-                    onTap: (i) => setState(() => _activeIndex = i),
+                    keepAliveSubtitle: _keepAliveSubtitle(),
+                    onTap: (i) {
+                      setState(() => _activeIndex = i);
+                      _scheduleTabsPersist();
+                    },
                     onClose: _closeTab,
                     onKill: _killTabPty,
                     onToggleNotify: _toggleNotify,
@@ -858,6 +1005,7 @@ class _TabBar extends StatelessWidget {
   const _TabBar({
     required this.tabs,
     required this.activeIndex,
+    required this.keepAliveSubtitle,
     required this.onTap,
     required this.onClose,
     required this.onKill,
@@ -867,6 +1015,7 @@ class _TabBar extends StatelessWidget {
 
   final List<TerminalTabModel> tabs;
   final int activeIndex;
+  final String keepAliveSubtitle;
   final ValueChanged<int> onTap;
   final ValueChanged<int> onClose;
   final ValueChanged<int> onKill;
@@ -906,8 +1055,7 @@ class _TabBar extends StatelessWidget {
                           ListTile(
                             leading: const Icon(Icons.close),
                             title: const Text('Close tab (keep PTY alive)'),
-                            subtitle: const Text(
-                                'Server keeps the shell for ~30 minutes.'),
+                            subtitle: Text(keepAliveSubtitle),
                             onTap: () => Navigator.pop(ctx, 'close'),
                           ),
                           ListTile(

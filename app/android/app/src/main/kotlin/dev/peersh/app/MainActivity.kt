@@ -93,9 +93,11 @@ class MainActivity : FlutterActivity() {
                         val psk = call.argument<String>("psk") ?: ""
                         val target = call.argument<String>("target") ?: ""
                         val stun = call.argument<String>("stun") ?: ""
+                        val idleTimeoutSec = (call.argument<Number>("idleTimeoutSec") ?: 0).toInt()
                         executor.submit {
                             try {
-                                val s = Peersh.openSignalingSession(signaling, user, psk, target, stun)
+                                val s = Peersh.openSignalingSessionV2(
+                                    signaling, user, psk, target, stun, "", idleTimeoutSec)
                                 val id = nextSessionId.getAndIncrement()
                                 sessions[id] = s
                                 mainHandler.post { result.success(id) }
@@ -112,9 +114,11 @@ class MainActivity : FlutterActivity() {
                         val appCheckToken = call.argument<String>("appCheckToken") ?: ""
                         val target = call.argument<String>("target") ?: ""
                         val stun = call.argument<String>("stun") ?: ""
+                        val idleTimeoutSec = (call.argument<Number>("idleTimeoutSec") ?: 0).toInt()
                         executor.submit {
                             try {
-                                val s = Peersh.openFirebaseSignalingSession(signaling, idToken, appCheckToken, target, stun)
+                                val s = Peersh.openFirebaseSignalingSessionV2(
+                                    signaling, idToken, appCheckToken, target, stun, "", idleTimeoutSec)
                                 val id = nextSessionId.getAndIncrement()
                                 sessions[id] = s
                                 mainHandler.post { result.success(id) }

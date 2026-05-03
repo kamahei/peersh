@@ -91,7 +91,7 @@ func loadOrGeneratePriv(keyDir string) (ed25519.PrivateKey, error) {
 // one, but we cannot verify the server's identity without an expected
 // device_id supplied through some other channel.
 func OpenDirectSession(addr string) (*Session, error) {
-	return openDirectInternal(addr, "")
+	return openDirectInternal(addr, "", 0)
 }
 
 // OpenDirectSessionWithKey is OpenDirectSession with a persistent key
@@ -99,10 +99,10 @@ func OpenDirectSession(addr string) (*Session, error) {
 // the same client device_id across reconnects. keyDir == "" matches
 // the ephemeral-key OpenDirectSession behavior.
 func OpenDirectSessionWithKey(addr, keyDir string) (*Session, error) {
-	return openDirectInternal(addr, keyDir)
+	return openDirectInternal(addr, keyDir, 0)
 }
 
-func openDirectInternal(addr, keyDir string) (*Session, error) {
+func openDirectInternal(addr, keyDir string, idleTimeoutSec uint32) (*Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	uaddr, err := net.ResolveUDPAddr("udp", addr)
@@ -130,7 +130,7 @@ func openDirectInternal(addr, keyDir string) (*Session, error) {
 		_ = pc.Close()
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-	if err := doHello(ctx, conn); err != nil {
+	if err := doHello(ctx, conn, idleTimeoutSec); err != nil {
 		_ = conn.CloseWithError(0, "")
 		_ = tr.Close()
 		_ = pc.Close()
@@ -151,7 +151,7 @@ func openDirectInternal(addr, keyDir string) (*Session, error) {
 // firebaseAppCheckToken is forwarded as the App Check token on the
 // Register frame; pass an empty string when App Check is not in use.
 func OpenFirebaseSignalingSession(signalingURL, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer string) (*Session, error) {
-	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, "")
+	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, "", 0)
 }
 
 // OpenFirebaseSignalingSessionWithKey is OpenFirebaseSignalingSession
@@ -161,7 +161,15 @@ func OpenFirebaseSignalingSession(signalingURL, firebaseIDToken, firebaseAppChec
 // the device a stable device_id across reconnects. keyDir == ""
 // matches the ephemeral-key OpenFirebaseSignalingSession behavior.
 func OpenFirebaseSignalingSessionWithKey(signalingURL, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir string) (*Session, error) {
-	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir)
+	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir, 0)
+}
+
+// OpenFirebaseSignalingSessionV2 extends OpenFirebaseSignalingSessionWithKey
+// with a client-supplied idle_timeout_sec hint forwarded to the host on
+// ClientHello. 0 lets the host use its own default. Use this when the
+// app exposes a "keep shells alive for X" preference to the user.
+func OpenFirebaseSignalingSessionV2(signalingURL, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir string, idleTimeoutSec int32) (*Session, error) {
+	return openSignalingInternal(signalingURL, "", nil, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir, uint32Of(idleTimeoutSec))
 }
 
 // OpenSignalingSession registers with a signaling server, requests a
@@ -172,7 +180,7 @@ func OpenSignalingSession(signalingURL, userID, pskHex, targetDeviceID, stunServ
 	if err != nil {
 		return nil, fmt.Errorf("decode psk: %w", err)
 	}
-	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer, "")
+	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer, "", 0)
 }
 
 // OpenSignalingSessionWithKey is OpenSignalingSession with a persistent
@@ -183,10 +191,31 @@ func OpenSignalingSessionWithKey(signalingURL, userID, pskHex, targetDeviceID, s
 	if err != nil {
 		return nil, fmt.Errorf("decode psk: %w", err)
 	}
-	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer, keyDir)
+	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer, keyDir, 0)
 }
 
-func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir string) (*Session, error) {
+// OpenSignalingSessionV2 extends OpenSignalingSessionWithKey with a
+// client-supplied idle_timeout_sec hint forwarded to the host on
+// ClientHello. 0 lets the host use its own default.
+func OpenSignalingSessionV2(signalingURL, userID, pskHex, targetDeviceID, stunServer, keyDir string, idleTimeoutSec int32) (*Session, error) {
+	secret, err := hex.DecodeString(strings.TrimSpace(pskHex))
+	if err != nil {
+		return nil, fmt.Errorf("decode psk: %w", err)
+	}
+	return openSignalingInternal(signalingURL, userID, secret, "", "", targetDeviceID, stunServer, keyDir, uint32Of(idleTimeoutSec))
+}
+
+// uint32Of clamps a signed gomobile int32 into a non-negative uint32.
+// Negative values are coerced to 0 ("use host default") so a buggy
+// caller can never request a wrap-around timeout.
+func uint32Of(v int32) uint32 {
+	if v < 0 {
+		return 0
+	}
+	return uint32(v)
+}
+
+func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseIDToken, firebaseAppCheckToken, targetDeviceID, stunServer, keyDir string, idleTimeoutSec uint32) (*Session, error) {
 	// targetDeviceID drives the QUIC mTLS pin; an empty string would
 	// silently fall through to "no pin" and undo the protection mTLS is
 	// supposed to provide. Reject at the API boundary so a misbehaving
@@ -276,7 +305,7 @@ func openSignalingInternal(signalingURL, userID string, secret []byte, firebaseI
 		return nil, punching.ErrTraversalFailed
 	}
 
-	if err := doHello(ctx, conn); err != nil {
+	if err := doHello(ctx, conn, idleTimeoutSec); err != nil {
 		_ = conn.CloseWithError(0, "")
 		_ = tr.Close()
 		_ = pc.Close()
@@ -914,12 +943,21 @@ func Echo(addr string, command string) string {
 // --- internal helpers (not exported via gomobile) -----------------------
 
 // doHello runs ClientHello/ServerHello on a fresh control stream.
-func doHello(ctx context.Context, conn *transport.Conn) error {
+//
+// idleTimeoutSec is the client's preferred lifetime (in seconds) for a
+// detached session and its persisted PTYs on the host. 0 leaves the
+// host's default in place (currently 24h). The host clamps any non-zero
+// value into its own min/max bounds.
+func doHello(ctx context.Context, conn *transport.Conn, idleTimeoutSec uint32) error {
 	ctrl, err := conn.OpenStream(ctx)
 	if err != nil {
 		return fmt.Errorf("control stream: %w", err)
 	}
-	if err := wire.Write(ctrl, &v1.ClientHello{ProtocolVersion: protocolVersion, ClientId: "mobile-core"}); err != nil {
+	if err := wire.Write(ctrl, &v1.ClientHello{
+		ProtocolVersion: protocolVersion,
+		ClientId:        "mobile-core",
+		IdleTimeoutSec:  idleTimeoutSec,
+	}); err != nil {
 		return fmt.Errorf("write ClientHello: %w", err)
 	}
 	_ = ctrl.Close()

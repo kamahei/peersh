@@ -41,6 +41,7 @@ class TerminalTabModel extends ChangeNotifier {
 
   /// Last cwd reported by the host (for tab title).
   String _lastCwd = '';
+  String get lastCwd => _lastCwd;
 
   /// Track wrap mode locally so each tab can override the global default.
   bool? _localLineWrapOverride;

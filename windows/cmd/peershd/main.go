@@ -839,7 +839,7 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 		return
 	}
 
-	sessionID, host, err := doHandshake(ctx, ctrl, mgr)
+	sessionID, host, ptyIdleTimeout, err := doHandshake(ctx, ctrl, mgr)
 	if err != nil {
 		log.Warn("handshake failed", "err", err)
 		return
@@ -849,6 +849,9 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 
 	registry := newPTYRegistry()
 	ptyMgr := ptyhost.NewManager()
+	if ptyIdleTimeout > 0 {
+		ptyMgr.SetIdleTimeout(ptyIdleTimeout)
+	}
 	defer ptyMgr.Close()
 	go runPTYSweeper(ctx, ptyMgr)
 	for {
@@ -1033,20 +1036,21 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 	clog.Info("pty stream closed")
 }
 
-func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionManager) (string, *pwsh.Host, error) {
+func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionManager) (string, *pwsh.Host, time.Duration, error) {
 	r := wire.NewReader(ctrl)
 	hello := &v1.ClientHello{}
 	if err := wire.Read(r, hello); err != nil {
-		return "", nil, fmt.Errorf("read ClientHello: %w", err)
+		return "", nil, 0, fmt.Errorf("read ClientHello: %w", err)
 	}
 	if hello.GetProtocolVersion() != protocolVersion {
 		_ = wire.Write(ctrl, &v1.ServerHello{ProtocolVersion: protocolVersion, ServerId: "peershd/0.1"})
-		return "", nil, fmt.Errorf("client protocol_version=%d, server expects %d",
+		return "", nil, 0, fmt.Errorf("client protocol_version=%d, server expects %d",
 			hello.GetProtocolVersion(), protocolVersion)
 	}
-	id, host, reattached, err := mgr.AttachOrCreate(ctx, hello.GetSessionId())
+	idleSec := hello.GetIdleTimeoutSec()
+	id, host, reattached, err := mgr.AttachOrCreate(ctx, hello.GetSessionId(), idleSec)
 	if err != nil {
-		return "", nil, fmt.Errorf("AttachOrCreate: %w", err)
+		return "", nil, 0, fmt.Errorf("AttachOrCreate: %w", err)
 	}
 	if err := wire.Write(ctrl, &v1.ServerHello{
 		ProtocolVersion: protocolVersion,
@@ -1055,9 +1059,9 @@ func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionM
 		SessionId:       id,
 		Reattached:      reattached,
 	}); err != nil {
-		return "", nil, fmt.Errorf("write ServerHello: %w", err)
+		return "", nil, 0, fmt.Errorf("write ServerHello: %w", err)
 	}
-	return id, host, nil
+	return id, host, pwsh.ClampIdleTimeoutSec(idleSec), nil
 }
 
 func serveExecStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, req *v1.ExecRequest, log *slog.Logger) {

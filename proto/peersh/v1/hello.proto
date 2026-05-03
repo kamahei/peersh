@@ -25,6 +25,14 @@ message ClientHello {
   // refuse the reattach (session expired, unknown id, server restart);
   // ServerHello.reattached reports the outcome.
   string session_id = 4;
+
+  // idle_timeout_sec is the client's preferred lifetime for detached
+  // sessions and PTYs on the host. 0 means "use the host default"
+  // (currently 24h). The host may clamp to its own minimum/maximum.
+  // Applies to both pwsh.SessionManager and ptyhost.Manager. Added so
+  // mobile clients can opt into longer-lived shells that survive OS
+  // backgrounding without the user re-pairing.
+  uint32 idle_timeout_sec = 5;
 }
 
 // ServerHello is the server's response on the control stream.

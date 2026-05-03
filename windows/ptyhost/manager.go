@@ -37,13 +37,15 @@ import (
 )
 
 // IdleTimeout is how long a detached Session is kept alive waiting for
-// a reattach. After IdleTimeout, the sweeper closes it.
-const IdleTimeout = 30 * time.Minute
+// a reattach. After IdleTimeout, the sweeper closes it. 24h matches the
+// pwsh.SessionManager default and lets a phone client survive a full
+// day of OS backgrounding without losing its shell.
+const IdleTimeout = 24 * time.Hour
 
-// RingBufferSize is the per-Session scrollback cap, in bytes. 256 KiB
-// is generous for a single screen plus a handful of recent commands and
-// keeps the steady-state memory cost bounded for many parallel PTYs.
-const RingBufferSize = 256 * 1024
+// RingBufferSize is the per-Session scrollback cap, in bytes. 1 MiB
+// holds several screens of history while still keeping the steady-state
+// memory cost bounded for many parallel PTYs.
+const RingBufferSize = 1 * 1024 * 1024
 
 // ManagedHandle identifies a persisted Session. Stable across reattach.
 // Marshalled as a 16-character base32 string for client storage.
