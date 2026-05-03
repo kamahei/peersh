@@ -74,18 +74,22 @@ strings local/peershd.exe | grep -E "AIza|cloudfunctions|googleusercontent"
 
 ### Auto-start peershd at logon or boot
 
-Two helper batch scripts ship under `scripts/` and wrap `schtasks` / `sc`:
+Helper scripts under `scripts/` wrap `schtasks` / `sc.exe`. Each pair
+is a thin `.bat` wrapper plus a `.ps1` that does the actual work:
 
-| What | Install | Uninstall | Runs as |
-|---|---|---|---|
-| Per-user logon task | `scripts\install-peershd-task.cmd` | `scripts\uninstall-peershd-task.cmd` | the user who installed it |
-| Windows service (boot-time) | `scripts\install-peershd-service.cmd` | `scripts\uninstall-peershd-service.cmd` | LocalSystem (run elevated) |
+| What | Install | Uninstall | Install dir | Runs as |
+|---|---|---|---|---|
+| Per-user logon task | `scripts\install-peershd-task.bat` | `scripts\uninstall-peershd-task.bat` | `%LOCALAPPDATA%\peersh` | the user who installed it (no admin needed) |
+| Windows service | `scripts\install-peershd-service.bat` | `scripts\uninstall-peershd-service.bat` | `C:\Program Files\peersh` | LocalSystem (run elevated) |
 
-Both install scripts:
+Both install flows:
 
-1. Detect the peershd binary (default `local\peershd.exe`; pass an absolute path as the first argument to override, e.g. `install-peershd-task.cmd "C:\Program Files\peersh\peershd.exe"`).
-2. In Firebase mode, run `peershd -firebase-login -firebase-login-only` once to open a Google sign-in browser window. The persisted refresh token is reused on every subsequent run — no further prompts. PSK-mode binaries skip this step automatically.
-3. Register the schtasks / sc entry; the service variant also locks down `C:\ProgramData\peersh\` to SYSTEM + Administrators because the refresh token lives there (LocalSystem can't see the install user's `%LOCALAPPDATA%`).
+1. Pick the source binary (default `<repo>\local\peershd.exe`; pass an absolute path as the first argument to override).
+2. Copy `peershd.exe` into the install directory above so the script tree can be moved or deleted afterwards.
+3. In Firebase mode, run `peershd -firebase-login -firebase-login-only` once to open a Google sign-in browser window. The persisted refresh token (in the install directory) is reused on every subsequent launch — no further prompts. PSK / non-Firebase binaries skip this step automatically.
+4. Register the scheduled task / service. The logon task runs hidden via `wscript.exe` + a generated `.vbs` launcher (no console flash) and writes stdout / stderr to `<install-dir>\logs\peershd.log`. The service variant locks down the refresh token under `C:\Program Files\peersh\` to SYSTEM + Administrators.
+
+Uninstall removes the task / service and stops any running peershd from the install directory; pass `/remove-files` (or `--remove-files`) to delete the install directory too.
 
 ### Run the tests
 
