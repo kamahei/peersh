@@ -81,6 +81,13 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   static const _baseBackoff = Duration(milliseconds: 500);
   static const _maxBackoff = Duration(seconds: 30);
 
+  // Fullscreen toggle hides the AppBar, tab strip, and special-key bar
+  // so the terminal viewport gets the entire screen. A small bottom
+  // exit-bar stays visible so the user can leave fullscreen without
+  // gestures (and without blowing past the system back button which
+  // still pops the route). Mirrors httpssh's `_fullscreen` field.
+  bool _fullscreen = false;
+
   // Tab snapshot persistence. Coalesces bursts of tab edits (label
   // updates, reorders) into one SecureStore write per ~300ms.
   Timer? _persistTabsTimer;
@@ -846,57 +853,70 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         : (_tabs[_activeIndex].lineWrapOverride ?? settingsDefault);
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.server.name),
-        actions: [
-          IconButton(
-            tooltip: 'New tab',
-            onPressed: session == null ? null : _addTab,
-            icon: const Icon(Icons.add),
-          ),
-          IconButton(
-            tooltip: lineWrap ? 'Switch to horizontal scroll' : 'Switch to wrap',
-            onPressed: _tabs.isEmpty ? null : _toggleWrap,
-            icon: Icon(lineWrap ? Icons.wrap_text : Icons.swap_horiz),
-          ),
-          IconButton(
-            tooltip: 'Browse files',
-            onPressed: _tabs.isEmpty ? null : _openFileBrowser,
-            icon: const Icon(Icons.folder_open_outlined),
-          ),
-          IconButton(
-            tooltip: 'View remote file',
-            onPressed: session == null ? null : _openTextViewer,
-            icon: const Icon(Icons.description_outlined),
-          ),
-        ],
-      ),
+      appBar: _fullscreen
+          ? null
+          : AppBar(
+              title: Text(widget.server.name),
+              actions: [
+                IconButton(
+                  tooltip: 'New tab',
+                  onPressed: session == null ? null : _addTab,
+                  icon: const Icon(Icons.add),
+                ),
+                IconButton(
+                  tooltip: lineWrap
+                      ? 'Switch to horizontal scroll'
+                      : 'Switch to wrap',
+                  onPressed: _tabs.isEmpty ? null : _toggleWrap,
+                  icon: Icon(lineWrap ? Icons.wrap_text : Icons.swap_horiz),
+                ),
+                IconButton(
+                  tooltip: 'Browse files',
+                  onPressed: _tabs.isEmpty ? null : _openFileBrowser,
+                  icon: const Icon(Icons.folder_open_outlined),
+                ),
+                IconButton(
+                  tooltip: 'View remote file',
+                  onPressed: session == null ? null : _openTextViewer,
+                  icon: const Icon(Icons.description_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Fullscreen',
+                  onPressed: session == null
+                      ? null
+                      : () => setState(() => _fullscreen = true),
+                  icon: const Icon(Icons.fullscreen),
+                ),
+              ],
+            ),
       body: SafeArea(
         child: session == null
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 children: [
-                  if (_showNotifHint)
+                  if (!_fullscreen && _showNotifHint)
                     _NotifHintBanner(
                       onOpenSettings: () =>
                           ref.read(bridgeProvider).openNotificationSettings(),
                       onDismiss: () =>
                           setState(() => _showNotifHint = false),
                     ),
-                  if (_showResumedBanner) const _ResumedBanner(),
-                  _TabBar(
-                    tabs: _tabs,
-                    activeIndex: _activeIndex,
-                    keepAliveSubtitle: _keepAliveSubtitle(),
-                    onTap: (i) {
-                      setState(() => _activeIndex = i);
-                      _scheduleTabsPersist();
-                    },
-                    onClose: _closeTab,
-                    onKill: _killTabPty,
-                    onToggleNotify: _toggleNotify,
-                    onEditNotify: _editNotifySettings,
-                  ),
+                  if (!_fullscreen && _showResumedBanner)
+                    const _ResumedBanner(),
+                  if (!_fullscreen)
+                    _TabBar(
+                      tabs: _tabs,
+                      activeIndex: _activeIndex,
+                      keepAliveSubtitle: _keepAliveSubtitle(),
+                      onTap: (i) {
+                        setState(() => _activeIndex = i);
+                        _scheduleTabsPersist();
+                      },
+                      onClose: _closeTab,
+                      onKill: _killTabPty,
+                      onToggleNotify: _toggleNotify,
+                      onEditNotify: _editNotifySettings,
+                    ),
                   Expanded(
                     child: _tabs.isEmpty
                         ? const _NoTabsState()
@@ -912,12 +932,50 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                             ],
                           ),
                   ),
-                  SpecialKeysBar(
-                    onSendBytes: _sendBytes,
-                    onImeInput: _openIme,
-                  ),
+                  if (_fullscreen)
+                    _FullscreenExitBar(
+                      onExit: () => setState(() => _fullscreen = false),
+                    )
+                  else
+                    SpecialKeysBar(
+                      onSendBytes: _sendBytes,
+                      onImeInput: _openIme,
+                    ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+/// Slim bar shown at the bottom of the terminal viewport while
+/// fullscreen is active. Holds only the exit-fullscreen button so the
+/// user has a discoverable way out without relying on a system gesture
+/// or popping the entire route.
+class _FullscreenExitBar extends StatelessWidget {
+  const _FullscreenExitBar({required this.onExit});
+
+  final VoidCallback onExit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainer,
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 36,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                tooltip: 'Exit fullscreen',
+                icon: const Icon(Icons.fullscreen_exit),
+                onPressed: onExit,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
