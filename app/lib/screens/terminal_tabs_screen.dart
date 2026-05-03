@@ -118,6 +118,22 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     });
   }
 
+  void _setFullscreen(bool value) {
+    if (_fullscreen == value) return;
+    setState(() => _fullscreen = value);
+    unawaited(_setFullscreenSystemUi(value));
+  }
+
+  Future<void> _setFullscreenSystemUi(bool value) {
+    if (value) {
+      return SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+    return SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+  }
+
   Future<void> _connectSession({bool isReconnect = false}) async {
     final bridge = ref.read(bridgeProvider);
     try {
@@ -510,6 +526,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
     _deepLinkSelectTimer?.cancel();
     _persistTabsTimer?.cancel();
     _ptyExitWatcher?.cancel();
+    unawaited(_setFullscreenSystemUi(false));
     final bridge = ref.read(bridgeProvider);
     unawaited(bridge.stopForegroundService());
     for (final tab in _tabs) {
@@ -892,7 +909,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                   tooltip: 'Fullscreen',
                   onPressed: session == null
                       ? null
-                      : () => setState(() => _fullscreen = true),
+                      : () => _setFullscreen(true),
                   icon: const Icon(Icons.fullscreen),
                 ),
               ],
@@ -942,7 +959,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
                   ),
                   if (_fullscreen)
                     _FullscreenExitBar(
-                      onExit: () => setState(() => _fullscreen = false),
+                      onExit: () => _setFullscreen(false),
                     )
                   else
                     SpecialKeysBar(
