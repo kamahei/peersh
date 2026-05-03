@@ -8,7 +8,7 @@ REM   install-peershd-service.cmd "C:\path\peershd.exe"
 REM
 REM Firebase mode: the refresh token is stored at
 REM   C:\ProgramData\peersh\firebase-refresh-token.txt
-REM (NOT %LOCALAPPDATA% — the service runs as LocalSystem, which has a
+REM (NOT %LOCALAPPDATA% -- the service runs as LocalSystem, which has a
 REM separate profile and can't see the install-time user's appdata).
 REM During install, this script opens a browser, signs you in, and
 REM writes the token to that ProgramData path with ACLs locked down to
@@ -25,7 +25,7 @@ set "SERVICE_NAME=peershd"
 set "TOKEN_DIR=%ProgramData%\peersh"
 set "TOKEN_FILE=%TOKEN_DIR%\firebase-refresh-token.txt"
 
-REM Refuse to run unelevated — sc.exe needs admin.
+REM Refuse to run unelevated -- sc.exe needs admin.
 net session >nul 2>&1
 if errorlevel 1 (
   echo [error] this script must be run as Administrator.
@@ -80,7 +80,7 @@ if errorlevel 1 (
   echo [install-service] sc create failed.
   exit /b 1
 )
-sc description "%SERVICE_NAME%" "peersh host daemon — accepts incoming QUIC sessions from the peersh mobile / CLI clients."
+sc description "%SERVICE_NAME%" "peersh host daemon -- accepts incoming QUIC sessions from the peersh mobile / CLI clients."
 
 sc start "%SERVICE_NAME%"
 if errorlevel 1 (

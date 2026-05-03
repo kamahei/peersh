@@ -8,7 +8,7 @@ REM
 REM Firebase mode: a Google sign-in browser window opens once during
 REM install. The persisted refresh token (default
 REM %LOCALAPPDATA%\peersh\firebase-refresh-token.txt) is reused for
-REM every subsequent logon — no further interaction needed.
+REM every subsequent logon -- no further interaction needed.
 REM
 REM PSK mode: peershd refuses one-shot login (no Firebase config),
 REM the script detects that and skips the auth step.
@@ -40,7 +40,7 @@ if "%AUTH_RC%"=="0" (
   echo [install-task] Firebase login skipped/failed ^(rc=%AUTH_RC%^); assuming PSK or already paired.
 )
 
-REM Run silently on logon — no console window. /RL HIGHEST keeps the UAC
+REM Run silently on logon -- no console window. /RL HIGHEST keeps the UAC
 REM token for the elevated path; /F replaces an existing task without
 REM prompting.
 set "RUN_CMD=\"%EXE%\""
