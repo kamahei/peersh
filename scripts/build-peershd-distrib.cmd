@@ -18,8 +18,8 @@ REM   local\peershd.exe
 setlocal
 
 if exist "%~dp0..\local\peershd-build.env" (
-  for /f "usebackq tokens=1,* delims==" %%A in ("%~dp0..\local\peershd-build.env") do (
-    if not "%%A"=="" if not "%%A:~0,1%"=="#" set "%%A=%%B"
+  for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0..\local\peershd-build.env") do (
+    if not "%%A"=="" set "%%A=%%B"
   )
 )
 
