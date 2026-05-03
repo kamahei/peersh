@@ -53,20 +53,21 @@ func TestOpenAndPumpExits(t *testing.T) {
 		dataSeen int
 	)
 	done := make(chan struct{})
+	s.SetSink(func(f *v1.PTYFrame) error {
+		mu.Lock()
+		defer mu.Unlock()
+		switch f.GetKind().(type) {
+		case *v1.PTYFrame_Data:
+			gotData = true
+			dataSeen += len(f.GetData().GetData())
+		case *v1.PTYFrame_Exit:
+			gotExit = true
+			close(done)
+		}
+		return nil
+	})
 	go func() {
-		s.Pump(ctx, func(f *v1.PTYFrame) error {
-			mu.Lock()
-			defer mu.Unlock()
-			switch f.GetKind().(type) {
-			case *v1.PTYFrame_Data:
-				gotData = true
-				dataSeen += len(f.GetData().GetData())
-			case *v1.PTYFrame_Exit:
-				gotExit = true
-				close(done)
-			}
-			return nil
-		})
+		s.Pump(ctx)
 	}()
 
 	select {

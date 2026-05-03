@@ -139,6 +139,32 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     }
   }
 
+  @override
+  void didUpdateWidget(TerminalPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Live QUIC reconnect: the parent screen rebuilds us with a fresh
+    // PeershSession, and _probeOrReconnect has already cleared
+    // tab.ptyId so we can rebind. The reattach handle is preserved on
+    // the tab, and openPty will present it to the host.
+    //
+    // Clear the local xterm buffer first so the host's replay (the
+    // ring-buffer snapshot) doesn't double up on top of the same
+    // content that's already visible.
+    if (oldWidget.session.id != widget.session.id &&
+        widget.tab.ptyId == null) {
+      _sub?.cancel();
+      _sub = null;
+      _cwdRefresh?.cancel();
+      _cwdRefresh = null;
+      _lastSentCols = 0;
+      _lastSentRows = 0;
+      widget.tab.terminal.buffer.clear();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _maybeOpenPty();
+      });
+    }
+  }
+
   bool _resolveLineWrap() {
     final override = widget.tab.lineWrapOverride;
     if (override != null) return override;

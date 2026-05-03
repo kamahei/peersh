@@ -367,6 +367,17 @@ func run(serviceCtx context.Context, opts runOpts) error {
 	defer mgr.Close()
 	go mgr.Run(ctx)
 
+	// Phase 6b: ptyhost.Manager is process-global for the same reason —
+	// the QUIC connection that opened a PTY may drop and the client may
+	// reconnect minutes later with the saved reattach handle. The
+	// Manager partitions entries by Owner (the pwsh session_id) so
+	// cross-session attaches are rejected. One Sweep goroutine for the
+	// process; per-connection sweep would over-fire as connections
+	// churn.
+	ptyMgr := ptyhost.NewManager()
+	defer ptyMgr.Close()
+	go runPTYSweeper(ctx, ptyMgr)
+
 	// Authz bridges signaling Connect grants to the QUIC accept path.
 	// In direct (no-signaling) mode authz stays nil; the accept loop then
 	// only relies on peertls's pubkey-binding check, since there is no
@@ -437,7 +448,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			}
 			return fmt.Errorf("Accept: %w", err)
 		}
-		go serveConn(ctx, conn, mgr, authz, notifyCfg)
+		go serveConn(ctx, conn, mgr, ptyMgr, authz, notifyCfg)
 	}
 }
 
@@ -808,8 +819,11 @@ func enumerateCandidates(listen *net.UDPAddr, srflx *net.UDPAddr) []*signalv1.En
 // on the control stream, then a fresh per-command stream for each
 // ExecRequest. The host's pwsh process is owned by mgr, not by this
 // function — when the QUIC connection closes, the session is detached
-// (mgr's idle timer takes over) instead of killed.
-func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager, authz *peerauth.Authz, nctx *notifyCtx) {
+// (mgr's idle timer takes over) instead of killed. ptyMgr is the
+// process-global PTY persistence layer; entries are partitioned by the
+// peer's mTLS-derived device_id so the same identity sees its own
+// shells across reconnects, and a different identity does not.
+func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager, ptyMgr *ptyhost.Manager, authz *peerauth.Authz, nctx *notifyCtx) {
 	remote := conn.RemoteAddr().String()
 	peerID := peertls.PeerDeviceID(conn.TLSState())
 	log := slog.With("peer", remote, "peer_device_id", peerID)
@@ -839,7 +853,12 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 		return
 	}
 
-	sessionID, host, ptyIdleTimeout, err := doHandshake(ctx, ctrl, mgr)
+	// ptyIdleTimeout from the handshake used to override ptyMgr's TTL
+	// per-connection. With ptyMgr now process-global, "last writer wins"
+	// would let one client retroactively shorten everyone else's TTL —
+	// a privilege-escalation footgun — so the override is dropped here.
+	// pwsh.SessionManager still honours its own per-session override.
+	sessionID, host, _, err := doHandshake(ctx, ctrl, mgr)
 	if err != nil {
 		log.Warn("handshake failed", "err", err)
 		return
@@ -847,13 +866,17 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 	defer mgr.Detach(sessionID)
 	log.Info("handshake complete", "session", sessionID, "pwsh", host.Path())
 
+	// PTY ownership is keyed off the peer's mTLS-derived device_id
+	// rather than the pwsh session_id, because the current ClientHello
+	// flow does not echo the prior session_id back on reconnect — the
+	// device_id (derived from the long-lived ed25519 keypair) is the
+	// only field that's stable across QUIC drops without a client
+	// upgrade. In direct mode peerID may be empty; that's fine, all
+	// direct-mode PTYs share one bucket since direct mode has no
+	// authentication anyway.
+	ptyOwner := ptyhost.Owner(peerID)
+
 	registry := newPTYRegistry()
-	ptyMgr := ptyhost.NewManager()
-	if ptyIdleTimeout > 0 {
-		ptyMgr.SetIdleTimeout(ptyIdleTimeout)
-	}
-	defer ptyMgr.Close()
-	go runPTYSweeper(ctx, ptyMgr)
 	for {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
@@ -863,7 +886,7 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 			log.Info("AcceptStream: end of connection", "err", err)
 			return
 		}
-		go serveStream(ctx, host, stream, registry, ptyMgr, log, nctx)
+		go serveStream(ctx, host, stream, registry, ptyMgr, ptyOwner, log, nctx)
 	}
 }
 
@@ -883,7 +906,7 @@ func runPTYSweeper(ctx context.Context, mgr *ptyhost.Manager) {
 // serveStream dispatches a per-stream first frame (StreamRequest) to either
 // the one-shot Exec path or the interactive PTY path. Each stream owns its
 // own protocol; this function returns when the stream closes.
-func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger, nctx *notifyCtx) {
+func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream, reg *ptyRegistry, mgr *ptyhost.Manager, owner ptyhost.Owner, log *slog.Logger, nctx *notifyCtx) {
 	defer stream.Close()
 	r := wire.NewReader(stream)
 	req := &v1.StreamRequest{}
@@ -895,28 +918,30 @@ func serveStream(ctx context.Context, host *pwsh.Host, stream *transport.Stream,
 	case *v1.StreamRequest_Exec:
 		serveExecStream(ctx, host, stream, kind.Exec, log)
 	case *v1.StreamRequest_Pty:
-		servePTYStream(ctx, stream, r, kind.Pty, reg, mgr, log, nctx)
+		servePTYStream(ctx, stream, r, kind.Pty, reg, mgr, owner, log, nctx)
 	case *v1.StreamRequest_Files:
-		serveFilesStream(stream, kind.Files, reg, mgr)
+		serveFilesStream(stream, kind.Files, reg, mgr, owner)
 	default:
 		log.Warn("StreamRequest with no kind set")
 	}
 }
 
-func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, reg *ptyRegistry, mgr *ptyhost.Manager, log *slog.Logger, nctx *notifyCtx) {
+func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Reader, req *v1.PTYRequest, reg *ptyRegistry, mgr *ptyhost.Manager, owner ptyhost.Owner, log *slog.Logger, nctx *notifyCtx) {
 	clog := log.With("stream", stream.StreamID(), "pty_cmd", req.GetCommand(), "pty_id", req.GetPtyId(), "reattach", req.GetReattachHandle() != "")
 	cols := uint16(req.GetCols())
 	rows := uint16(req.GetRows())
 
 	var (
-		sess   *ptyhost.Session
 		handle ptyhost.ManagedHandle
-		replay []byte
+		attach ptyhost.AttachResult
 	)
 
 	if h := req.GetReattachHandle(); h != "" {
-		// Reattach path.
-		s, snap, alreadyAttached, err := mgr.Attach(ptyhost.ManagedHandle(h))
+		// Reattach path. Same-owner reattach steals: even if a previous
+		// stream is still bound (e.g. the host hasn't noticed its QUIC
+		// went away yet), Attach signals it via kick and gives this
+		// stream a fresh attach generation.
+		got, err := mgr.Attach(owner, ptyhost.ManagedHandle(h))
 		if err != nil {
 			clog.Info("reattach rejected: unknown handle", "err", err)
 			_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
@@ -924,20 +949,12 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 			}}})
 			return
 		}
-		if alreadyAttached {
-			clog.Info("reattach rejected: already attached")
-			_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
-				Handle: h, Accepted: false, Reason: "another client is currently attached",
-			}}})
-			return
-		}
-		sess = s
 		handle = ptyhost.ManagedHandle(h)
-		replay = snap
+		attach = got
 		if cols > 0 && rows > 0 {
-			_ = sess.Resize(cols, rows)
+			_ = attach.Session.Resize(cols, rows)
 		}
-		clog.Info("pty reattached", "cols", cols, "rows", rows, "replay_bytes", len(replay))
+		clog.Info("pty reattached", "cols", cols, "rows", rows, "replay_bytes", len(attach.Replay), "gen", attach.Gen)
 	} else {
 		// Fresh open.
 		clog.Info("pty open", "cols", cols, "rows", rows)
@@ -947,13 +964,14 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 			_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Exit{Exit: &v1.PTYExit{ExitCode: -1, Error: err.Error()}}})
 			return
 		}
-		sess = s
 		commandLabel := req.GetCommand()
 		if commandLabel == "" {
 			commandLabel = "auto"
 		}
-		handle = mgr.Register(sess, commandLabel)
+		handle, attach = mgr.Register(owner, s, commandLabel)
 	}
+
+	sess := attach.Session
 
 	// Stream-scoped registration in the per-connection PTY id registry
 	// so the file API can reach this Session.
@@ -965,17 +983,15 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 	_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
 		Handle: string(handle), Accepted: true,
 	}}})
-	if len(replay) > 0 {
-		_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Data{Data: &v1.PTYData{Data: replay}}})
-	}
 
-	pumpCtx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// On stream close, detach from the Manager (PTY survives idle TTL).
 	// The Session is NOT closed here — Manager.Sweep / Drop is the
-	// authoritative way to terminate it.
-	defer mgr.Detach(handle)
+	// authoritative way to terminate it. Detach is gen-aware: if a
+	// later Attach has already stolen this slot, this call is a no-op.
+	defer mgr.Detach(owner, handle, attach.Gen)
 
 	// v2-B notify state. nil when notifications are disabled (PSK /
 	// direct mode); otherwise a per-PTY state machine that watches
@@ -984,24 +1000,46 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 	var notifier *ptyNotifyState
 	if nctx != nil {
 		notifier = newPTYNotifyState(nctx, req.GetPtyId(), clog)
-		go notifier.runIdleTicker(pumpCtx)
+		go notifier.runIdleTicker(streamCtx)
 	}
 
+	// Install the per-stream sink: wire-write each Pump frame, with
+	// notifier.onOutput interception for Data frames. The session-
+	// lifetime Pump (started by Manager.Register) calls this for
+	// every chunk; sink errors are absorbed by Pump and don't kill
+	// the session.
 	var writeMu sync.Mutex
-	pumpDone := make(chan struct{})
+	sinkID := sess.SetSink(func(f *v1.PTYFrame) error {
+		if data := f.GetData(); data != nil {
+			notifier.onOutput(streamCtx, data.GetData())
+		}
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return wire.Write(stream, f)
+	})
+	defer sess.ClearSink(sinkID)
+
+	// Replay the ring buffer AFTER SetSink so any in-flight Pump
+	// dispatch races land on the new sink, not on a still-attaching
+	// state. Note: replay precedes any new bytes the host emits next.
+	if len(attach.Replay) > 0 {
+		writeMu.Lock()
+		_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Data{Data: &v1.PTYData{Data: attach.Replay}}})
+		writeMu.Unlock()
+	}
+
+	// Watch the kick channel: when a newer Attach steals our slot,
+	// close the stream so wire.Read in the main loop unblocks
+	// promptly. streamCtx.Done() covers the normal-shutdown path so
+	// we don't leak this goroutine when the loop exits for other
+	// reasons (EOF, frame error).
 	go func() {
-		defer close(pumpDone)
-		sess.Pump(pumpCtx, func(f *v1.PTYFrame) error {
-			// Append to ring buffer alongside wire write so reattach
-			// replay is byte-identical to what the client just saw.
-			if data := f.GetData(); data != nil {
-				mgr.Append(handle, data.GetData())
-				notifier.onOutput(pumpCtx, data.GetData())
-			}
-			writeMu.Lock()
-			defer writeMu.Unlock()
-			return wire.Write(stream, f)
-		})
+		select {
+		case <-attach.Kick:
+			clog.Info("pty stream evicted by newer attach", "gen", attach.Gen)
+			_ = stream.Close()
+		case <-streamCtx.Done():
+		}
 	}()
 
 	for {
@@ -1031,8 +1069,6 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 		}
 	}
 
-	cancel()
-	<-pumpDone
 	clog.Info("pty stream closed")
 }
 

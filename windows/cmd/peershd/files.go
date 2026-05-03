@@ -64,8 +64,9 @@ const MaxFileReadBytes = 4 << 20 // 4 MiB
 
 // serveFilesStream handles one client-initiated stream that begins with
 // FilesRequest. The stream is a single request/response pair and is
-// closed after the response is written.
-func serveFilesStream(stream *transport.Stream, req *v1.FilesRequest, reg *ptyRegistry, mgr *ptyhost.Manager) {
+// closed after the response is written. owner partitions any
+// ptyhost.Manager lookups to this peer's PTYs.
+func serveFilesStream(stream *transport.Stream, req *v1.FilesRequest, reg *ptyRegistry, mgr *ptyhost.Manager, owner ptyhost.Owner) {
 	resp := &v1.FilesResponse{}
 	switch kind := req.GetKind().(type) {
 	case *v1.FilesRequest_GetSession:
@@ -75,17 +76,17 @@ func serveFilesStream(stream *transport.Stream, req *v1.FilesRequest, reg *ptyRe
 	case *v1.FilesRequest_ReadFile:
 		resp = handleReadFile(kind.ReadFile, reg)
 	case *v1.FilesRequest_ListPtys:
-		resp = handleListPTYs(mgr)
+		resp = handleListPTYs(mgr, owner)
 	case *v1.FilesRequest_KillPty:
-		resp = handleKillPTY(kind.KillPty, mgr)
+		resp = handleKillPTY(kind.KillPty, mgr, owner)
 	default:
 		resp.Error = "files: unknown request kind"
 	}
 	_ = wire.Write(stream, resp)
 }
 
-func handleListPTYs(mgr *ptyhost.Manager) *v1.FilesResponse {
-	listings := mgr.List()
+func handleListPTYs(mgr *ptyhost.Manager, owner ptyhost.Owner) *v1.FilesResponse {
+	listings := mgr.List(owner)
 	out := &v1.ListPTYsResponse{}
 	for _, l := range listings {
 		out.Ptys = append(out.Ptys, &v1.PTYHandle{
@@ -101,8 +102,8 @@ func handleListPTYs(mgr *ptyhost.Manager) *v1.FilesResponse {
 	}
 }
 
-func handleKillPTY(req *v1.KillPTYRequest, mgr *ptyhost.Manager) *v1.FilesResponse {
-	mgr.Drop(ptyhost.ManagedHandle(req.GetHandle()))
+func handleKillPTY(req *v1.KillPTYRequest, mgr *ptyhost.Manager, owner ptyhost.Owner) *v1.FilesResponse {
+	mgr.Drop(owner, ptyhost.ManagedHandle(req.GetHandle()))
 	return &v1.FilesResponse{
 		Payload: &v1.FilesResponse_KillPty{KillPty: &v1.KillPTYResponse{Ok: true}},
 	}

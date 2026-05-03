@@ -27,6 +27,7 @@
 package ptyhost
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base32"
 	"errors"
@@ -51,26 +52,52 @@ const RingBufferSize = 1 * 1024 * 1024
 // Marshalled as a 16-character base32 string for client storage.
 type ManagedHandle string
 
-// Manager stores persisted Sessions. It is per-connection in the current
-// peersh design — each QUIC connection holds its own Manager because we
-// have no way to authenticate a *different* client wanting to attach to
-// someone else's PTYs.
+// Owner partitions Manager entries so a client presenting one identity
+// cannot see or attach to another client's PTYs. peershd uses the
+// peer's mTLS-derived device_id (from peertls.PeerDeviceID) as the
+// Owner — that id is stable across reconnects without any client
+// upgrade, since the same long-lived ed25519 keypair drives every
+// dial.
+type Owner string
+
+// Manager stores persisted Sessions and is process-global: a single
+// Manager survives every QUIC reconnect, so a client that has saved a
+// reattach handle can come back hours later (subject to IdleTimeout)
+// and rebind to the same shell with replay. Entries are partitioned by
+// Owner; cross-owner access is opaque (returns "unknown handle" rather
+// than leaking existence).
 type Manager struct {
-	mu        sync.Mutex
-	entries   map[ManagedHandle]*entry
-	timeout   time.Duration
-	ringSize  int
-	now       func() time.Time
-	closed    bool
+	mu       sync.Mutex
+	entries  map[ManagedHandle]*entry
+	timeout  time.Duration
+	ringSize int
+	now      func() time.Time
+	closed   bool
 }
 
 type entry struct {
-	handle    ManagedHandle
-	sess      *Session
-	attached  bool
-	lastSeen  time.Time
-	ring      *ringBuffer
-	command   string // diagnostic: the command this PTY runs
+	handle   ManagedHandle
+	owner    Owner
+	sess     *Session
+	attached bool
+	// attachGen monotonically increments on every Attach (and on the
+	// initial Register) so a stale per-stream goroutine's Detach can
+	// be distinguished from a fresh one's: if e.attachGen != gen, the
+	// caller's slot has already been stolen by a newer Attach and the
+	// Detach is a no-op. Pairs with Session.SetSink/ClearSink, which
+	// uses the same swap-id pattern at the sink layer.
+	attachGen uint64
+	// kick is closed by Attach when a new client steals this entry, so
+	// the previously-attached per-stream goroutine can wake up and
+	// tear itself down promptly instead of waiting for QUIC idle.
+	// Replaced on every Attach with a fresh chan; the previously-
+	// attached caller holds the old chan and reacts to its closure.
+	kick     chan struct{}
+	lastSeen time.Time
+	ring     *ringBuffer
+	command  string // diagnostic: the command this PTY runs
+
+	pumpDone chan struct{} // closed when the session-lifetime Pump returns
 }
 
 // NewManager returns a Manager with the default IdleTimeout and
@@ -92,79 +119,148 @@ func (m *Manager) SetIdleTimeout(d time.Duration) {
 	m.timeout = d
 }
 
-// Register a freshly-opened Session under a fresh handle. The ring
-// buffer starts empty.
-func (m *Manager) Register(sess *Session, command string) ManagedHandle {
+// AttachResult bundles everything servePTYStream needs to bind a new
+// stream to a Session: the live Session, a snapshot of its scrollback
+// ring buffer for replay, the per-attach generation (passed back to
+// Detach so a stale goroutine can't clobber a fresh attach's state),
+// and a kick channel that closes when a later Attach steals this
+// entry so the current owner can tear itself down promptly.
+type AttachResult struct {
+	Session  *Session
+	Replay   []byte
+	Gen      uint64
+	Kick     <-chan struct{}
+}
+
+// Register a freshly-opened Session under a fresh handle for the given
+// owner and start its session-lifetime Pump goroutine. The ring buffer
+// starts empty. Returned AttachResult is treated identically to a
+// fresh Attach by the caller (servePTYStream).
+func (m *Manager) Register(owner Owner, sess *Session, command string) (ManagedHandle, AttachResult) {
 	h := newHandle()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
-		return ""
+		m.mu.Unlock()
+		return "", AttachResult{}
 	}
-	m.entries[h] = &entry{
-		handle:   h,
-		sess:     sess,
-		attached: true,
-		lastSeen: m.now(),
-		ring:     newRingBuffer(m.ringSize),
-		command:  command,
+	e := &entry{
+		handle:    h,
+		owner:     owner,
+		sess:      sess,
+		attached:  true,
+		attachGen: 1,
+		kick:      make(chan struct{}),
+		lastSeen:  m.now(),
+		ring:      newRingBuffer(m.ringSize),
+		command:   command,
+		pumpDone:  make(chan struct{}),
 	}
-	return h
+	m.entries[h] = e
+	m.mu.Unlock()
+
+	// Mirror every chunk into the ring buffer; the snapshot is the
+	// scrollback the next reattach replays. Captured here (not in the
+	// per-stream sink) so a stream-less interval still records output.
+	sess.SetRingAppend(func(b []byte) {
+		e.ring.write(b)
+	})
+
+	go func() {
+		defer close(e.pumpDone)
+		// The Pump's ctx is never cancelled from here — we rely on
+		// the child process's own exit (Watcher 1 inside Pump) or
+		// Manager.Drop / Manager.Close calling sess.Close to unblock
+		// Read. context.Background keeps that contract.
+		sess.Pump(context.Background())
+		// Pump returned (child exited, or the Manager closed sess);
+		// remove the entry so a later reattach attempt fails cleanly.
+		m.mu.Lock()
+		if cur, ok := m.entries[h]; ok && cur == e {
+			delete(m.entries, h)
+		}
+		m.mu.Unlock()
+	}()
+
+	return h, AttachResult{
+		Session: sess,
+		Replay:  nil, // fresh session, nothing to replay
+		Gen:     1,
+		Kick:    e.kick,
+	}
 }
 
-// Attach marks the Session bound to handle as active and returns it
-// along with the replay snapshot. attached=true means another stream is
-// already bound — the caller should typically refuse the reattach
-// rather than racing with the existing client.
-func (m *Manager) Attach(h ManagedHandle) (*Session, []byte, bool /*alreadyAttached*/, error) {
+// Attach binds owner to handle and returns the session, a snapshot of
+// the ring buffer for replay, the new attach generation, and a kick
+// channel that fires when a later Attach steals this entry.
+//
+// Owner mismatch is reported as "unknown handle" — the same error as
+// a missing entry — so existence isn't leaked to a different session.
+//
+// Same-owner reattach while the entry is already-attached is a steal:
+// the previous attach's kick channel is closed (signalling its
+// per-stream goroutine to wind down), then attached/lastSeen/gen are
+// updated for the new caller. The previous goroutine's Detach call
+// becomes a no-op because the gen no longer matches.
+func (m *Manager) Attach(owner Owner, h ManagedHandle) (AttachResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return nil, nil, false, errors.New("ptyhost: manager closed")
+		return AttachResult{}, errors.New("ptyhost: manager closed")
 	}
 	e, ok := m.entries[h]
-	if !ok {
-		return nil, nil, false, errors.New("ptyhost: unknown handle")
+	if !ok || e.owner != owner {
+		return AttachResult{}, errors.New("ptyhost: unknown handle")
 	}
-	if e.attached {
-		return e.sess, e.ring.snapshot(), true, nil
+	// Steal: signal the previously-attached goroutine to exit so it
+	// doesn't keep reading from a stale wire stream.
+	if e.kick != nil {
+		close(e.kick)
 	}
+	e.kick = make(chan struct{})
 	e.attached = true
+	e.attachGen++
 	e.lastSeen = m.now()
-	return e.sess, e.ring.snapshot(), false, nil
+	return AttachResult{
+		Session: e.sess,
+		Replay:  e.ring.snapshot(),
+		Gen:     e.attachGen,
+		Kick:    e.kick,
+	}, nil
 }
 
-// Detach marks the Session as no longer bound. The TTL begins now.
-func (m *Manager) Detach(h ManagedHandle) {
+// Detach marks the Session as no longer bound IF gen still matches the
+// entry's current attachGen. Stale goroutines (whose attach was stolen
+// by a newer Attach) silently no-op. Owner mismatch is also a no-op.
+func (m *Manager) Detach(owner Owner, h ManagedHandle, gen uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if e, ok := m.entries[h]; ok {
-		e.attached = false
-		e.lastSeen = m.now()
-	}
-}
-
-// Append feeds bytes into the Session's ring buffer. Called from the
-// Pump loop alongside the wire-frame send so the replay reflects what
-// the client just saw.
-func (m *Manager) Append(h ManagedHandle, data []byte) {
-	if len(data) == 0 {
+	e, ok := m.entries[h]
+	if !ok || e.owner != owner || e.attachGen != gen {
 		return
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if e, ok := m.entries[h]; ok {
-		e.ring.write(data)
+	e.attached = false
+	e.lastSeen = m.now()
+	if e.kick != nil {
+		close(e.kick)
+		e.kick = nil
 	}
 }
 
 // Drop removes a Session immediately, closing the underlying PTY. Used
 // when the client explicitly closes a PTY (vs. just disconnecting).
-func (m *Manager) Drop(h ManagedHandle) {
+// Also wakes any currently-attached per-stream goroutine via kick.
+// Owner mismatch is a silent no-op.
+func (m *Manager) Drop(owner Owner, h ManagedHandle) {
 	m.mu.Lock()
 	e, ok := m.entries[h]
-	if ok {
+	if ok && e.owner == owner {
 		delete(m.entries, h)
+		if e.kick != nil {
+			close(e.kick)
+			e.kick = nil
+		}
+	} else {
+		ok = false
 	}
 	m.mu.Unlock()
 	if ok && e != nil {
@@ -206,6 +302,21 @@ func (m *Manager) Close() {
 	}
 }
 
+// Append writes raw bytes directly into the entry's ring buffer.
+// Retained as a test-only convenience: production code lets the
+// Pump goroutine populate the ring via SetRingAppend. Owner mismatch
+// is a silent no-op.
+func (m *Manager) Append(owner Owner, h ManagedHandle, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.entries[h]; ok && e.owner == owner {
+		e.ring.write(data)
+	}
+}
+
 // Listing is the snapshot a client gets via ListPTYs.
 type Listing struct {
 	Handle      ManagedHandle
@@ -215,13 +326,16 @@ type Listing struct {
 	LastSeenMs  int64
 }
 
-// List returns the current persisted PTYs. Sorted by LastSeenMs desc
-// (most-recently-active first) for a stable client UI.
-func (m *Manager) List() []Listing {
+// List returns the persisted PTYs owned by owner. Sorted by LastSeenMs
+// desc (most-recently-active first) for a stable client UI.
+func (m *Manager) List(owner Owner) []Listing {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Listing, 0, len(m.entries))
 	for _, e := range m.entries {
+		if e.owner != owner {
+			continue
+		}
 		out = append(out, Listing{
 			Handle:     e.handle,
 			Command:    e.command,
@@ -242,23 +356,23 @@ func (m *Manager) List() []Listing {
 }
 
 // CWDOf returns the most recent CWD the host observed for this PTY,
-// even if it's currently detached.
-func (m *Manager) CWDOf(h ManagedHandle) string {
+// even if it's currently detached. Owner mismatch returns "".
+func (m *Manager) CWDOf(owner Owner, h ManagedHandle) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if e, ok := m.entries[h]; ok {
+	if e, ok := m.entries[h]; ok && e.owner == owner {
 		return e.sess.CWD()
 	}
 	return ""
 }
 
-// Get returns the live Session for h or (nil, false) if absent. Does
-// NOT mark as attached; callers that want exclusive ownership should
-// use Attach instead.
-func (m *Manager) Get(h ManagedHandle) (*Session, bool) {
+// Get returns the live Session for h or (nil, false) if absent or not
+// owned by owner. Does NOT mark as attached; callers that want exclusive
+// ownership should use Attach instead.
+func (m *Manager) Get(owner Owner, h ManagedHandle) (*Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if e, ok := m.entries[h]; ok {
+	if e, ok := m.entries[h]; ok && e.owner == owner {
 		return e.sess, true
 	}
 	return nil, false

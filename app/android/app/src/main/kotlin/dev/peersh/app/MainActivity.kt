@@ -43,6 +43,21 @@ class MainActivity : FlutterActivity() {
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // Persistent ed25519 key directory. mobile-core stores the device's
+    // long-lived keypair here; reusing the same directory across dials
+    // keeps the mTLS-derived device_id stable, which is what lets the
+    // host's ptyhost.Manager reattach a client to its earlier shells
+    // after a QUIC reconnect (the Manager partitions PTYs by Owner =
+    // peer device_id). noBackupFilesDir is used so the key never syncs
+    // to other devices via Auto Backup; that would be both a privacy
+    // leak and a correctness bug, since each device must have its own
+    // identity.
+    private val deviceKeyDir: String by lazy {
+        java.io.File(applicationContext.noBackupFilesDir, "peersh-device-key").apply {
+            if (!exists()) mkdirs()
+        }.absolutePath
+    }
+
     @Volatile private var sink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -76,7 +91,7 @@ class MainActivity : FlutterActivity() {
                         val addr = call.argument<String>("addr") ?: ""
                         executor.submit {
                             try {
-                                val s = Peersh.openDirectSession(addr)
+                                val s = Peersh.openDirectSessionWithKey(addr, deviceKeyDir)
                                 val id = nextSessionId.getAndIncrement()
                                 sessions[id] = s
                                 mainHandler.post { result.success(id) }
@@ -97,7 +112,7 @@ class MainActivity : FlutterActivity() {
                         executor.submit {
                             try {
                                 val s = Peersh.openSignalingSessionV2(
-                                    signaling, user, psk, target, stun, "", idleTimeoutSec)
+                                    signaling, user, psk, target, stun, deviceKeyDir, idleTimeoutSec)
                                 val id = nextSessionId.getAndIncrement()
                                 sessions[id] = s
                                 mainHandler.post { result.success(id) }
@@ -118,7 +133,7 @@ class MainActivity : FlutterActivity() {
                         executor.submit {
                             try {
                                 val s = Peersh.openFirebaseSignalingSessionV2(
-                                    signaling, idToken, appCheckToken, target, stun, "", idleTimeoutSec)
+                                    signaling, idToken, appCheckToken, target, stun, deviceKeyDir, idleTimeoutSec)
                                 val id = nextSessionId.getAndIncrement()
                                 sessions[id] = s
                                 mainHandler.post { result.success(id) }
