@@ -262,14 +262,49 @@ class MainActivity : FlutterActivity() {
                         }
                         executor.submit {
                             try {
+                                // Buffering shim: openPTY[Reattach] needs a
+                                // PTYHandler before we have the host-assigned
+                                // ptyId (only known after the call returns),
+                                // but on reattach the host starts streaming
+                                // the scrollback ring buffer the moment the
+                                // ack lands. Without this buffer those
+                                // replay bytes would arrive while
+                                // realHandler is still null and be silently
+                                // dropped — which is why a freshly
+                                // reconnected client used to render a blank
+                                // terminal until new output arrived.
                                 val tempHandler = object : PTYHandler {
-                                    @Volatile var ptyId: Long = 0
+                                    private val lock = Any()
+                                    private val pendingData = mutableListOf<ByteArray>()
+                                    private val pendingExits = mutableListOf<Pair<Long, String>>()
                                     @Volatile var realHandler: PTYEventHandler? = null
+
                                     override fun onData(data: ByteArray) {
-                                        realHandler?.onData(data)
+                                        var rh: PTYEventHandler? = null
+                                        synchronized(lock) {
+                                            rh = realHandler
+                                            if (rh == null) pendingData.add(data)
+                                        }
+                                        rh?.onData(data)
                                     }
+
                                     override fun onExit(exitCode: Long, errMessage: String) {
-                                        realHandler?.onExit(exitCode, errMessage)
+                                        var rh: PTYEventHandler? = null
+                                        synchronized(lock) {
+                                            rh = realHandler
+                                            if (rh == null) pendingExits.add(exitCode to errMessage)
+                                        }
+                                        rh?.onExit(exitCode, errMessage)
+                                    }
+
+                                    fun activate(rh: PTYEventHandler) {
+                                        synchronized(lock) {
+                                            for (d in pendingData) rh.onData(d)
+                                            pendingData.clear()
+                                            for ((c, m) in pendingExits) rh.onExit(c, m)
+                                            pendingExits.clear()
+                                            realHandler = rh
+                                        }
                                     }
                                 }
                                 val p = if (reattachHandle.isNotEmpty()) {
@@ -278,8 +313,7 @@ class MainActivity : FlutterActivity() {
                                     s.openPTY(command, cols.toLong(), rows.toLong(), tempHandler)
                                 }
                                 val ptyId = p.id()
-                                tempHandler.ptyId = ptyId
-                                tempHandler.realHandler = PTYEventHandler(ptyId) { sink }
+                                tempHandler.activate(PTYEventHandler(ptyId) { sink })
                                 ptys[ptyId] = p
                                 sessionForPty[ptyId] = sessionId
                                 // Best-effort: poll the host-assigned

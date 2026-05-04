@@ -116,8 +116,17 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   Timer? _cwdRefresh;
   bool _opening = false;
   int _lastSentCols = 0;
-  int _lastSentRows = 0;
   final Utf8Decoder _utf8 = const Utf8Decoder(allowMalformed: true);
+  // Holds events that arrive on the broadcast stream before the local
+  // ptyId has been assigned (i.e. before bridge.openPty's
+  // MethodChannel result has been delivered to Dart). On reattach the
+  // host emits PTYData(replay) immediately after ReattachAck, and
+  // because both the EventChannel send and the MethodChannel result
+  // are FIFO-posted to the platform main handler, the replay event
+  // races ahead of the openPty result. Without this buffer the replay
+  // bytes are filtered out by the `id == null` guard in _onEvent.
+  final List<PtyEvent> _preOpenBuffer = <PtyEvent>[];
+  static const int _preOpenBufferLimit = 256;
 
   @override
   void initState() {
@@ -134,6 +143,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     } else {
       // Tab was already initialised previously (e.g. user switched away
       // and back). Re-attach the event listener; PTY id is unchanged.
+      _sub?.cancel();
       _sub = ref.read(bridgeProvider).ptyEvents().listen(_onEvent);
       _scheduleCwdRefresh();
     }
@@ -157,7 +167,9 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       _cwdRefresh?.cancel();
       _cwdRefresh = null;
       _lastSentCols = 0;
-      _lastSentRows = 0;
+      // Drop any pre-open events that may have lingered from the old
+      // session — they reference a now-stale ptyId.
+      _preOpenBuffer.clear();
       widget.tab.terminal.buffer.clear();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _maybeOpenPty();
@@ -196,6 +208,13 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       visibleCols: visibleCols,
       terminalCols: terminalCols,
     );
+    // Subscribe BEFORE awaiting bridge.openPty so the EventChannel
+    // sink is established (via onListen) and the broadcast stream
+    // subscription exists before the host's replay PTYData frame is
+    // emitted. Otherwise both the sink-null case and the
+    // late-subscriber case silently drop the replay.
+    _sub?.cancel();
+    _sub = ref.read(bridgeProvider).ptyEvents().listen(_onEvent);
     try {
       final reattach = widget.tab.reattachHandle;
       final result = await ref.read(bridgeProvider).openPty(
@@ -211,8 +230,34 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       widget.tab.ptyId = result.ptyId;
       widget.tab.reattachHandle = result.handle;
       _lastSentCols = remoteCols;
-      _lastSentRows = dims.rows;
-      _sub = ref.read(bridgeProvider).ptyEvents().listen(_onEvent);
+      // Drain any events that arrived on the broadcast stream before
+      // ptyId was known. Replay bytes from the host land here when
+      // the EventChannel post wins the race against the openPty
+      // MethodChannel reply.
+      if (_preOpenBuffer.isNotEmpty) {
+        final pending = List<PtyEvent>.from(_preOpenBuffer);
+        _preOpenBuffer.clear();
+        for (final e in pending) {
+          if (e.ptyId == result.ptyId) _dispatchEvent(e);
+        }
+      }
+      // Reattach: the replay's trailing cursor sits at whatever
+      // (col, row) the host's wide view had. Local viewports
+      // (e.g. phone width 40 cols) clamp those coordinates and the
+      // cursor visually lands on the wrong row. Send a bare CR so
+      // the shell sees an empty submit and emits a fresh prompt on
+      // a new line; cursor re-anchors to a known position while the
+      // replay content stays visible above. Ctrl-L would clear the
+      // scrollback under PowerShell's PSReadLine, which would defeat
+      // the purpose of the replay. Reconnect time is the safe moment
+      // for this — the user can't be mid-typing because the
+      // connection was down.
+      if (reattach.isNotEmpty) {
+        unawaited(ref.read(bridgeProvider).ptyInput(
+              ptyId: result.ptyId,
+              data: Uint8List.fromList(const [0x0d]),
+            ));
+      }
       // Remember this handle locally so the user can rejoin later if
       // the connection drops or they leave + return.
       if (result.handle.isNotEmpty) {
@@ -226,6 +271,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       _scheduleCwdRefresh();
     } catch (e) {
       if (!mounted) return;
+      _preOpenBuffer.clear();
       widget.tab.terminal
           .write('\r\n\x1b[31mfailed to open PTY: $e\x1b[0m\r\n');
     } finally {
@@ -316,11 +362,16 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       visibleCols: visibleCols,
       terminalCols: terminalCols,
     );
-    if (remoteCols == _lastSentCols && rows == _lastSentRows) return;
+    // Skip the host send when only rows changed: phone rotation, IME
+    // popup, and wrap/scroll toggle all flick rows around without
+    // changing the host-facing cols (PowerShell shells get pinned to
+    // terminalCols regardless of mode). Sending would just trigger a
+    // SIGWINCH and a stale prompt redraw on the host. cols-changed
+    // resizes still go through.
+    if (remoteCols == _lastSentCols) return;
     _resizeDebounce?.cancel();
     _resizeDebounce = Timer(const Duration(milliseconds: 100), () async {
       _lastSentCols = remoteCols;
-      _lastSentRows = rows;
       try {
         await ref.read(bridgeProvider).ptyResize(
               ptyId: id,
@@ -333,7 +384,21 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
 
   void _onEvent(PtyEvent event) {
     final id = widget.tab.ptyId;
-    if (id == null || event.ptyId != id) return;
+    if (id == null) {
+      // ptyId not yet assigned — could be the host's replay frame
+      // racing the openPty MethodChannel reply. Buffer; _maybeOpenPty
+      // drains this list once the assigned ptyId is known.
+      _preOpenBuffer.add(event);
+      while (_preOpenBuffer.length > _preOpenBufferLimit) {
+        _preOpenBuffer.removeAt(0);
+      }
+      return;
+    }
+    if (event.ptyId != id) return;
+    _dispatchEvent(event);
+  }
+
+  void _dispatchEvent(PtyEvent event) {
     if (event is PtyDataEvent) {
       widget.tab.terminal.write(_utf8.convert(event.data));
     } else if (event is PtyExitEvent) {
@@ -348,6 +413,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     _resizeDebounce?.cancel();
     _cwdRefresh?.cancel();
     _sub?.cancel();
+    _preOpenBuffer.clear();
     super.dispose();
   }
 

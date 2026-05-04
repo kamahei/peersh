@@ -832,14 +832,14 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
           orElse: () => true,
         );
     final current = tab.lineWrapOverride ?? settingsDefault;
+    // Pure local presentation toggle. The layout swap + xterm reflow
+    // handle the visual change; _onResize suppresses cols-unchanged
+    // host resizes so the host PTY stays at terminalCols throughout —
+    // no SIGWINCH, no shell prompt redraw, no duplicate rows. The
+    // scrollback survives untouched.
     setState(() {
       tab.lineWrapOverride = !current;
     });
-    // Emergency mitigation for the wrap/scroll display drift: ask the
-    // host shell to repaint so any mid-toggle ESC misfires don't leave
-    // a duplicate prompt below the previous one. Scrollback is left
-    // untouched; only the active screen is refreshed.
-    unawaited(_sendBytes(const [0x0C]));
   }
 
   @override
