@@ -14,8 +14,8 @@ subprojects {
     plugins.withId("org.jetbrains.kotlin.android") {
         tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
             kotlinOptions {
-                languageVersion = "2.1"
-                apiVersion = "2.1"
+                languageVersion = "2.2"
+                apiVersion = "2.2"
             }
         }
     }

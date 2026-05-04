@@ -110,12 +110,12 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-34 ndk;26.1.10909125'
+          packages: 'platform-tools platforms;android-36 ndk;28.2.13676358 build-tools;36.0.0'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.x'
+          flutter-version: '3.41.x'
           channel: stable
           cache: true
 
