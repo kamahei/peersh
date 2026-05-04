@@ -26,7 +26,12 @@ import '../terminal/viewport_estimate.dart';
 class TerminalTabModel extends ChangeNotifier {
   TerminalTabModel({String initialLabel = 'shell'}) : _label = initialLabel;
 
-  final Terminal terminal = Terminal(maxLines: 10000);
+  // reflowEnabled: false — TUI apps (claude / codex / vim) use the
+  // alt-screen with absolute cursor positioning. xterm.dart's reflow
+  // rewrites prior lines on width change (rotation, IME, resize), which
+  // shreds those buffers. Disable it; let the host re-render via the
+  // SIGWINCH-driven repaint instead.
+  final Terminal terminal = Terminal(maxLines: 10000, reflowEnabled: false);
   final TerminalController controller = TerminalController();
 
   String _label;
@@ -116,7 +121,12 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   Timer? _cwdRefresh;
   bool _opening = false;
   int _lastSentCols = 0;
-  final Utf8Decoder _utf8 = const Utf8Decoder(allowMalformed: true);
+  int _lastSentRows = 0;
+  // Stateful UTF-8 decoder. PTY chunks split multi-byte sequences (box
+  // drawing, emoji, Japanese) at arbitrary byte boundaries; decoding
+  // each chunk independently with `convert` would replace both halves
+  // with U+FFFD and corrupt TUI output from claude / codex.
+  late final _Utf8StreamDecoder _utf8 = _Utf8StreamDecoder();
   // Holds events that arrive on the broadcast stream before the local
   // ptyId has been assigned (i.e. before bridge.openPty's
   // MethodChannel result has been delivered to Dart). On reattach the
@@ -167,6 +177,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       _cwdRefresh?.cancel();
       _cwdRefresh = null;
       _lastSentCols = 0;
+      _lastSentRows = 0;
       // Drop any pre-open events that may have lingered from the old
       // session — they reference a now-stale ptyId.
       _preOpenBuffer.clear();
@@ -230,6 +241,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       widget.tab.ptyId = result.ptyId;
       widget.tab.reattachHandle = result.handle;
       _lastSentCols = remoteCols;
+      _lastSentRows = dims.rows;
       // Drain any events that arrived on the broadcast stream before
       // ptyId was known. Replay bytes from the host land here when
       // the EventChannel post wins the race against the openPty
@@ -362,16 +374,16 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       visibleCols: visibleCols,
       terminalCols: terminalCols,
     );
-    // Skip the host send when only rows changed: phone rotation, IME
-    // popup, and wrap/scroll toggle all flick rows around without
-    // changing the host-facing cols (PowerShell shells get pinned to
-    // terminalCols regardless of mode). Sending would just trigger a
-    // SIGWINCH and a stale prompt redraw on the host. cols-changed
-    // resizes still go through.
-    if (remoteCols == _lastSentCols) return;
+    // Both cols AND rows must be tracked: full-screen TUI apps (claude,
+    // codex, vim) read rows to size their alt-screen layout. Phone
+    // rotation and IME popup change rows without cols, and dropping
+    // those leaves the host PTY with stale dimensions, causing the alt
+    // screen to overflow off-screen or clip.
+    if (remoteCols == _lastSentCols && rows == _lastSentRows) return;
     _resizeDebounce?.cancel();
     _resizeDebounce = Timer(const Duration(milliseconds: 100), () async {
       _lastSentCols = remoteCols;
+      _lastSentRows = rows;
       try {
         await ref.read(bridgeProvider).ptyResize(
               ptyId: id,
@@ -400,7 +412,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
 
   void _dispatchEvent(PtyEvent event) {
     if (event is PtyDataEvent) {
-      widget.tab.terminal.write(_utf8.convert(event.data));
+      widget.tab.terminal.write(_utf8.add(event.data));
     } else if (event is PtyExitEvent) {
       widget.tab.terminal.write(
         '\r\n\x1b[33m[pty exited code=${event.exitCode}${event.error.isEmpty ? '' : ' err=${event.error}'}]\x1b[0m\r\n',
@@ -506,5 +518,23 @@ class _ScrollBody extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+/// Streaming UTF-8 decoder. Wraps xterm-bound input so multi-byte
+/// sequences split across PTY chunks are reassembled instead of being
+/// replaced with U+FFFD on each side of the boundary.
+class _Utf8StreamDecoder {
+  final StringBuffer _out = StringBuffer();
+  late final ByteConversionSink _sink =
+      const Utf8Decoder(allowMalformed: true)
+          .startChunkedConversion(StringConversionSink.fromStringSink(_out));
+
+  String add(List<int> bytes) {
+    if (bytes.isEmpty) return '';
+    _sink.add(bytes);
+    final s = _out.toString();
+    _out.clear();
+    return s;
   }
 }
