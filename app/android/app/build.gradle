@@ -36,6 +36,8 @@ android {
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_1_8
+        languageVersion = "2.1"
+        apiVersion = "2.1"
     }
 
     defaultConfig {
@@ -43,7 +45,7 @@ android {
         // but cloud_firestore (Phase 5b) requires API 23+. We bump the
         // floor to 23, which still covers Android 6.0+ (>99% of devices).
         applicationId = "dev.peersh.app"
-        minSdk = 23
+        minSdkVersion = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

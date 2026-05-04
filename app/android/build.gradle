@@ -11,6 +11,14 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
+    plugins.withId("org.jetbrains.kotlin.android") {
+        tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+            kotlinOptions {
+                languageVersion = "2.1"
+                apiVersion = "2.1"
+            }
+        }
+    }
 }
 
 tasks.register("clean", Delete) {
