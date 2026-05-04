@@ -15,10 +15,23 @@ class FirebaseAuthService implements AuthService {
     FirebaseAuth? auth,
     GoogleSignIn? google,
   })  : _auth = auth ?? FirebaseAuth.instance,
-        _google = google ?? GoogleSignIn();
+        _google = google ?? GoogleSignIn.instance;
 
   final FirebaseAuth _auth;
   final GoogleSignIn _google;
+
+  bool _initialized = false;
+
+  // google_sign_in v7 requires a one-shot initialize call before any
+  // authenticate / signOut traffic. Android picks up the OAuth client
+  // ID from google-services.json automatically; iOS reads GIDClientID
+  // from Info.plist (configured by FlutterFire when the operator runs
+  // `flutterfire configure`).
+  Future<void> _ensureInitialized() async {
+    if (_initialized) return;
+    await _google.initialize();
+    _initialized = true;
+  }
 
   /// Returns the currently signed-in Firebase user, or null. Used by
   /// the sign-in screen to skip the prompt on relaunch.
@@ -31,14 +44,18 @@ class FirebaseAuthService implements AuthService {
   /// returned ID token for a Firebase credential. Throws on
   /// cancellation or upstream errors.
   Future<User> signInWithGoogle() async {
-    final account = await _google.signIn();
-    if (account == null) {
-      throw StateError('Google sign-in was cancelled.');
+    await _ensureInitialized();
+    final GoogleSignInAccount account;
+    try {
+      account = await _google.authenticate();
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        throw StateError('Google sign-in was cancelled.');
+      }
+      rethrow;
     }
-    final googleAuth = await account.authentication;
     final cred = GoogleAuthProvider.credential(
-      idToken: googleAuth.idToken,
-      accessToken: googleAuth.accessToken,
+      idToken: account.authentication.idToken,
     );
     final result = await _auth.signInWithCredential(cred);
     final user = result.user;
@@ -49,7 +66,9 @@ class FirebaseAuthService implements AuthService {
   }
 
   Future<void> signOut() async {
-    await _google.signOut();
+    if (_initialized) {
+      await _google.signOut();
+    }
     await _auth.signOut();
   }
 

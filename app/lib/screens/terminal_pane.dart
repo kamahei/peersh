@@ -296,7 +296,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// reattaches, also push the config back to the host so notifications
   /// resume without the user having to re-toggle the bell.
   Future<void> _restoreNotifyConfig(int ptyId, String handle) async {
-    final settings = ref.read(settingsProvider).valueOrNull;
+    final settings = ref.read(settingsProvider).value;
     final defaultThreshold = settings?.defaultNotifyThresholdSec ?? 10;
     final defaultIdle = settings?.defaultNotifyIdleSec ?? 0;
 
@@ -431,7 +431,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
 
   @override
   Widget build(BuildContext context) {
-    final settings = ref.watch(settingsProvider).valueOrNull;
+    final settings = ref.watch(settingsProvider).value;
     final fontSize = settings?.fontSize ?? 13.0;
     final terminalCols =
         settings?.terminalCols ?? AppSettings.defaultTerminalCols;
@@ -449,7 +449,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         if (showLoader)
           Positioned.fill(
             child: ColoredBox(
-              color: Colors.black.withOpacity(0.55),
+              color: Colors.black.withValues(alpha: 0.55),
               child: const Center(child: CircularProgressIndicator()),
             ),
           ),

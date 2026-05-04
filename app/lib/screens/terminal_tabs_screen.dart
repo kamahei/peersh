@@ -810,7 +810,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   }
 
   String _keepAliveSubtitle() {
-    final sec = ref.read(persistedIdleTimeoutProvider).valueOrNull ??
+    final sec = ref.read(persistedIdleTimeoutProvider).value ??
         PersistedIdleTimeoutNotifier.defaultSeconds;
     if (sec >= 24 * 60 * 60) {
       final days = sec ~/ (24 * 60 * 60);

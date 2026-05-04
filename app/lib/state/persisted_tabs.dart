@@ -109,7 +109,7 @@ class PersistedTabsNotifier extends AsyncNotifier<PersistedTabs> {
         ? 0
         : snapshot.activeIndex.clamp(0, filtered.length - 1);
     final next = PersistedTabs(byServer: {
-      ...?state.valueOrNull?.byServer,
+      ...?state.value?.byServer,
       serverId: TabsSnapshot(activeIndex: clamped, tabs: filtered),
     });
     await _store.writeKey(_key, jsonEncode(next.toJson()));
@@ -121,7 +121,7 @@ class PersistedTabsNotifier extends AsyncNotifier<PersistedTabs> {
     required String serverId,
     required String handle,
   }) async {
-    final current = state.valueOrNull;
+    final current = state.value;
     if (current == null) return;
     final stored = current.forServer(serverId);
     if (stored == null) return;
@@ -143,7 +143,7 @@ class PersistedTabsNotifier extends AsyncNotifier<PersistedTabs> {
   }
 
   Future<void> clear({required String serverId}) async {
-    final current = state.valueOrNull;
+    final current = state.value;
     if (current == null || !current.byServer.containsKey(serverId)) return;
     final byServer = {...current.byServer}..remove(serverId);
     final next = PersistedTabs(byServer: byServer);

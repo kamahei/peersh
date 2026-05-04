@@ -14,7 +14,7 @@ class SecureStore {
   static const _settingsKey = 'settings.v1';
 
   static const _defaultStorage = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    aOptions: AndroidOptions(),
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
   );
 

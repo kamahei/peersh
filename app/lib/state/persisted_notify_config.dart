@@ -87,7 +87,7 @@ class PersistedNotifyConfigsNotifier
     required NotifyConfig config,
   }) async {
     if (serverId.isEmpty || handle.isEmpty) return;
-    final current = state.valueOrNull ?? PersistedNotifyConfigs();
+    final current = state.value ?? PersistedNotifyConfigs();
     final next = PersistedNotifyConfigs(
       byKey: {
         ...current.byKey,
@@ -102,7 +102,7 @@ class PersistedNotifyConfigsNotifier
     required String serverId,
     required String handle,
   }) async {
-    final current = state.valueOrNull;
+    final current = state.value;
     if (current == null) return;
     final key = PersistedNotifyConfigs._key(serverId, handle);
     if (!current.byKey.containsKey(key)) return;

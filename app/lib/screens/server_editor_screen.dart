@@ -184,7 +184,7 @@ class _ServerEditorScreenState extends ConsumerState<ServerEditorScreen> {
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<ServerAuthMode>(
-            value: _authMode,
+            initialValue: _authMode,
             decoration: const InputDecoration(labelText: 'Auth provider'),
             items: const [
               DropdownMenuItem(

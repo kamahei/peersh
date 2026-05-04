@@ -104,7 +104,7 @@ class PeershBridge {
     });
   }
 
-  /// One-shot: runs Get-Content -Raw -Encoding UTF8 -LiteralPath '<path>'
+  /// One-shot: runs `Get-Content -Raw -Encoding UTF8 -LiteralPath '<path>'`
   /// and returns the captured stdout. On failure the returned string
   /// starts with "ERROR: ".
   Future<String> readFile({required int sessionId, required String path}) async {

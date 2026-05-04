@@ -80,33 +80,33 @@ class AppSettingsNotifier extends AsyncNotifier<AppSettings> {
   }
 
   Future<void> setLineWrap(bool v) async {
-    final next = (state.valueOrNull ?? const AppSettings()).copyWith(lineWrap: v);
+    final next = (state.value ?? const AppSettings()).copyWith(lineWrap: v);
     await _store.writeSettings(next.toJson());
     state = AsyncData(next);
   }
 
   Future<void> setFontSize(double v) async {
-    final next = (state.valueOrNull ?? const AppSettings()).copyWith(fontSize: v);
+    final next = (state.value ?? const AppSettings()).copyWith(fontSize: v);
     await _store.writeSettings(next.toJson());
     state = AsyncData(next);
   }
 
   Future<void> setDefaultNotifyThresholdSec(int v) async {
-    final next = (state.valueOrNull ?? const AppSettings())
+    final next = (state.value ?? const AppSettings())
         .copyWith(defaultNotifyThresholdSec: v.clamp(1, 600));
     await _store.writeSettings(next.toJson());
     state = AsyncData(next);
   }
 
   Future<void> setDefaultNotifyIdleSec(int v) async {
-    final next = (state.valueOrNull ?? const AppSettings())
+    final next = (state.value ?? const AppSettings())
         .copyWith(defaultNotifyIdleSec: v.clamp(0, 300));
     await _store.writeSettings(next.toJson());
     state = AsyncData(next);
   }
 
   Future<void> setTerminalCols(int v) async {
-    final next = (state.valueOrNull ?? const AppSettings()).copyWith(
+    final next = (state.value ?? const AppSettings()).copyWith(
       terminalCols:
           v.clamp(AppSettings.minTerminalCols, AppSettings.maxTerminalCols),
     );

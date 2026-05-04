@@ -14,13 +14,13 @@ class ServersNotifier extends AsyncNotifier<List<ServerEntry>> {
   Future<List<ServerEntry>> build() async => _store.readServers();
 
   Future<void> add(ServerEntry entry) async {
-    final next = <ServerEntry>[...?state.valueOrNull, entry];
+    final next = <ServerEntry>[...?state.value, entry];
     await _store.writeServers(next);
     state = AsyncData(next);
   }
 
   Future<void> replace(ServerEntry entry) async {
-    final current = state.valueOrNull ?? const <ServerEntry>[];
+    final current = state.value ?? const <ServerEntry>[];
     final next = [
       for (final e in current)
         if (e.id == entry.id) entry else e,
@@ -30,7 +30,7 @@ class ServersNotifier extends AsyncNotifier<List<ServerEntry>> {
   }
 
   Future<void> remove(String id) async {
-    final current = state.valueOrNull ?? const <ServerEntry>[];
+    final current = state.value ?? const <ServerEntry>[];
     final next = current.where((e) => e.id != id).toList();
     await _store.writeServers(next);
     state = AsyncData(next);

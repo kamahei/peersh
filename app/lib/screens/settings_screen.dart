@@ -33,7 +33,7 @@ class _BgKeepaliveTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(persistedBgKeepaliveProvider);
-    final on = async.valueOrNull ?? PersistedBgKeepaliveNotifier.defaultValue;
+    final on = async.value ?? PersistedBgKeepaliveNotifier.defaultValue;
     return SwitchListTile(
       title: const Text('Keep connection alive in background'),
       subtitle: const Text('Applies on next connect.'),
@@ -50,7 +50,7 @@ class _IdleTimeoutTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(persistedIdleTimeoutProvider);
-    final current = async.valueOrNull ??
+    final current = async.value ??
         PersistedIdleTimeoutNotifier.defaultSeconds;
     return ListTile(
       title: const Text('Keep shells alive for'),

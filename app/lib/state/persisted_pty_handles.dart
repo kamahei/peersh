@@ -52,7 +52,7 @@ class PersistedPtyHandlesNotifier extends AsyncNotifier<PersistedPtyHandles> {
   Future<void> remember(
       {required String serverId, required String handle}) async {
     if (serverId.isEmpty || handle.isEmpty) return;
-    final current = state.valueOrNull ?? PersistedPtyHandles();
+    final current = state.value ?? PersistedPtyHandles();
     final list = List<String>.from(current.forServer(serverId))
       ..remove(handle)
       ..insert(0, handle);
@@ -65,7 +65,7 @@ class PersistedPtyHandlesNotifier extends AsyncNotifier<PersistedPtyHandles> {
 
   Future<void> forget(
       {required String serverId, required String handle}) async {
-    final current = state.valueOrNull;
+    final current = state.value;
     if (current == null) return;
     final list = List<String>.from(current.forServer(serverId))..remove(handle);
     final next = PersistedPtyHandles(
