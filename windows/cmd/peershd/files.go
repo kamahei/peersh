@@ -92,7 +92,8 @@ func handleListPTYs(mgr *ptyhost.Manager, owner ptyhost.Owner) *v1.FilesResponse
 		out.Ptys = append(out.Ptys, &v1.PTYHandle{
 			Handle:         string(l.Handle),
 			Command:        l.Command,
-			Attached:       l.Attached,
+			Attached:       l.AttachedCount > 0,
+			AttachedCount:  l.AttachedCount,
 			Cwd:            l.CWD,
 			LastSeenUnixMs: l.LastSeenMs,
 		})

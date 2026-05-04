@@ -4,16 +4,17 @@
 // Sessions persist across QUIC reconnects: a Session opened during one
 // connection is held by the process-global ptyhost.Manager (see
 // manager.go) and can be rebound by a later connection that presents
-// the matching reattach handle plus the same peer device_id Owner.
-// Manager.Sweep reaps detached Sessions whose IdleTimeout has elapsed.
+// the matching reattach handle plus the same Owner. Manager.Sweep
+// reaps detached Sessions whose IdleTimeout has elapsed.
 //
 // Pump is session-lifetime: Manager.Register starts one Pump goroutine
 // per Session and the same goroutine runs until the child process
 // exits (or the Manager evicts the entry). Output bytes flow into
-// (a) the entry's ring buffer (always) and (b) the currently-installed
-// sink (set by whichever stream is attached). When a new client
-// reconnects and steals the attachment, it just installs a new sink;
-// the old sink is dropped without closing the underlying PTY.
+// (a) the entry's ring buffer (always) and (b) every currently-
+// attached sink (zero or more — multiple clients can attach to the
+// same Session simultaneously and all receive the same byte stream).
+// Sinks come and go via AddSink / RemoveSink as clients attach and
+// detach; the Session itself stays alive for the Manager's idle TTL.
 package ptyhost
 
 import (
@@ -30,8 +31,9 @@ import (
 )
 
 // SinkFunc receives PTYData / PTYExit frames produced by a Session's
-// Pump. Returning an error is harmless — Pump just drops the frame and
-// keeps running (the next SetSink swap will provide a fresh sink).
+// Pump. Returning an error is harmless — Pump just drops the frame for
+// that sink and keeps running, so a single broken stream does not
+// terminate the Session or starve the other attached sinks.
 type SinkFunc func(*v1.PTYFrame) error
 
 // RingFunc is called for every PTYData payload before sink dispatch so
@@ -39,9 +41,19 @@ type SinkFunc func(*v1.PTYFrame) error
 // scrollback ring buffer.
 type RingFunc func([]byte)
 
+// SinkToken identifies an installed sink. AddSink returns one;
+// RemoveSink takes one back. Tokens are unique within a Session and
+// monotonically increase, so a stale RemoveSink call cannot remove a
+// later sink that happens to reuse the underlying slot.
+type SinkToken uint64
+
 // Session wraps a pty.PTY and exposes Write / Resize / Close. The
 // session-lifetime Pump goroutine inside Manager drives the output
-// direction; per-stream sinks are swapped via SetSink/ClearSink.
+// direction; per-stream sinks are added via AddSink and removed via
+// RemoveSink. Any number of sinks can be attached at once and Pump
+// dispatches each chunk to all of them (multi-attach fan-out), so
+// e.g. a CLI on the operator's PC and the mobile app can observe the
+// same shell live.
 //
 // Tier 2 addition: each session owns a CWDTracker that scans the
 // child's output for OSC 9;9 prompt sequences. The tracker is fed
@@ -54,9 +66,15 @@ type Session struct {
 	mu     sync.Mutex
 	closed bool
 
-	sinkMu     sync.RWMutex
-	sink       SinkFunc
-	sinkID     uint64 // monotonically incremented on each SetSink swap
+	// sinkMu serialises Pump's per-chunk dispatch with sink mutation
+	// (AddSink/RemoveSink) and with ring-snapshot-during-attach. Pump
+	// holds it across (ring write + sink iteration) so a concurrent
+	// Attach cannot observe a state where a chunk has been written to
+	// the ring but the new sink missed the live dispatch (or vice
+	// versa).
+	sinkMu     sync.Mutex
+	sinks      map[SinkToken]SinkFunc
+	nextSink   SinkToken
 	ringAppend RingFunc
 
 	tracker *session.CWDTracker
@@ -117,13 +135,14 @@ func (s *Session) CWD() string {
 }
 
 // Write forwards user keystrokes / paste payloads to the child process.
+// Calls are serialised so concurrent input from multiple attached
+// clients lands as whole chunks rather than interleaving mid-byte.
 func (s *Session) Write(data []byte) (int, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return 0, errClosed
 	}
-	s.mu.Unlock()
 	return s.p.Write(data)
 }
 
@@ -151,27 +170,44 @@ func (s *Session) Close() error {
 	return s.p.Close()
 }
 
-// SetSink installs sink as the current output destination, replacing
-// any previously installed sink. Returns a swap id the caller passes
-// to ClearSink so a stale tear-down can't clobber a fresh attach.
-func (s *Session) SetSink(sink SinkFunc) uint64 {
+// AddSink registers sink to receive every Pump frame and returns a
+// token the caller passes to RemoveSink when it's done. Multiple sinks
+// can be attached simultaneously; Pump dispatches each chunk to all of
+// them in arbitrary order.
+func (s *Session) AddSink(sink SinkFunc) SinkToken {
 	s.sinkMu.Lock()
 	defer s.sinkMu.Unlock()
-	s.sinkID++
-	s.sink = sink
-	return s.sinkID
+	return s.addSinkLocked(sink)
 }
 
-// ClearSink removes the sink that was installed by the SetSink call
-// that returned id. If a later SetSink has already swapped to a newer
-// sink, ClearSink is a no-op — that's how the new attach is protected
-// from a stale per-stream goroutine's tear-down call.
-func (s *Session) ClearSink(id uint64) {
+// RemoveSink uninstalls the sink identified by token. A no-op when the
+// token has already been removed (or never existed).
+func (s *Session) RemoveSink(token SinkToken) {
 	s.sinkMu.Lock()
 	defer s.sinkMu.Unlock()
-	if s.sinkID == id {
-		s.sink = nil
+	delete(s.sinks, token)
+}
+
+// AddSinkWithSnapshot atomically captures a caller-supplied snapshot
+// (typically a ring-buffer scrollback) AND installs sink, so the new
+// sink doesn't miss any chunk that occurred between snapshot and
+// registration. snapshotFn is invoked while the sink lock is held —
+// avoid expensive work or blocking calls inside it.
+func (s *Session) AddSinkWithSnapshot(snapshotFn func() []byte, sink SinkFunc) (SinkToken, []byte) {
+	s.sinkMu.Lock()
+	defer s.sinkMu.Unlock()
+	snap := snapshotFn()
+	token := s.addSinkLocked(sink)
+	return token, snap
+}
+
+func (s *Session) addSinkLocked(sink SinkFunc) SinkToken {
+	s.nextSink++
+	if s.sinks == nil {
+		s.sinks = make(map[SinkToken]SinkFunc)
 	}
+	s.sinks[s.nextSink] = sink
+	return s.nextSink
 }
 
 // SetRingAppend stores f as the function called for every PTYData
@@ -184,22 +220,11 @@ func (s *Session) SetRingAppend(f RingFunc) {
 	s.sinkMu.Unlock()
 }
 
-// currentSinkAndRing returns the currently-installed sink and ring
-// append in one critical section, so Pump dispatches to a consistent
-// snapshot.
-func (s *Session) currentSinkAndRing() (SinkFunc, RingFunc) {
-	s.sinkMu.RLock()
-	sink := s.sink
-	ring := s.ringAppend
-	s.sinkMu.RUnlock()
-	return sink, ring
-}
-
 // Pump runs the session-lifetime output loop: reads bytes from the
-// pseudo-console and dispatches them to the ring-append function (set
-// once via SetRingAppend) and the currently-installed sink (set per
-// attach via SetSink). On child exit it sends one final PTYFrame{Exit}
-// to whichever sink is current at that moment.
+// pseudo-console, mirrors them into the ring-append function (set
+// once via SetRingAppend), and dispatches them to every currently-
+// attached sink. On child exit it sends one final PTYFrame{Exit} to
+// every sink that's still attached at that moment.
 //
 // Pump must run in its own goroutine; the caller's request loop drives
 // Write / Resize / Close on the same Session concurrently. ctx is the
@@ -244,7 +269,7 @@ func (s *Session) Pump(ctx context.Context) {
 		if n > 0 {
 			payload := make([]byte, n)
 			copy(payload, buf[:n])
-			// Feed the tracker BEFORE forwarding so a fresh CWD is
+			// Feed the tracker BEFORE dispatch so a fresh CWD is
 			// committed by the time the client tries to call ListFiles
 			// after seeing the prompt.
 			if paths := s.tracker.Feed(payload); len(paths) > 0 {
@@ -252,20 +277,7 @@ func (s *Session) Pump(ctx context.Context) {
 				s.cwd = paths[len(paths)-1]
 				s.cwdMu.Unlock()
 			}
-			sink, ring := s.currentSinkAndRing()
-			if ring != nil {
-				ring(payload)
-			}
-			if sink != nil {
-				frame := &v1.PTYFrame{Kind: &v1.PTYFrame_Data{Data: &v1.PTYData{Data: payload}}}
-				// Sink errors are intentionally swallowed: the per-stream
-				// caller's wire.Write may fail because the client's
-				// connection went away, but the session itself stays
-				// alive so a later reattach can pick up where this one
-				// left off. The next SetSink swap will install a healthy
-				// sink in place of the failing one.
-				_ = sink(frame)
-			}
+			s.dispatchData(payload)
 		}
 		if err != nil {
 			break
@@ -277,8 +289,45 @@ func (s *Session) Pump(ctx context.Context) {
 	if res.err != nil && !errors.Is(res.err, io.EOF) {
 		exit.Error = res.err.Error()
 	}
-	if sink, _ := s.currentSinkAndRing(); sink != nil {
-		_ = sink(&v1.PTYFrame{Kind: &v1.PTYFrame_Exit{Exit: exit}})
+	s.dispatchExit(exit)
+}
+
+// dispatchData mirrors payload into the ring-append callback and
+// fans out a Data frame to every attached sink. Holding sinkMu across
+// both operations is what makes Manager.Attach's snapshot-and-add path
+// race-free: a concurrent attach either sees this chunk in the ring
+// snapshot OR receives it via the new sink, never both and never
+// neither.
+func (s *Session) dispatchData(payload []byte) {
+	s.sinkMu.Lock()
+	defer s.sinkMu.Unlock()
+	if s.ringAppend != nil {
+		s.ringAppend(payload)
+	}
+	if len(s.sinks) == 0 {
+		return
+	}
+	frame := &v1.PTYFrame{Kind: &v1.PTYFrame_Data{Data: &v1.PTYData{Data: payload}}}
+	for _, fn := range s.sinks {
+		// Sink errors are intentionally swallowed: the per-stream
+		// caller's wire.Write may fail because the client's
+		// connection went away, but the session itself stays alive
+		// so a later reattach can pick up where this one left off.
+		// The next AddSink will install a healthy sink in place of
+		// the failing one.
+		_ = fn(frame)
+	}
+}
+
+func (s *Session) dispatchExit(exit *v1.PTYExit) {
+	s.sinkMu.Lock()
+	defer s.sinkMu.Unlock()
+	if len(s.sinks) == 0 {
+		return
+	}
+	frame := &v1.PTYFrame{Kind: &v1.PTYFrame_Exit{Exit: exit}}
+	for _, fn := range s.sinks {
+		_ = fn(frame)
 	}
 }
 

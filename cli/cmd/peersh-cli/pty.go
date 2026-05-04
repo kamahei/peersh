@@ -29,7 +29,12 @@ import (
 	"golang.org/x/term"
 )
 
-func runPTY(ctx context.Context, conn *transport.Conn, command string) error {
+// runPTY opens a PTY stream. When reattachHandle is non-empty the
+// server rebinds an existing persisted shell and replays its
+// scrollback (multi-attach: the server does not displace any other
+// streams already attached to the same handle). When empty a fresh
+// PTY is spawned with the given command.
+func runPTY(ctx context.Context, conn *transport.Conn, command, reattachHandle string) error {
 	stream, err := conn.OpenStream(ctx)
 	if err != nil {
 		return fmt.Errorf("OpenStream: %w", err)
@@ -39,9 +44,10 @@ func runPTY(ctx context.Context, conn *transport.Conn, command string) error {
 	cols, rows := initialSize()
 	if err := wire.Write(stream, &v1.StreamRequest{
 		Kind: &v1.StreamRequest_Pty{Pty: &v1.PTYRequest{
-			Command: command,
-			Cols:    uint32(cols),
-			Rows:    uint32(rows),
+			Command:        command,
+			Cols:           uint32(cols),
+			Rows:           uint32(rows),
+			ReattachHandle: reattachHandle,
 		}},
 	}); err != nil {
 		return fmt.Errorf("write StreamRequest: %w", err)
@@ -104,6 +110,14 @@ func runPTY(ctx context.Context, conn *transport.Conn, command string) error {
 			return fmt.Errorf("read PTYFrame: %w", err)
 		}
 		switch k := frame.GetKind().(type) {
+		case *v1.PTYFrame_ReattachAck:
+			if !k.ReattachAck.GetAccepted() {
+				fmt.Fprintf(os.Stderr, "reattach rejected: %s\r\n", k.ReattachAck.GetReason())
+				return fmt.Errorf("reattach rejected: %s", k.ReattachAck.GetReason())
+			}
+			// Print the server-issued handle to stderr so scripts can
+			// capture it (e.g. peersh-cli ... -pty-new 2>handle.txt).
+			fmt.Fprintf(os.Stderr, "pty handle: %s\r\n", k.ReattachAck.GetHandle())
 		case *v1.PTYFrame_Data:
 			if d := k.Data.GetData(); len(d) > 0 {
 				_, _ = w.Write(d)

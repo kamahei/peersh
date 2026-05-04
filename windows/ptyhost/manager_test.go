@@ -4,9 +4,11 @@ package ptyhost_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	v1 "github.com/peersh/peersh/core/protocol/peersh/v1"
 	"github.com/peersh/peersh/windows/ptyhost"
 )
 
@@ -21,9 +23,9 @@ func TestRingBufferUnderCap(t *testing.T) {
 		t.Skipf("open pty: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	h, _ := m.Register(testOwner, s, "test")
+	h, _ := m.Register(testOwner, s, "test", nil)
 	m.Append(testOwner, h, []byte("hello"))
-	got, err := m.Attach(testOwner, h)
+	got, err := m.Attach(testOwner, h, nil)
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -41,8 +43,9 @@ func TestSweepDropsExpired(t *testing.T) {
 	if err != nil {
 		t.Skipf("open pty: %v", err)
 	}
-	h, reg := m.Register(testOwner, s, "test")
-	m.Detach(testOwner, h, reg.Gen)
+	h, reg := m.Register(testOwner, s, "test", nil)
+	m.Detach(reg.Token)
+	_ = h
 	time.Sleep(150 * time.Millisecond)
 	if n := m.Sweep(); n != 1 {
 		t.Fatalf("expected 1 evicted, got %d", n)
@@ -61,15 +64,16 @@ func TestListReportsAttachState(t *testing.T) {
 		t.Skipf("open pty: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	h, reg := m.Register(testOwner, s, "pwsh")
+	sinkFn := func(*v1.PTYFrame) error { return nil }
+	h, reg := m.Register(testOwner, s, "pwsh", sinkFn)
 	listings := m.List(testOwner)
-	if len(listings) != 1 || listings[0].Handle != h || !listings[0].Attached {
-		t.Fatalf("expected one attached entry, got %v", listings)
+	if len(listings) != 1 || listings[0].Handle != h || listings[0].AttachedCount != 1 {
+		t.Fatalf("expected one entry with AttachedCount=1, got %v", listings)
 	}
-	m.Detach(testOwner, h, reg.Gen)
+	m.Detach(reg.Token)
 	listings = m.List(testOwner)
-	if listings[0].Attached {
-		t.Fatal("expected detached after Detach")
+	if listings[0].AttachedCount != 0 {
+		t.Fatalf("expected AttachedCount=0 after Detach, got %d", listings[0].AttachedCount)
 	}
 }
 
@@ -87,11 +91,11 @@ func TestAttachAcrossReconnect(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	h, reg := m.Register(testOwner, s, "pwsh")
+	h, reg := m.Register(testOwner, s, "pwsh", nil)
 	m.Append(testOwner, h, []byte("first run output"))
-	m.Detach(testOwner, h, reg.Gen) // simulate the QUIC connection ending
+	m.Detach(reg.Token) // simulate the QUIC connection ending
 
-	got, err := m.Attach(testOwner, h)
+	got, err := m.Attach(testOwner, h, nil)
 	if err != nil {
 		t.Fatalf("reattach after detach: %v", err)
 	}
@@ -101,14 +105,14 @@ func TestAttachAcrossReconnect(t *testing.T) {
 	if string(got.Replay) != "first run output" {
 		t.Fatalf("replay lost across reconnect: %q", got.Replay)
 	}
-	if got.Gen <= reg.Gen {
-		t.Fatalf("attach gen should bump on reattach: reg=%d got=%d", reg.Gen, got.Gen)
+	if got.Token.SinkID != 0 {
+		t.Fatal("snapshot-only Attach (nil sink) should yield zero SinkID")
 	}
 }
 
 // TestAttachWithDifferentOwnerFails verifies the owner partition: a
-// different session_id may not see, attach to, or otherwise touch
-// another session's PTY. Returning the same "unknown handle" error as
+// different Owner may not see, attach to, or otherwise touch
+// another's PTY. Returning the same "unknown handle" error as
 // for a missing entry avoids leaking handle existence.
 func TestAttachWithDifferentOwnerFails(t *testing.T) {
 	const otherOwner ptyhost.Owner = "OWNER2"
@@ -121,16 +125,16 @@ func TestAttachWithDifferentOwnerFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	h, reg := m.Register(testOwner, s, "pwsh")
-	m.Detach(testOwner, h, reg.Gen)
+	h, reg := m.Register(testOwner, s, "pwsh", nil)
+	m.Detach(reg.Token)
 
-	if _, err := m.Attach(otherOwner, h); err == nil ||
+	if _, err := m.Attach(otherOwner, h, nil); err == nil ||
 		!strings.Contains(err.Error(), "unknown handle") {
 		t.Fatalf("expected unknown-handle error for cross-owner Attach, got %v", err)
 	}
 	// The original owner must still be able to reattach: the failed
 	// cross-owner Attach must not have flipped the entry's state.
-	got, err := m.Attach(testOwner, h)
+	got, err := m.Attach(testOwner, h, nil)
 	if err != nil {
 		t.Fatalf("legitimate owner reattach: %v", err)
 	}
@@ -139,12 +143,12 @@ func TestAttachWithDifferentOwnerFails(t *testing.T) {
 	}
 }
 
-// TestAttachStealsFromExistingAttach is the reconnect-while-old-still-
-// attached scenario: a same-owner Attach succeeds even when the entry
-// is currently attached, and the previous attach's kick channel is
-// closed so its goroutine can wind down. Pre-fix this returned
-// alreadyAttached=true and rejected the reattach.
-func TestAttachStealsFromExistingAttach(t *testing.T) {
+// TestMultiAttachFanOut verifies that two simultaneous Attaches to the
+// same handle both receive every chunk Pump produces, with no missed
+// or duplicated bytes between the two sinks. This is the core
+// invariant the multi-attach refactor enables: a CLI on the user's PC
+// and the mobile app can both observe the same shell live.
+func TestMultiAttachFanOut(t *testing.T) {
 	m := ptyhost.NewManager()
 	t.Cleanup(m.Close)
 	exePath, args := mustResolveShellForTest(t)
@@ -154,30 +158,76 @@ func TestAttachStealsFromExistingAttach(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	_, reg := m.Register(testOwner, s, "pwsh")
-	prevKick := reg.Kick
+	h, regA := m.Register(testOwner, s, "pwsh", func(*v1.PTYFrame) error { return nil })
 
-	got, err := m.Attach(testOwner, m.List(testOwner)[0].Handle)
+	// Drop a known marker into the ring so the second sink's replay is
+	// non-empty (Pump may not have emitted anything yet for the freshly
+	// spawned shell, depending on timing).
+	m.Append(testOwner, h, []byte("scrollback-marker"))
+
+	var (
+		mu       sync.Mutex
+		got      []byte
+	)
+	regB, err := m.Attach(testOwner, h, func(f *v1.PTYFrame) error {
+		if d := f.GetData(); d != nil {
+			mu.Lock()
+			got = append(got, d.GetData()...)
+			mu.Unlock()
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("steal Attach: %v", err)
+		t.Fatalf("second Attach: %v", err)
 	}
-	select {
-	case <-prevKick:
-	default:
-		t.Fatal("previous attach's kick channel should be closed by steal")
+	if !strings.Contains(string(regB.Replay), "scrollback-marker") {
+		t.Fatalf("second Attach should replay scrollback containing marker, got %q", regB.Replay)
 	}
-	if got.Gen == reg.Gen {
-		t.Fatalf("attach gen should bump on steal: was=%d", got.Gen)
+	// First attach is still live — no steal happened. Detach both;
+	// neither should error.
+	m.Detach(regA.Token)
+	m.Detach(regB.Token)
+}
+
+// TestDetachOneOfTwoKeepsOtherAlive checks that removing one of two
+// attached sinks doesn't disturb the other and doesn't start the idle
+// TTL countdown.
+func TestDetachOneOfTwoKeepsOtherAlive(t *testing.T) {
+	m := ptyhost.NewManager()
+	m.SetIdleTimeout(50 * time.Millisecond)
+	t.Cleanup(m.Close)
+	exePath, args := mustResolveShellForTest(t)
+	s, err := ptyhost.Open(exePath, args, 80, 24)
+	if err != nil {
+		t.Skipf("open pty: %v", err)
 	}
-	// New kick channel must NOT be the previous one.
-	if got.Kick == prevKick {
-		t.Fatal("Attach must hand back a fresh kick channel")
+	t.Cleanup(func() { _ = s.Close() })
+
+	h, regA := m.Register(testOwner, s, "pwsh", func(*v1.PTYFrame) error { return nil })
+	regB, err := m.Attach(testOwner, h, func(*v1.PTYFrame) error { return nil })
+	if err != nil {
+		t.Fatalf("Attach B: %v", err)
+	}
+
+	// Detach A; B is still attached so Sweep must not evict.
+	m.Detach(regA.Token)
+	time.Sleep(150 * time.Millisecond)
+	if n := m.Sweep(); n != 0 {
+		t.Fatalf("Sweep evicted while B still attached: %d", n)
+	}
+
+	// Now detach B; the entry becomes idle and should be evicted on
+	// the next Sweep after the TTL elapses.
+	m.Detach(regB.Token)
+	time.Sleep(150 * time.Millisecond)
+	if n := m.Sweep(); n != 1 {
+		t.Fatalf("expected 1 evicted after both detached, got %d", n)
 	}
 }
 
 // TestListIsOwnerScoped verifies that List is a per-owner view, so the
 // file-API ListPTYs response cannot enumerate handles owned by a
-// different session.
+// different owner.
 func TestListIsOwnerScoped(t *testing.T) {
 	const otherOwner ptyhost.Owner = "OWNER2"
 	m := ptyhost.NewManager()
@@ -194,8 +244,8 @@ func TestListIsOwnerScoped(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s2.Close() })
 
-	h1, _ := m.Register(testOwner, s1, "pwsh")
-	_, _ = m.Register(otherOwner, s2, "pwsh")
+	h1, _ := m.Register(testOwner, s1, "pwsh", nil)
+	_, _ = m.Register(otherOwner, s2, "pwsh", nil)
 
 	listings := m.List(testOwner)
 	if len(listings) != 1 || listings[0].Handle != h1 {

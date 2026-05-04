@@ -4,6 +4,7 @@ class PtyHandleInfo {
     required this.handle,
     required this.command,
     required this.attached,
+    required this.attachedCount,
     required this.cwd,
     required this.lastSeenUnixMs,
   });
@@ -12,9 +13,13 @@ class PtyHandleInfo {
   final String handle;
   /// What the PTY is running ("auto" / "pwsh" / "claude" / ...).
   final String command;
-  /// True when another stream is currently bound. Trying to reattach
-  /// to an already-attached handle is rejected by the server.
+  /// True when at least one stream is currently bound. Multi-attach:
+  /// stays true while any device of the same user (mobile, PC CLI,
+  /// other phones) is observing this shell.
   final bool attached;
+  /// Number of streams currently bound. Zero = nobody attached;
+  /// >1 = multiple devices observing live (multi-attach fan-out).
+  final int attachedCount;
   /// Last-observed cwd (or empty if no prompt has rendered yet).
   final String cwd;
   /// Time of the most recent attach/detach transition.
@@ -24,6 +29,7 @@ class PtyHandleInfo {
         handle: (m['handle'] as String?) ?? '',
         command: (m['command'] as String?) ?? '',
         attached: (m['attached'] as bool?) ?? false,
+        attachedCount: (m['attachedCount'] as num?)?.toInt() ?? 0,
         cwd: (m['cwd'] as String?) ?? '',
         lastSeenUnixMs: (m['lastSeenUnixMs'] as num?)?.toInt() ?? 0,
       );

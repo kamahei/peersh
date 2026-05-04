@@ -95,6 +95,31 @@ Represents an active or recently-active connection between a paired mobile devic
   - Idle timeout defaults to 30 minutes.
 - **Storage scope.** Sessions are tracked in memory on the host (`peershd`) for the active shell process plus its buffered output. The Firestore `users/{uid}/sessions/{sessionId}` collection is reserved for a future server-side wake-throttling path; after v2-A no client writes to it (wake events flow through Realtime Database `users/{uid}/wake_requests/`).
 
+### PersistedPTY
+
+Represents an interactive ConPTY-backed shell that the host keeps alive across QUIC reconnects so any of the operator's devices can attach to it.
+
+- **Identifier.** `ManagedHandle` (16-character base32, server-issued, opaque).
+- **Owner partition.** `Owner = user_id` — the authenticated user_id from the host's PSK `-user` flag or its Firebase UID. Every device that registers under the same user (mobile app, the operator's PC CLI, an additional PC) shares one Owner bucket and can list / reattach to / multi-attach the same PTYs. Cross-user access is impossible because the signaling server already same-user-routes Connect frames; any peer that survives the host's QUIC accept loop is by construction a device of the host's own user. In direct mode (no signaling), Owner is empty and all peers share one bucket — acceptable because direct mode is loopback / dev-only.
+- **Fields.**
+  - `handle` (string, primary key within an Owner)
+  - `owner` (string, == host's user_id)
+  - `command` (string, diagnostic — "auto" / "pwsh" / "claude" / ...)
+  - `attach_count` (uint, number of streams currently bound)
+  - `last_seen` (timestamp, updated on attach/detach transitions)
+  - `ring` (1 MiB scrollback buffer)
+  - `cwd` (string, last directory observed via OSC 9;9; empty until first prompt)
+- **Invariants.**
+  - A handle is unique within an Owner; cross-Owner lookup returns "unknown handle" (no existence leak).
+  - `attach_count == 0 && now - last_seen > IdleTimeout` ⇒ Sweep evicts on the next pass.
+  - `IdleTimeout` defaults to 24 h.
+- **Lifecycle.**
+  - Created on first `PTYRequest` with empty `reattach_handle`. Pump goroutine starts; ring buffer fills as bytes flow.
+  - Multi-attach: subsequent `PTYRequest{reattach_handle}` from any device of the same user adds another sink atomically with a ring-snapshot replay. Existing sinks are not displaced.
+  - Detach: a stream close removes its sink; `attach_count` decrements. The PTY itself stays alive until either Drop / KillPTY runs explicitly or the idle TTL elapses.
+  - Drop / KillPTY: closes the underlying ConPTY child immediately; the final `PTYExit` frame fans out to whatever sinks remain.
+- **Storage scope.** In-memory on the host only. Mobile clients persist their own list of `(server_id, [handles])` in `SecureStore` (`app/lib/state/persisted_pty_handles.dart`) so a fresh launch can offer reattach. The CLI does not persist handles itself — it always starts by listing the host's view.
+
 ### PSKRecord
 
 Represents a `(user_id, secret_key)` pair for the `psk` auth provider.

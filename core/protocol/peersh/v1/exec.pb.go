@@ -418,9 +418,11 @@ type PTYReattachAck struct {
 	// that just got persisted, this is the newly-issued handle. For a
 	// successful reattach this echoes the request's reattach_handle.
 	Handle string `protobuf:"bytes,1,opt,name=handle,proto3" json:"handle,omitempty"`
-	// accepted is false when the requested handle was unknown / expired
-	// / already attached by another client; the rest of the stream
-	// carries a final PTYExit and closes.
+	// accepted is false when the requested handle is unknown or expired.
+	// Multiple clients may attach to the same handle simultaneously
+	// (multi-attach fan-out), so "already attached" is no longer a
+	// failure mode. When accepted=false the rest of the stream carries
+	// a final PTYExit and closes.
 	Accepted bool `protobuf:"varint,2,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	// reason is human-readable text when accepted=false.
 	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -1344,9 +1346,9 @@ type PTYHandle struct {
 	// command is what the PTY is running (diagnostic; "auto" / "pwsh" /
 	// "claude" / ...). May be empty for default shells.
 	Command string `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
-	// attached is true when another stream is currently bound. A client
-	// that wants to take over should explicitly close the old session
-	// first; reattaching to an already-attached PTY is rejected.
+	// attached is true when at least one stream is currently bound.
+	// Retained for back-compat with older clients; new clients should
+	// prefer attached_count for richer UI ("3 clients connected").
 	Attached bool `protobuf:"varint,3,opt,name=attached,proto3" json:"attached,omitempty"`
 	// cwd is the most recent directory the host observed (via OSC 9;9).
 	// Empty until the prompt has rendered at least once.
@@ -1354,8 +1356,12 @@ type PTYHandle struct {
 	// last_seen_unix_ms is the wall-clock time of the most recent
 	// attach/detach transition.
 	LastSeenUnixMs int64 `protobuf:"varint,5,opt,name=last_seen_unix_ms,json=lastSeenUnixMs,proto3" json:"last_seen_unix_ms,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// attached_count is the number of streams currently bound to this
+	// PTY. Zero means detached (TTL countdown active). Multiple means
+	// several clients are observing the same shell live (multi-attach).
+	AttachedCount uint32 `protobuf:"varint,6,opt,name=attached_count,json=attachedCount,proto3" json:"attached_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PTYHandle) Reset() {
@@ -1419,6 +1425,13 @@ func (x *PTYHandle) GetCwd() string {
 func (x *PTYHandle) GetLastSeenUnixMs() int64 {
 	if x != nil {
 		return x.LastSeenUnixMs
+	}
+	return 0
+}
+
+func (x *PTYHandle) GetAttachedCount() uint32 {
+	if x != nil {
+		return x.AttachedCount
 	}
 	return 0
 }
@@ -1956,13 +1969,14 @@ const file_peersh_v1_exec_proto_rawDesc = "" +
 	"\x06handle\x18\x01 \x01(\tR\x06handle\"!\n" +
 	"\x0fKillPTYResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x11\n" +
-	"\x0fListPTYsRequest\"\x96\x01\n" +
+	"\x0fListPTYsRequest\"\xbd\x01\n" +
 	"\tPTYHandle\x12\x16\n" +
 	"\x06handle\x18\x01 \x01(\tR\x06handle\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x1a\n" +
 	"\battached\x18\x03 \x01(\bR\battached\x12\x10\n" +
 	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12)\n" +
-	"\x11last_seen_unix_ms\x18\x05 \x01(\x03R\x0elastSeenUnixMs\"<\n" +
+	"\x11last_seen_unix_ms\x18\x05 \x01(\x03R\x0elastSeenUnixMs\x12%\n" +
+	"\x0eattached_count\x18\x06 \x01(\rR\rattachedCount\"<\n" +
 	"\x10ListPTYsResponse\x12(\n" +
 	"\x04ptys\x18\x01 \x03(\v2\x14.peersh.v1.PTYHandleR\x04ptys\"*\n" +
 	"\x11GetSessionRequest\x12\x15\n" +

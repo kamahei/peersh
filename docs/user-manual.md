@@ -66,8 +66,8 @@ The terminal screen is a real `xterm`-emulated PTY backed by ConPTY on the host.
 
 ### Tabs
 
-- **+** in the app bar: open a new tab. If the host has any reattach-able PTYs (you previously closed-but-kept-alive a session, or the connection dropped), you'll see a picker for them.
-- **Long-press a tab**: → **Close (keep alive)** detaches but keeps the PTY running on the host (you can reattach next time). → **Kill PTY** terminates the underlying `pwsh` process.
+- **+** in the app bar: open a new tab. If the host has any persisted PTYs (you previously closed-but-kept-alive a session, the connection dropped, or *another device of yours — your PC CLI, another phone — is already running one*), you'll see a picker for them. The phone-icon tile means nobody else is watching that shell; the multi-device icon means another device is observing it live, and selecting it joins them (multi-attach).
+- **Long-press a tab**: → **Close (keep alive)** detaches but keeps the PTY running on the host (you can reattach next time, and other devices can still see it). → **Kill PTY** terminates the underlying `pwsh` process for everyone observing.
 - **IndexedStack**: switching between tabs is free; backgrounded tabs keep streaming output into their scrollback.
 
 ### Wrap vs. horizontal scroll
@@ -96,6 +96,37 @@ The app bar's document icon (or "Open" in the file browser) reads a remote file 
 - Optional syntax highlighting (off by default)
 
 This is read-only; there's no file upload or general transfer.
+
+## Operating from your PC (peersh-cli)
+
+The `peersh-cli` binary that ships alongside `peershd` lets you open and join PowerShell sessions from your PC, sharing them with your phone via the same Owner bucket. Because the host partitions PTYs by your `user_id` (PSK `-user` flag, or your Firebase UID), every device you've registered under that user — phone, this CLI, another PC — sees the same list of persisted shells.
+
+```sh
+# PSK signaling mode: pick from a list of existing shells, or press N for a new one.
+peersh-cli -signaling wss://signal.example.com -user alice -psk-file alice.psk \
+           -target <host-device-id> -pty
+
+# Firebase signaling mode: one-shot Google sign-in to bootstrap the refresh token,
+# then daily-use form. The distrib build (build-peersh-cli.{cmd,sh}) embeds the
+# Firebase project + signaling URL, so only -target is required day-to-day.
+peersh-cli -firebase-login -firebase-login-only          # bootstrap (once)
+peersh-cli -target <host-device-id> -pty                 # daily use
+```
+
+Inside the picker:
+
+- A number → attach to that PTY. Multi-attach: if your phone is already observing it, both keep receiving the same output and either side can type.
+- `N` → new shell (uses `-pty-cmd` if supplied, else the default `pwsh` wrapper).
+- `X 3` → kill PTY #3 on the host (closes its child process).
+- `R` → refresh list. `Q` → quit.
+
+Skip the picker for scripts:
+
+- `-pty-new` always spawns a fresh shell.
+- `-pty-reattach <handle>` jumps directly to a known handle.
+- `-pty-list` prints the list and exits.
+
+The CLI uses the same long-lived ed25519 keypair pattern as the mobile app: pass `-key-dir <path>` to keep your PC's device_id stable across runs (recommended, so the host-side log shows a consistent identity). Without `-key-dir` each invocation is a fresh device — still fine because PTY ownership is by user_id, not device_id.
 
 ## Reconnect / session continuity
 

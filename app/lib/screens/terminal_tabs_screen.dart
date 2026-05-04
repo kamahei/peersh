@@ -191,12 +191,15 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
         _reconnectAttempts = 0;
         _connectError = null;
         if (_tabs.isNotEmpty) return;
-        if (persisted.where((p) => !p.attached).isEmpty) {
-          // No reattachable PTYs — auto-spawn a fresh shell.
+        if (persisted.isEmpty) {
+          // No persisted PTYs at all — auto-spawn a fresh shell.
           _tabs.add(TerminalTabModel(initialLabel: 'shell'));
           _observeTab(_tabs.last);
         }
         // Otherwise leave _tabs empty so the user picks via the prompt.
+        // Multi-attach: PTYs currently observed by another device (PC
+        // CLI, other phone) are still selectable — the server fans
+        // out to all attached sinks instead of stealing.
       });
       // Foreground service keeps the OS from freezing the app process
       // (and the QUIC keepalive) when backgrounded. Opt-in via the
@@ -466,10 +469,7 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
   }
 
   Future<void> _maybeOfferReattach(List<PtyHandleInfo> persisted) async {
-    final reattachable =
-        persisted.where((p) => !p.attached).toList(growable: false);
-    if (reattachable.isEmpty || !mounted) {
-      // Edge case: persisted but all attached. Just open a fresh tab.
+    if (persisted.isEmpty || !mounted) {
       setState(() => _tabs.add(TerminalTabModel(initialLabel: 'shell')));
       return;
     }
@@ -489,12 +489,13 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
               title: const Text('New shell'),
               onTap: () => Navigator.pop(ctx, ''),
             ),
-            for (final p in reattachable)
+            for (final p in persisted)
               ListTile(
-                leading: const Icon(Icons.history),
+                leading: Icon(
+                  p.attachedCount > 0 ? Icons.devices_other : Icons.history,
+                ),
                 title: Text(p.cwd.isEmpty ? p.command : p.cwd),
-                subtitle:
-                    Text('${p.command} · last seen ${_humanAgoUtc(p.lastSeenUnixMs)}'),
+                subtitle: Text(_reattachSubtitle(p)),
                 onTap: () => Navigator.pop(ctx, p.handle),
               ),
           ],
@@ -552,9 +553,13 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
           await ref.read(bridgeProvider).listPtys(sessionId: session.id);
     } catch (_) {}
     if (!mounted) return;
+    // Multi-attach: don't filter out PTYs another device is observing
+    // — the user may explicitly want to join an in-use shell. Only
+    // hide the ones THIS app already has open in another tab, since
+    // showing duplicates would be confusing.
     final boundHandles = _tabs.map((t) => t.reattachHandle).toSet();
     final candidates = persisted
-        .where((p) => !p.attached && !boundHandles.contains(p.handle))
+        .where((p) => !boundHandles.contains(p.handle))
         .toList(growable: false);
     if (candidates.isEmpty) {
       _spawnNewTab();
@@ -574,10 +579,11 @@ class _TerminalTabsScreenState extends ConsumerState<TerminalTabsScreen> {
             const Divider(height: 1),
             for (final p in candidates)
               ListTile(
-                leading: const Icon(Icons.history),
+                leading: Icon(
+                  p.attachedCount > 0 ? Icons.devices_other : Icons.history,
+                ),
                 title: Text(p.cwd.isEmpty ? p.command : p.cwd),
-                subtitle:
-                    Text('${p.command} · last seen ${_humanAgoUtc(p.lastSeenUnixMs)}'),
+                subtitle: Text(_reattachSubtitle(p)),
                 onTap: () => Navigator.pop(ctx, p.handle),
               ),
           ],
@@ -1336,6 +1342,19 @@ class _NotifyEditDialogState extends State<_NotifyEditDialog> {
         ),
       ],
     );
+  }
+}
+
+String _reattachSubtitle(PtyHandleInfo p) {
+  final ago = _humanAgoUtc(p.lastSeenUnixMs);
+  final base = '${p.command} · last seen $ago';
+  switch (p.attachedCount) {
+    case 0:
+      return base;
+    case 1:
+      return '$base · 1 client connected';
+    default:
+      return '$base · ${p.attachedCount} clients connected';
   }
 }
 

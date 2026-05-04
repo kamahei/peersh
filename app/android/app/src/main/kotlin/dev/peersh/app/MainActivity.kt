@@ -358,6 +358,7 @@ class MainActivity : FlutterActivity() {
                                         "handle" to e.handle,
                                         "command" to e.command,
                                         "attached" to e.attached,
+                                        "attachedCount" to e.attachedCount.toInt(),
                                         "cwd" to e.cwd,
                                         "lastSeenUnixMs" to e.lastSeenUnixMs,
                                     ))

@@ -53,7 +53,7 @@ func TestOpenAndPumpExits(t *testing.T) {
 		dataSeen int
 	)
 	done := make(chan struct{})
-	s.SetSink(func(f *v1.PTYFrame) error {
+	s.AddSink(func(f *v1.PTYFrame) error {
 		mu.Lock()
 		defer mu.Unlock()
 		switch f.GetKind().(type) {

@@ -747,7 +747,13 @@ func (l *FileEntryList) Get(i int) *FileEntry {
 type PTYHandle struct {
 	Handle         string
 	Command        string
+	// Attached is true when at least one stream is currently bound.
+	// Multi-attach: stays true while any client (mobile, PC CLI,
+	// other devices of the same user) is observing this shell.
 	Attached       bool
+	// AttachedCount is the number of streams currently bound. Zero
+	// means detached. >1 means multiple devices observe live.
+	AttachedCount  int32
 	CWD            string
 	LastSeenUnixMs int64
 }
@@ -833,6 +839,7 @@ func (s *Session) ListPTYs() *PTYHandleList {
 			Handle:         h.GetHandle(),
 			Command:        h.GetCommand(),
 			Attached:       h.GetAttached(),
+			AttachedCount:  int32(h.GetAttachedCount()),
 			CWD:            h.GetCwd(),
 			LastSeenUnixMs: h.GetLastSeenUnixMs(),
 		})

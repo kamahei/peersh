@@ -44,22 +44,69 @@ const (
 	clientID        = "peersh-cli/0.2"
 )
 
+// embeddedSignalingURL is set at build time via -ldflags
+// "-X main.embeddedSignalingURL=wss://...". When non-empty and the
+// operator passes neither -signaling nor -addr, it becomes the
+// default for -signaling so the daily `peersh-cli -user ... -psk-file
+// ... -target ... -pty` invocation doesn't need to repeat the URL.
+// Empty by default; the dev workflow keeps -signaling explicit.
+var embeddedSignalingURL string
+
+// Embedded Firebase defaults populated by build-peersh-cli.{cmd,sh}
+// from local/peershd-build.env so the CLI shares the same Firebase
+// project as peershd without a second config file. Empty defaults
+// keep the dev / from-source workflow unchanged (operator must pass
+// the flags explicitly).
+var (
+	embeddedFirebaseProjectID   string
+	embeddedFirebaseAPIKey      string
+	embeddedFirebaseRegion      string
+	embeddedFirebaseRtdbRegion  string
+	embeddedGoogleClientID      string
+	embeddedGoogleClientSecret  string
+)
+
 func main() {
 	addr := flag.String("addr", "", "(direct mode) peershd host (host:port)")
 	hostDevice := flag.String("host-device", "", "(direct mode, optional) expected peershd device_id to pin at the TLS layer")
 
 	signalingURL := flag.String("signaling", "", "(signaling mode) signaling server URL (ws:// or wss://)")
-	userID := flag.String("user", "", "(signaling mode) user_id under which to register")
-	pskFile := flag.String("psk-file", "", "(signaling mode) path to a file containing a hex-encoded PSK")
+	userID := flag.String("user", "", "(signaling, PSK mode) user_id under which to register; ignored in Firebase mode (uid resolved from token)")
+	pskFile := flag.String("psk-file", "", "(signaling, PSK mode) path to a file containing a hex-encoded PSK")
 	target := flag.String("target", "", "(signaling mode) target peershd device_id to connect to")
 	stunServer := flag.String("stun", punching.DefaultSTUNServer, "STUN server for srflx discovery; empty disables STUN")
 	keyDir := flag.String("key-dir", "", "directory holding the CLI's persistent ed25519 device key; empty = generate a fresh ephemeral key on every run")
 
-	ptyMode := flag.Bool("pty", false, "open an interactive PTY instead of the one-shot REPL (Phase 8 Tier 1)")
-	ptyCmd := flag.String("pty-cmd", "", "executable to spawn under the PTY; empty = operator-default shell")
+	firebaseProjectID := flag.String("firebase-project", embeddedFirebaseProjectID, "(signaling, Firebase mode) Firebase project id")
+	firebaseAPIKey := flag.String("firebase-api-key", embeddedFirebaseAPIKey, "(signaling, Firebase mode) Firebase Web API key for signInWithCustomToken / token refresh")
+	firebaseRegion := flag.String("firebase-region", embeddedFirebaseRegion, "(signaling, Firebase mode) Firebase / Cloud Functions region for the pair-code endpoint")
+	firebaseRtdbRegion := flag.String("firebase-rtdb-region", embeddedFirebaseRtdbRegion, "(signaling, Firebase mode) Realtime Database region used to discover registered hosts when -target is empty")
+	firebaseTokenFile := flag.String("firebase-token-file", "", "(signaling, Firebase mode) path to the persisted Firebase refresh token (default: %LOCALAPPDATA%\\peersh\\firebase-refresh-token.txt or ~/.local/share/peersh/...)")
+	firebaseLogin := flag.Bool("firebase-login", false, "(signaling, Firebase mode) open the default browser to sign in with Google and persist a refresh token (one-shot bootstrap)")
+	firebaseLoginOnly := flag.Bool("firebase-login-only", false, "(signaling, Firebase mode) exit after persisting the refresh token, without dialling peershd; pair with -firebase-login")
+	firebasePairCode := flag.String("pair-code", "", "(signaling, Firebase mode) one-time 6-digit pairing code; consumed once and replaced by a persisted refresh token")
+	firebaseCredentials := flag.String("firebase-credentials", "", "(signaling, Firebase mode) path to Firebase service-account JSON (advanced)")
+	firebaseEmail := flag.String("firebase-email", "", "email of the Firebase account to authenticate as (with -firebase-credentials)")
+	firebaseUID := flag.String("firebase-uid", "", "explicit Firebase uid (alternative to -firebase-email)")
+	googleClientID := flag.String("google-client-id", embeddedGoogleClientID, "(signaling, Firebase mode) OAuth 2.0 'Desktop app' client id (required with -firebase-login)")
+	googleClientSecret := flag.String("google-client-secret", embeddedGoogleClientSecret, "(signaling, Firebase mode) OAuth 2.0 'Desktop app' client secret (required with -firebase-login)")
+
+	ptyMode := flag.Bool("pty", false, "open an interactive PTY instead of the one-shot REPL (Phase 8 Tier 1). Default behaviour: list persisted PTYs and prompt; combine with -pty-new / -pty-reattach / -pty-list to skip the picker.")
+	ptyCmd := flag.String("pty-cmd", "", "executable to spawn under a fresh PTY; empty = operator-default shell. Ignored when reattaching to an existing handle.")
+	ptyNew := flag.Bool("pty-new", false, "always spawn a fresh PTY without showing the picker (back-compat with the pre-multi-attach behaviour)")
+	ptyReattach := flag.String("pty-reattach", "", "directly reattach to this server-issued handle without showing the picker")
+	ptyList := flag.Bool("pty-list", false, "print persisted PTYs and exit (script-friendly; implies -pty)")
 
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
+
+	// Fall back to the build-time embedded signaling URL only when the
+	// operator passed neither -signaling nor -addr. Explicit -addr
+	// (direct mode) still wins; explicit -signaling overrides the
+	// embedded value.
+	if *signalingURL == "" && *addr == "" && embeddedSignalingURL != "" {
+		*signalingURL = embeddedSignalingURL
+	}
 
 	level := slog.LevelInfo
 	if *debug {
@@ -75,16 +122,117 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-host-device only applies to direct mode (-addr); use -target in signaling mode")
 		os.Exit(2)
 	}
+	// -pty-list / -pty-reattach / -pty-new all imply -pty. Promote here so
+	// the user doesn't have to pass both.
+	if *ptyList || *ptyReattach != "" || *ptyNew {
+		*ptyMode = true
+	}
+	// -pty-new and -pty-reattach are mutually exclusive — picking one
+	// means "skip the picker", picking both is a contradiction.
+	if *ptyNew && *ptyReattach != "" {
+		fmt.Fprintln(os.Stderr, "-pty-new and -pty-reattach are mutually exclusive")
+		os.Exit(2)
+	}
 
-	if err := run(*addr, *signalingURL, *userID, *pskFile, *target, *stunServer, *ptyMode, *ptyCmd, *hostDevice, *keyDir); err != nil {
+	ptyOpts := ptyDispatch{
+		Command:  *ptyCmd,
+		New:      *ptyNew,
+		Reattach: *ptyReattach,
+		ListOnly: *ptyList,
+	}
+
+	fbOpts := firebaseOpts{
+		ProjectID:          *firebaseProjectID,
+		APIKey:             *firebaseAPIKey,
+		Region:             *firebaseRegion,
+		RtdbRegion:         *firebaseRtdbRegion,
+		TokenFile:          *firebaseTokenFile,
+		Login:              *firebaseLogin,
+		PairCode:           *firebasePairCode,
+		Credentials:        *firebaseCredentials,
+		Email:              *firebaseEmail,
+		UID:                *firebaseUID,
+		GoogleClientID:     *googleClientID,
+		GoogleClientSecret: *googleClientSecret,
+	}
+
+	// Pick auth mode for the signaling channel. PSK wins when -psk-file
+	// is set (the operator explicitly chose it). Otherwise, if any
+	// Firebase-related flag is set or the build embedded Firebase
+	// defaults, go Firebase. Empty PSK + empty Firebase ⇒ direct mode
+	// only, validated below by the -addr / -signaling check.
+	useFirebase := *signalingURL != "" && *pskFile == "" && fbOpts.requested()
+
+	if err := run(runOpts{
+		Addr:              *addr,
+		HostDevice:        *hostDevice,
+		SignalingURL:      *signalingURL,
+		UserID:            *userID,
+		PskFile:           *pskFile,
+		Target:            *target,
+		StunServer:        *stunServer,
+		KeyDir:            *keyDir,
+		PtyMode:           *ptyMode,
+		Pty:               ptyOpts,
+		UseFirebase:       useFirebase,
+		Firebase:          fbOpts,
+		FirebaseLoginOnly: *firebaseLoginOnly,
+	}); err != nil {
 		slog.Error("peersh-cli exiting on error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode bool, ptyCmd, hostDevice, keyDir string) error {
+// runOpts bundles every flag value that survived parsing. Beats the
+// 13-arg run() signature that grew out of the original two-mode CLI.
+type runOpts struct {
+	Addr              string
+	HostDevice        string
+	SignalingURL      string
+	UserID            string
+	PskFile           string
+	Target            string
+	StunServer        string
+	KeyDir            string
+	PtyMode           bool
+	Pty               ptyDispatch
+	UseFirebase       bool
+	Firebase          firebaseOpts
+	FirebaseLoginOnly bool
+}
+
+// ptyDispatch bundles the -pty-* flag values so the run / pty-mode
+// branches don't drift from the flag parsing in main.
+type ptyDispatch struct {
+	Command  string
+	New      bool
+	Reattach string
+	ListOnly bool
+}
+
+func run(opts runOpts) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Firebase login-only mode: bootstrap the refresh token and exit
+	// before touching UDP / QUIC / signaling. Mirrors peershd's
+	// -firebase-login-only so install scripts can do "first do the
+	// browser dance, then enable the daily flow" without the CLI
+	// trying to dial a target it doesn't have yet.
+	if opts.UseFirebase && opts.FirebaseLoginOnly {
+		src, err := buildCLIFirebaseTokenSource(ctx, opts.Firebase)
+		if err != nil {
+			return err
+		}
+		// Force one Token() call so the refresh exchange persists
+		// even when the operator only set -firebase-credentials and
+		// no token file is read upfront.
+		if _, err := src.Token(ctx); err != nil {
+			return fmt.Errorf("firebase token bootstrap: %w", err)
+		}
+		slog.Info("firebase login complete; exiting (firebase-login-only set)", "uid", src.UID())
+		return nil
+	}
 
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
@@ -94,9 +242,9 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 
 	// In signaling mode, run STUN before Transport.New takes over reads.
 	var srflx *net.UDPAddr
-	if signalingURL != "" && stunServer != "" {
+	if opts.SignalingURL != "" && opts.StunServer != "" {
 		stunCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		srflx, err = punching.Discover(stunCtx, pc, punching.Options{STUNServer: stunServer})
+		srflx, err = punching.Discover(stunCtx, pc, punching.Options{STUNServer: opts.StunServer})
 		cancel()
 		if err != nil {
 			slog.Warn("stun discover failed; continuing without srflx candidate", "err", err)
@@ -110,7 +258,7 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 	// device_id across runs (useful when peershd uses a per-client
 	// allowlist); empty -key-dir keeps the historical ephemeral
 	// behavior for ad-hoc / scripted invocations.
-	priv, err := loadOrGenerateKey(keyDir)
+	priv, err := loadOrGenerateKey(opts.KeyDir)
 	if err != nil {
 		return err
 	}
@@ -121,28 +269,58 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 		return fmt.Errorf("build client cert: %w", err)
 	}
 
-	// Signaling mode pins the target's device_id at the TLS layer.
-	// Direct mode (-addr) pins only if the operator passed -host-device;
-	// otherwise we accept any pubkey-bound server cert, which is the
-	// dev workflow where the host's device_id is not known ahead of
-	// time. Both modes still present a client cert because peershd
-	// requires one regardless.
-	pin := target
-	if signalingURL == "" {
-		pin = hostDevice
-	}
-	tr := transport.New(pc, peertls.ClientTLSConfig(clientCert, pin))
-	defer tr.Close()
-
-	if signalingURL != "" {
-		if userID == "" || pskFile == "" || target == "" {
-			return errors.New("-signaling requires -user, -psk-file, and -target")
+	if opts.SignalingURL != "" {
+		var (
+			secret  []byte
+			idToken string
+			target  = opts.Target
+		)
+		if opts.UseFirebase {
+			src, err := buildCLIFirebaseTokenSource(ctx, opts.Firebase)
+			if err != nil {
+				return err
+			}
+			idToken, err = src.Token(ctx)
+			if err != nil {
+				return fmt.Errorf("firebase token: %w", err)
+			}
+			slog.Info("firebase token acquired", "uid", src.UID())
+			// Auto-discover the host when -target is empty: list the
+			// user's registered Windows hosts via Realtime Database
+			// (same subtree the mobile app's DevicePickerSheet reads)
+			// and pick the only one, or prompt when multiple.
+			if target == "" {
+				picked, err := pickFirebaseHost(ctx, src, opts.Firebase)
+				if err != nil {
+					return err
+				}
+				target = picked
+			}
+			// Wake-mode peershd keeps its signaling WS closed except
+			// in response to a wake_request RTDB write. Fire one in
+			// parallel with the upcoming Connect; the retry wrapper
+			// inside negotiateConnectWithRetry covers the cold-start
+			// race. Pair-code-mode peershd ignores the wake_request
+			// (it already holds a persistent WS), so this is harmless
+			// in that mode.
+			fireWakeRequest(ctx, src, opts.Firebase.ProjectID, opts.Firebase.RtdbRegion, target)
+		} else {
+			if opts.UserID == "" || opts.PskFile == "" {
+				return errors.New("-signaling requires -user + -psk-file (PSK mode), or any -firebase-* flag (Firebase mode)")
+			}
+			secret, err = readPSKFile(opts.PskFile)
+			if err != nil {
+				return fmt.Errorf("read psk: %w", err)
+			}
 		}
-		secret, err := readPSKFile(pskFile)
-		if err != nil {
-			return fmt.Errorf("read psk: %w", err)
+		if target == "" {
+			return errors.New("-signaling requires -target")
 		}
-		conn, err := rendezvousAndDial(ctx, tr, pc, signalingURL, userID, secret, target, pc.LocalAddr().(*net.UDPAddr), srflx, pub, deviceID)
+		// Signaling mode pins the (now-resolved) target device_id at
+		// the TLS layer.
+		tr := transport.New(pc, peertls.ClientTLSConfig(clientCert, target))
+		defer tr.Close()
+		conn, err := rendezvousAndDial(ctx, tr, pc, opts.SignalingURL, opts.UserID, secret, idToken, target, pc.LocalAddr().(*net.UDPAddr), srflx, pub, deviceID)
 		if err != nil {
 			return err
 		}
@@ -151,15 +329,21 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 		if err := doHandshake(ctx, conn); err != nil {
 			return fmt.Errorf("handshake: %w", err)
 		}
-		if ptyMode {
-			return runPTY(ctx, conn, ptyCmd)
+		if opts.PtyMode {
+			return dispatchPTY(ctx, conn, opts.Pty)
 		}
 		return repl(ctx, conn)
 	}
 
-	dialAddr, err := net.ResolveUDPAddr("udp", addr)
+	// Direct mode (-addr) pins only if the operator passed -host-device;
+	// otherwise we accept any pubkey-bound server cert, which is the
+	// dev workflow where the host's device_id is not known ahead of
+	// time.
+	tr := transport.New(pc, peertls.ClientTLSConfig(clientCert, opts.HostDevice))
+	defer tr.Close()
+	dialAddr, err := net.ResolveUDPAddr("udp", opts.Addr)
 	if err != nil {
-		return fmt.Errorf("resolve %q: %w", addr, err)
+		return fmt.Errorf("resolve %q: %w", opts.Addr, err)
 	}
 	conn, err := tr.Dial(ctx, dialAddr)
 	if err != nil {
@@ -170,10 +354,39 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 	if err := doHandshake(ctx, conn); err != nil {
 		return fmt.Errorf("handshake: %w", err)
 	}
-	if ptyMode {
-		return runPTY(ctx, conn, ptyCmd)
+	if opts.PtyMode {
+		return dispatchPTY(ctx, conn, opts.Pty)
 	}
 	return repl(ctx, conn)
+}
+
+// dispatchPTY decides between -pty-list (one-shot list, exit), explicit
+// reattach, explicit fresh PTY, and the default interactive picker.
+func dispatchPTY(ctx context.Context, conn *transport.Conn, opts ptyDispatch) error {
+	switch {
+	case opts.ListOnly:
+		ptys, err := listPTYs(ctx, conn)
+		if err != nil {
+			return fmt.Errorf("list ptys: %w", err)
+		}
+		renderPTYList(ptys)
+		return nil
+	case opts.Reattach != "":
+		return runPTY(ctx, conn, "", opts.Reattach)
+	case opts.New:
+		return runPTY(ctx, conn, opts.Command, "")
+	}
+	choice, err := runPicker(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if choice.NewPTY {
+		return runPTY(ctx, conn, opts.Command, "")
+	}
+	if choice.Handle == "" {
+		return nil // user quit
+	}
+	return runPTY(ctx, conn, "", choice.Handle)
 }
 
 // rendezvousAndDial handles the full Phase 2 + Phase 3 signaling-mediated
@@ -187,36 +400,12 @@ func run(addr, signalingURL, userID, pskFile, target, stunServer string, ptyMode
 //
 // Returns punching.ErrTraversalFailed if every candidate dial attempt
 // fails.
-func rendezvousAndDial(ctx context.Context, tr *transport.Transport, pc net.PacketConn, url, userID string, secret []byte, targetDeviceID string, localAddr, srflx *net.UDPAddr, pub ed25519.PublicKey, deviceID string) (*transport.Conn, error) {
-	sc, err := signaling.Dial(ctx, signaling.DialOptions{
-		URL:         url,
-		UserID:      userID,
-		Secret:      secret,
-		DeviceID:    deviceID,
-		PublicKey:   pub,
-		Kind:        signalv1.DeviceKind_DEVICE_KIND_CLI,
-		DisplayName: "peersh-cli",
-		ClientID:    clientID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("signaling.Dial: %w", err)
-	}
-	defer sc.Close()
-	slog.Info("registered with signaling", "device", deviceID, "server_id", sc.ServerID())
-
+func rendezvousAndDial(ctx context.Context, tr *transport.Transport, pc net.PacketConn, url, userID string, secret []byte, firebaseIDToken, targetDeviceID string, localAddr, srflx *net.UDPAddr, pub ed25519.PublicKey, deviceID string) (*transport.Conn, error) {
 	cands := localCandidates(localAddr, srflx)
 	slog.Info("requesting connect", "target", targetDeviceID, "candidates", len(cands))
-	if err := sc.SendConnect(ctx, targetDeviceID, cands); err != nil {
-		return nil, fmt.Errorf("SendConnect: %w", err)
-	}
-
-	reply, err := sc.Recv(ctx)
+	reply, err := negotiateConnectWithRetry(ctx, url, userID, secret, firebaseIDToken, deviceID, pub, targetDeviceID, cands)
 	if err != nil {
-		return nil, fmt.Errorf("waiting for target reply: %w", err)
-	}
-	if reply.GetFromDeviceId() != targetDeviceID {
-		return nil, fmt.Errorf("got Connect from %q, expected from %q",
-			reply.GetFromDeviceId(), targetDeviceID)
+		return nil, err
 	}
 	if len(reply.GetCandidates()) == 0 {
 		return nil, errors.New("target returned no candidates")
@@ -243,6 +432,96 @@ func rendezvousAndDial(ctx context.Context, tr *transport.Transport, pc net.Pack
 		slog.Info("candidate dial failed", "addr", p, "err", err)
 	}
 	return nil, punching.ErrTraversalFailed
+}
+
+// negotiateConnectWithRetry runs negotiateConnect with up to 5 attempts
+// (1/2/4/8/16 s backoff) so a wake-mode peershd that's still bringing
+// its WS up can register before the CLI gives up. Backoffs are
+// longer than mobile-core's because rapid CLI redials from a desktop
+// network easily trip the signaling server's per-IP rate limit (429
+// after ~4 dials in <2 s).
+func negotiateConnectWithRetry(
+	ctx context.Context,
+	url, userID string,
+	secret []byte,
+	firebaseIDToken, deviceID string,
+	pub ed25519.PublicKey,
+	targetDeviceID string,
+	cands []*signalv1.EndpointCandidate,
+) (*signalv1.Connect, error) {
+	backoff := 1 * time.Second
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		reply, err := negotiateConnect(ctx, url, userID, secret, firebaseIDToken, deviceID, pub, targetDeviceID, cands)
+		if err == nil {
+			return reply, nil
+		}
+		lastErr = err
+		if !isRetryableConnectError(err) {
+			return nil, err
+		}
+		slog.Info("connect retry", "attempt", attempt+1, "err", err, "backoff", backoff)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("signaling: %w", ctx.Err())
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return nil, lastErr
+}
+
+// negotiateConnect dials signaling once, registers, sends Connect, and
+// waits for the target's reply. Closes the WS before returning so the
+// later UDP punching / QUIC dial isn't billed against an open Cloud
+// Run WebSocket.
+func negotiateConnect(
+	ctx context.Context,
+	url, userID string,
+	secret []byte,
+	firebaseIDToken, deviceID string,
+	pub ed25519.PublicKey,
+	targetDeviceID string,
+	cands []*signalv1.EndpointCandidate,
+) (*signalv1.Connect, error) {
+	sc, err := signaling.Dial(ctx, signaling.DialOptions{
+		URL:             url,
+		UserID:          userID,
+		Secret:          secret,
+		FirebaseIDToken: firebaseIDToken,
+		DeviceID:        deviceID,
+		PublicKey:       pub,
+		Kind:            signalv1.DeviceKind_DEVICE_KIND_CLI,
+		DisplayName:     "peersh-cli",
+		ClientID:        clientID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("signaling.Dial: %w", err)
+	}
+	defer sc.Close()
+	if err := sc.SendConnect(ctx, targetDeviceID, cands); err != nil {
+		return nil, fmt.Errorf("SendConnect: %w", err)
+	}
+	reply, err := sc.Recv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for target reply: %w", err)
+	}
+	if reply.GetFromDeviceId() != targetDeviceID {
+		return nil, fmt.Errorf("got Connect from %q, expected from %q",
+			reply.GetFromDeviceId(), targetDeviceID)
+	}
+	return reply, nil
+}
+
+// isRetryableConnectError matches signaling ServerError frames whose
+// code says the host hasn't yet finished registering — typical when
+// the wake_request was just fired and peershd's wake-listener hasn't
+// opened its short-lived signaling WS in time.
+func isRetryableConnectError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "target_unknown")
 }
 
 // loadOrGenerateKey returns an ed25519 private key sourced from keyDir

@@ -322,6 +322,13 @@ func run(serviceCtx context.Context, opts runOpts) error {
 	listenAddr := pc.LocalAddr().(*net.UDPAddr)
 	slog.Info("listening for QUIC", "addr", listenAddr)
 
+	// selfUserID is the authenticated user_id this peershd represents.
+	// Populated below in the signaling-mode branches; stays "" in
+	// direct mode (no signaling), where every peer ends up sharing one
+	// Owner bucket — equivalent to today's behaviour and acceptable
+	// because direct mode is dev-only / loopback-only.
+	var selfUserID string
+
 	// STUN runs BEFORE Transport.New takes over reads on pc. The discovered
 	// srflx is cached and emitted as a SERVER_REFLEXIVE candidate on every
 	// Connect reply. For cone NATs (the common case) one srflx port works
@@ -418,6 +425,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 				return fmt.Errorf("start wake runtime: %w", err)
 			}
 			defer rt.Close()
+			selfUserID = src.UID()
 			go runHeartbeat(ctx, rt)
 			go runWakePump(ctx, rt, signalingURL, src, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
 			notifyCfg = &notifyCtx{
@@ -434,6 +442,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			if err != nil {
 				return fmt.Errorf("read psk: %w", err)
 			}
+			selfUserID = userID
 			go runSignaling(ctx, signalingURL, userID, secret, deviceID, pub, displayName, listenAddr, srflx, pc, authz)
 		}
 	}
@@ -448,7 +457,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 			}
 			return fmt.Errorf("Accept: %w", err)
 		}
-		go serveConn(ctx, conn, mgr, ptyMgr, authz, notifyCfg)
+		go serveConn(ctx, conn, mgr, ptyMgr, authz, notifyCfg, selfUserID)
 	}
 }
 
@@ -820,10 +829,13 @@ func enumerateCandidates(listen *net.UDPAddr, srflx *net.UDPAddr) []*signalv1.En
 // ExecRequest. The host's pwsh process is owned by mgr, not by this
 // function — when the QUIC connection closes, the session is detached
 // (mgr's idle timer takes over) instead of killed. ptyMgr is the
-// process-global PTY persistence layer; entries are partitioned by the
-// peer's mTLS-derived device_id so the same identity sees its own
-// shells across reconnects, and a different identity does not.
-func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager, ptyMgr *ptyhost.Manager, authz *peerauth.Authz, nctx *notifyCtx) {
+// process-global PTY persistence layer; entries are partitioned by
+// selfUserID so every device that authenticates as this user (mobile,
+// CLI on the operator's PC, ...) shares one bucket and can hand off
+// PTYs to each other. The signaling server already same-user-routes
+// Connect frames, so any peer that survives the authz check is
+// guaranteed to be a device of this same user.
+func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManager, ptyMgr *ptyhost.Manager, authz *peerauth.Authz, nctx *notifyCtx, selfUserID string) {
 	remote := conn.RemoteAddr().String()
 	peerID := peertls.PeerDeviceID(conn.TLSState())
 	log := slog.With("peer", remote, "peer_device_id", peerID)
@@ -866,15 +878,17 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 	defer mgr.Detach(sessionID)
 	log.Info("handshake complete", "session", sessionID, "pwsh", host.Path())
 
-	// PTY ownership is keyed off the peer's mTLS-derived device_id
-	// rather than the pwsh session_id, because the current ClientHello
-	// flow does not echo the prior session_id back on reconnect — the
-	// device_id (derived from the long-lived ed25519 keypair) is the
-	// only field that's stable across QUIC drops without a client
-	// upgrade. In direct mode peerID may be empty; that's fine, all
-	// direct-mode PTYs share one bucket since direct mode has no
-	// authentication anyway.
-	ptyOwner := ptyhost.Owner(peerID)
+	// PTY ownership is keyed off the host's authenticated user_id (PSK
+	// -user flag, or the Firebase UID in firebase mode). Every device
+	// that registers under the same user — the operator's mobile app,
+	// their PC CLI, an alternate PC — shares one Owner bucket and can
+	// see / reattach to / multi-attach the same shells. Cross-user
+	// access cannot happen because the signaling server already same-
+	// user-routes Connect frames. In direct mode (no signaling)
+	// selfUserID is empty; all peers share the empty bucket, which
+	// matches the pre-change peerID-empty behaviour and is acceptable
+	// because direct mode is dev-only / loopback-only.
+	ptyOwner := ptyhost.Owner(selfUserID)
 
 	registry := newPTYRegistry()
 	for {
@@ -931,17 +945,43 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 	cols := uint16(req.GetCols())
 	rows := uint16(req.GetRows())
 
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// v2-B notify state. nil when notifications are disabled (PSK /
+	// direct mode); otherwise a per-PTY state machine that watches
+	// Input vs OSC 9;9 timing and dispatches command-completion
+	// notifications via the Firebase Notifier.
+	var notifier *ptyNotifyState
+	if nctx != nil {
+		notifier = newPTYNotifyState(nctx, req.GetPtyId(), clog)
+		go notifier.runIdleTicker(streamCtx)
+	}
+
+	// Sink writes each Pump frame to the wire. Multi-attach: every
+	// attached client owns its own sink, all of them receive the same
+	// byte stream. Sink errors are absorbed by Session.Pump so a single
+	// broken stream does not terminate the session.
+	var writeMu sync.Mutex
+	sink := func(f *v1.PTYFrame) error {
+		if data := f.GetData(); data != nil {
+			notifier.onOutput(streamCtx, data.GetData())
+		}
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return wire.Write(stream, f)
+	}
+
 	var (
 		handle ptyhost.ManagedHandle
 		attach ptyhost.AttachResult
 	)
 
 	if h := req.GetReattachHandle(); h != "" {
-		// Reattach path. Same-owner reattach steals: even if a previous
-		// stream is still bound (e.g. the host hasn't noticed its QUIC
-		// went away yet), Attach signals it via kick and gives this
-		// stream a fresh attach generation.
-		got, err := mgr.Attach(owner, ptyhost.ManagedHandle(h))
+		// Reattach path. Atomically captures the ring snapshot AND
+		// installs sink so no chunk produced between snapshot and
+		// sink-add can be missed (or duplicated).
+		got, err := mgr.Attach(owner, ptyhost.ManagedHandle(h), sink)
 		if err != nil {
 			clog.Info("reattach rejected: unknown handle", "err", err)
 			_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
@@ -954,7 +994,7 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 		if cols > 0 && rows > 0 {
 			_ = attach.Session.Resize(cols, rows)
 		}
-		clog.Info("pty reattached", "cols", cols, "rows", rows, "replay_bytes", len(attach.Replay), "gen", attach.Gen)
+		clog.Info("pty reattached", "cols", cols, "rows", rows, "replay_bytes", len(attach.Replay))
 	} else {
 		// Fresh open.
 		clog.Info("pty open", "cols", cols, "rows", rows)
@@ -968,7 +1008,7 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 		if commandLabel == "" {
 			commandLabel = "auto"
 		}
-		handle, attach = mgr.Register(owner, s, commandLabel)
+		handle, attach = mgr.Register(owner, s, commandLabel, sink)
 	}
 
 	sess := attach.Session
@@ -980,67 +1020,24 @@ func servePTYStream(ctx context.Context, stream *transport.Stream, r *bufio.Read
 
 	// Always send a PTYReattachAck as the first server-bound frame so
 	// the client learns the handle (whether fresh or reattached).
+	writeMu.Lock()
 	_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_ReattachAck{ReattachAck: &v1.PTYReattachAck{
 		Handle: string(handle), Accepted: true,
 	}}})
-
-	streamCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// On stream close, detach from the Manager (PTY survives idle TTL).
-	// The Session is NOT closed here — Manager.Sweep / Drop is the
-	// authoritative way to terminate it. Detach is gen-aware: if a
-	// later Attach has already stolen this slot, this call is a no-op.
-	defer mgr.Detach(owner, handle, attach.Gen)
-
-	// v2-B notify state. nil when notifications are disabled (PSK /
-	// direct mode); otherwise a per-PTY state machine that watches
-	// Input vs OSC 9;9 timing and dispatches command-completion
-	// notifications via the Firebase Notifier.
-	var notifier *ptyNotifyState
-	if nctx != nil {
-		notifier = newPTYNotifyState(nctx, req.GetPtyId(), clog)
-		go notifier.runIdleTicker(streamCtx)
-	}
-
-	// Install the per-stream sink: wire-write each Pump frame, with
-	// notifier.onOutput interception for Data frames. The session-
-	// lifetime Pump (started by Manager.Register) calls this for
-	// every chunk; sink errors are absorbed by Pump and don't kill
-	// the session.
-	var writeMu sync.Mutex
-	sinkID := sess.SetSink(func(f *v1.PTYFrame) error {
-		if data := f.GetData(); data != nil {
-			notifier.onOutput(streamCtx, data.GetData())
-		}
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		return wire.Write(stream, f)
-	})
-	defer sess.ClearSink(sinkID)
-
-	// Replay the ring buffer AFTER SetSink so any in-flight Pump
-	// dispatch races land on the new sink, not on a still-attaching
-	// state. Note: replay precedes any new bytes the host emits next.
+	// Replay the ring buffer right after the ack, before any in-flight
+	// Pump dispatch reaches the wire. AddSinkWithSnapshot already
+	// sequenced the snapshot atomically with sink installation, so
+	// there's no risk of missing or duplicating chunks.
 	if len(attach.Replay) > 0 {
-		writeMu.Lock()
 		_ = wire.Write(stream, &v1.PTYFrame{Kind: &v1.PTYFrame_Data{Data: &v1.PTYData{Data: attach.Replay}}})
-		writeMu.Unlock()
 	}
+	writeMu.Unlock()
 
-	// Watch the kick channel: when a newer Attach steals our slot,
-	// close the stream so wire.Read in the main loop unblocks
-	// promptly. streamCtx.Done() covers the normal-shutdown path so
-	// we don't leak this goroutine when the loop exits for other
-	// reasons (EOF, frame error).
-	go func() {
-		select {
-		case <-attach.Kick:
-			clog.Info("pty stream evicted by newer attach", "gen", attach.Gen)
-			_ = stream.Close()
-		case <-streamCtx.Done():
-		}
-	}()
+	// On stream close, detach from the Manager. The Session and other
+	// attached sinks survive — multi-attach has no notion of "primary
+	// owner". Manager.Drop / KillPTY is the authoritative way to
+	// terminate the underlying child process.
+	defer mgr.Detach(attach.Token)
 
 	for {
 		frame := &v1.PTYFrame{}

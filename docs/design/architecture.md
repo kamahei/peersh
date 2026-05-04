@@ -69,7 +69,9 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 
 ### CLI client (`peersh-cli`)
 
-- Go binary. Useful for end-to-end testing without the mobile app, and as a developer / operator tool.
+- Go binary. Useful for end-to-end testing without the mobile app, and as a daily PowerShell client on the operator's PC.
+- `-pty` enters interactive PTY mode. By default it lists the host's persisted PTYs (created from any of the operator's devices — mobile, this CLI, another PC) and prompts the user to attach to one or create a new shell. Multi-attach: picking a PTY that another device is already observing simply joins it; the host fans output out to every attached client and merges input from all of them.
+- Flags: `-pty-new` skips the picker and spawns a fresh shell; `-pty-reattach <handle>` jumps directly to a known handle; `-pty-list` prints the list and exits (script-friendly).
 
 ## Transport
 
