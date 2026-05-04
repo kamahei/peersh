@@ -54,7 +54,10 @@ android {
     signingConfigs {
         if (hasReleaseKey) {
             release {
-                storeFile = file(keystoreProperties["storeFile"])
+                // keystoreProperties["storeFile"] resolves relative to
+                // app/android/ (the rootProject), so a keystore dropped at
+                // app/android/release.keystore matches `storeFile=release.keystore`.
+                storeFile = rootProject.file(keystoreProperties["storeFile"])
                 storePassword = keystoreProperties["storePassword"]
                 keyAlias = keystoreProperties["keyAlias"]
                 keyPassword = keystoreProperties["keyPassword"]
@@ -71,11 +74,14 @@ android {
             signingConfig = hasReleaseKey
                 ? signingConfigs.release
                 : signingConfigs.debug
-            // Code-shrink stays off until we add a R8 keep-rules file
-            // for the gomobile-generated classes; turning it on without
-            // rules currently strips peersh.Peersh / peersh.Session.
-            minifyEnabled = false
-            shrinkResources = false
+            // R8 minify + resource shrink are enabled for release; the
+            // gomobile-generated peersh.* / go.* classes are reflected
+            // from MainActivity via JNI, so proguard-rules.pro pins
+            // their package surface so the tree-shaker leaves them
+            // alone.
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
 }

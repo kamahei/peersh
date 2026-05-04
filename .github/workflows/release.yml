@@ -140,6 +140,30 @@ jobs:
             echo "$APP_FIREBASE_JSON" | base64 -d > app/firebase.json
           fi
 
+      - name: Restore Android upload keystore (optional)
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > app/android/release.keystore
+            cat > app/android/key.properties <<EOF
+          storeFile=release.keystore
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Upload key wired; release builds will be signed."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "ANDROID_UPLOAD_KEYSTORE secret unset; falling back to debug-keystore signing (sideload-only, NOT Play-Store-acceptable)."
+          fi
+
       - name: Initialise gomobile
         run: gomobile init
 
@@ -154,12 +178,21 @@ jobs:
         working-directory: app
         run: flutter build apk --release
 
-      - name: Rename + checksum APK
+      - name: flutter build appbundle --release (signed builds only)
+        if: steps.signing.outputs.signed == 'true'
+        working-directory: app
+        run: flutter build appbundle --release
+
+      - name: Rename + checksum artefacts
         shell: bash
         run: |
           mkdir -p dist
           cp app/build/app/outputs/flutter-apk/app-release.apk dist/peersh-android.apk
           (cd dist && sha256sum peersh-android.apk > peersh-android.apk.sha256)
+          if [[ -f app/build/app/outputs/bundle/release/app-release.aab ]]; then
+            cp app/build/app/outputs/bundle/release/app-release.aab dist/peersh-android.aab
+            (cd dist && sha256sum peersh-android.aab > peersh-android.aab.sha256)
+          fi
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
@@ -194,6 +227,10 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
+          # AAB only present when ANDROID_UPLOAD_KEYSTORE is configured;
+          # don't fail the publish step when secrets are unset and the
+          # AAB pair is therefore missing.
+          fail_on_unmatched_files: false
           files: |
             dist/windows-binaries/peershd-windows-amd64.exe
             dist/windows-binaries/peershd-windows-amd64.exe.sha256
@@ -201,3 +238,5 @@ jobs:
             dist/windows-binaries/peersh-cli-windows-amd64.exe.sha256
             dist/android-apk/peersh-android.apk
             dist/android-apk/peersh-android.apk.sha256
+            dist/android-apk/peersh-android.aab
+            dist/android-apk/peersh-android.aab.sha256

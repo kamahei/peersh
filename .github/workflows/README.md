@@ -34,9 +34,19 @@ Set these to produce a Firebase-functional build. Each value is **base64** of th
 
 Encode locally via `base64 -w0 <file>` (Linux) or `[Convert]::ToBase64String([IO.File]::ReadAllBytes("<file>"))` (PowerShell). Paste the resulting string into the secret value.
 
+### Android Play upload signing (`release.yml` only)
+
+Set these to produce a Play-Store-acceptable signed APK + AAB. When all four are present, `release.yml` writes them into `app/android/key.properties` + `app/android/release.keystore` and Gradle picks them up automatically. With any one missing, the release falls back to debug-keystore signing (sideload-only, NOT acceptable for Play upload).
+
+- `ANDROID_UPLOAD_KEYSTORE` — base64 of the operator's `release.keystore`.
+- `ANDROID_KEYSTORE_PASSWORD` — keystore (storefile) password.
+- `ANDROID_KEY_ALIAS` — alias inside the keystore (e.g. `peersh-upload`).
+- `ANDROID_KEY_PASSWORD` — alias's password.
+
+Generate the keystore once on your local machine (NOT in CI) — see `app/android/key.properties.example` for the `keytool` invocation and treat the resulting `.keystore` as a long-lived secret.
+
 ## What's deliberately NOT here yet
 
-- **Auto-trigger on push or release tag.** All three workflows are manual. Once the project starts cutting numbered releases, a release.yml will read git tags and chain into these via `workflow_call`.
 - **iOS code signing.** No `.p12` import / xcodebuild archive yet — happens once an Apple Developer account is wired up.
-- **Android Play upload signing.** Release APKs are debug-keystore-signed in CI; the Play upload key import lands when the Play Store track is opened.
+- **Auto-trigger of `build-android.yml` on push.** It stays manual; `release.yml` is the one wired to git tags.
 - **Caching policy beyond the actions' built-ins.** Phase 7 polish.
