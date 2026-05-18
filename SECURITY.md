@@ -5,9 +5,8 @@
 If you find a security issue in peersh, please **do not open a public
 GitHub issue**. Send a private report instead:
 
-- Email: `security@peersh.dev` (PGP key on request).
 - GitHub Security Advisory: open a private advisory in the
-  [peersh repository](https://github.com/peersh/peersh) using
+  [peersh repository](https://github.com/kamahei/peersh) using
   *Security → Report a vulnerability*.
 
 We aim to acknowledge new reports within **3 business days** and to ship
