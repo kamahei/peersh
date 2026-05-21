@@ -27,7 +27,7 @@ Terms used across the peersh documentation and code. Stays alphabetical so it's 
 - **`net.PacketConn`.** Go's interface for connectionless packet I/O (UDP). The QUIC wrapper in `core/transport/` accepts an externally-supplied `net.PacketConn` so the punched UDP socket can be reused.
 - **OOB.** Out of band. As in "the operator hands the PSK to the user out of band" — through some channel other than the system itself.
 - **OSC 9;9.** xterm-style operating-system command emitted by the prompt wrapper to report the current working directory. peersh consumes it to label tabs and back the file browser's "current dir" view.
-- **Pairing flow.** Firebase-mode bootstrap path: mobile app calls `mintPairingCode` (returns a 6-digit code + caches a Custom Token under `pairing_codes/{code}`), peershd calls `claimPairingCode` to consume it, exchanges the Custom Token for a Firebase Refresh Token, persists. See `docs/deploy/firebase.md`.
+- **Pairing flow.** Firebase-mode bootstrap path: mobile app calls `mintPairingCode` (returns a CSPRNG-generated 6-digit code + caches a Custom Token under `pairing_codes/{code}`), peershd calls rate-limited `claimPairingCode` to consume it, exchanges the Custom Token for a Firebase Refresh Token, persists. See `docs/deploy/firebase.md`.
 - **`peersh-cli`.** Go CLI client. Useful for testing a `peershd` host without the mobile app.
 - **`peershd`.** The Go binary that runs on the Windows host and provides the PowerShell session backend.
 - **`peersh-signaling`.** The Go binary that runs the signaling server. Single binary, deployable as raw process or Docker container.

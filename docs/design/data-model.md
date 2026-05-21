@@ -157,7 +157,7 @@ Represents a `(user_id, secret_key)` pair for the `psk` auth provider.
 ### `firestore`
 
 - Used by Firebase mode for durable state (devices / users / pairings).
-- Document layout: `users/{uid}` doc; `users/{uid}/devices/{deviceId}` (device metadata, written by the signaling server's Register handler — not consulted by the mobile picker after v2-A); `users/{uid}/pairings/{pairingId}` (legacy). Plus admin-only `pairing_codes/{code}` (mobile pairing flow) and `ops/budget-state` (cost guardrail).
+- Document layout: `users/{uid}` doc; `users/{uid}/devices/{deviceId}` (device metadata, written by the signaling server's Register handler — not consulted by the mobile picker after v2-A); `users/{uid}/pairings/{pairingId}` (legacy). Plus admin-only `pairing_codes/{code}` (mobile pairing flow), `pairing_claim_rate_limits/{bucket}` (hashed caller buckets for pairing claim throttling), and `ops/budget-state` (cost guardrail).
 - `users/{uid}/sessions/{sessionId}` is reserved (no client writes after v2-A).
 - Access patterns fit within the cost budget (≤ ~5 reads + ~2 writes per connection lifecycle).
 - Security rules enforce per-user isolation: a user can only read/write documents under their own `user_id`. Admin-only paths deny all client access.

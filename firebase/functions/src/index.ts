@@ -7,9 +7,9 @@
 //                            calling uid and stores it in
 //                            pairing_codes/{code} with a 5-min TTL.
 //   claimPairingCode       — HTTPS callable. Unauthenticated peershd
-//                            hosts post the code; the function returns
-//                            the cached Custom Token and deletes the
-//                            doc (one-shot).
+//                            hosts post the code through a rate-limited
+//                            endpoint; the function returns the cached
+//                            Custom Token and deletes the doc (one-shot).
 //   budgetGuard            — Pub/Sub triggered by Cloud Billing budget
 //                            alerts. Writes ops/budget-state with
 //                            {triggered: true, ...} when a configured
@@ -24,10 +24,11 @@
 //                            source doc.
 
 import * as admin from 'firebase-admin';
-import { onRequest } from 'firebase-functions/v2/https';
+import { onRequest, type Request } from 'firebase-functions/v2/https';
 import { onMessagePublished } from 'firebase-functions/v2/pubsub';
 import { onValueCreated } from 'firebase-functions/v2/database';
 import { logger, setGlobalOptions } from 'firebase-functions/v2';
+import { createHash, randomInt } from 'node:crypto';
 
 admin.initializeApp();
 
@@ -66,14 +67,120 @@ setGlobalOptions({
 // functions use the Admin SDK which bypasses the rules.
 
 const PAIRING_CODE_TTL_SEC = 5 * 60;
+const PAIRING_CODE_CREATE_ATTEMPTS = 16;
+const CLAIM_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const CLAIM_RATE_LIMIT_MAX_ATTEMPTS = 10;
+const CLAIM_RATE_LIMIT_DOC_TTL_MS = 24 * 60 * 60 * 1000;
 
 function generatePairingCode(): string {
   // Six numeric digits — easy to read aloud / type. 000000 reserved.
-  for (;;) {
-    const n = Math.floor(Math.random() * 1_000_000);
-    if (n === 0) continue;
-    return n.toString().padStart(6, '0');
+  return randomInt(1, 1_000_000).toString().padStart(6, '0');
+}
+
+async function createPairingCodeDoc(
+  uid: string,
+  customToken: string,
+  now: admin.firestore.Timestamp,
+  expiresAt: admin.firestore.Timestamp,
+): Promise<string> {
+  for (let attempt = 0; attempt < PAIRING_CODE_CREATE_ATTEMPTS; attempt += 1) {
+    const code = generatePairingCode();
+    const ref = admin.firestore().doc(`pairing_codes/${code}`);
+    const created = await admin.firestore().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists) {
+        const existingExpiresAt = snap.get('expires_at') as
+          | admin.firestore.Timestamp
+          | undefined;
+        if (!existingExpiresAt || existingExpiresAt.toMillis() >= Date.now()) {
+          return false;
+        }
+      }
+      tx.set(ref, {
+        uid,
+        custom_token: customToken,
+        created_at: now,
+        expires_at: expiresAt,
+      });
+      return true;
+    });
+    if (created) return code;
   }
+  throw new Error('pairing-code-space-busy');
+}
+
+function claimRateLimitDocID(req: Request): string {
+  const remote =
+    req.ip ||
+    req.socket.remoteAddress ||
+    req.get('x-forwarded-for') ||
+    'unknown';
+  return createHash('sha256').update(remote).digest('hex');
+}
+
+interface ClaimRateLimitResult {
+  allowed: boolean;
+  retryAfterSeconds: number;
+}
+
+async function consumeClaimAttempt(
+  req: Request,
+): Promise<ClaimRateLimitResult> {
+  const nowMillis = Date.now();
+  const now = admin.firestore.Timestamp.fromMillis(nowMillis);
+  const ref = admin
+    .firestore()
+    .doc(`pairing_claim_rate_limits/${claimRateLimitDocID(req)}`);
+
+  return admin.firestore().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? snap.data() : undefined;
+    const windowStartedAt = data?.window_started_at as
+      | admin.firestore.Timestamp
+      | undefined;
+    const attempts = Number(data?.attempts ?? 0);
+    const windowExpired =
+      !windowStartedAt ||
+      nowMillis - windowStartedAt.toMillis() >= CLAIM_RATE_LIMIT_WINDOW_MS;
+
+    if (windowExpired) {
+      tx.set(ref, {
+        attempts: 1,
+        window_started_at: now,
+        updated_at: now,
+        expires_at: admin.firestore.Timestamp.fromMillis(
+          nowMillis + CLAIM_RATE_LIMIT_DOC_TTL_MS,
+        ),
+      });
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+
+    if (attempts >= CLAIM_RATE_LIMIT_MAX_ATTEMPTS) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(
+          (windowStartedAt.toMillis() +
+            CLAIM_RATE_LIMIT_WINDOW_MS -
+            nowMillis) /
+            1000,
+        ),
+      );
+      return { allowed: false, retryAfterSeconds };
+    }
+
+    tx.set(
+      ref,
+      {
+        attempts: attempts + 1,
+        updated_at: now,
+        expires_at: admin.firestore.Timestamp.fromMillis(
+          nowMillis + CLAIM_RATE_LIMIT_DOC_TTL_MS,
+        ),
+      },
+      { merge: true },
+    );
+    return { allowed: true, retryAfterSeconds: 0 };
+  });
 }
 
 export const mintPairingCode = onRequest(
@@ -100,20 +207,24 @@ export const mintPairingCode = onRequest(
     const uid = decoded.uid;
 
     const customToken = await admin.auth().createCustomToken(uid);
-    const code = generatePairingCode();
     const now = admin.firestore.Timestamp.now();
     const expiresAt = admin.firestore.Timestamp.fromMillis(
       now.toMillis() + PAIRING_CODE_TTL_SEC * 1000,
     );
 
-    await admin.firestore().doc(`pairing_codes/${code}`).set({
-      uid,
-      custom_token: customToken,
-      created_at: now,
-      expires_at: expiresAt,
-    });
+    let code: string;
+    try {
+      code = await createPairingCodeDoc(uid, customToken, now, expiresAt);
+    } catch (e) {
+      logger.error('mintPairingCode: unable to allocate pairing code', {
+        uid,
+        err: `${e}`,
+      });
+      res.status(503).json({ error: 'pairing-code-unavailable' });
+      return;
+    }
 
-    logger.info('pairing code minted', { uid, code, expiresAt });
+    logger.info('pairing code minted', { uid, expiresAt });
     res.status(200).json({
       code,
       expires_at: expiresAt.toMillis(),
@@ -123,7 +234,7 @@ export const mintPairingCode = onRequest(
 );
 
 export const claimPairingCode = onRequest(
-  { cors: true },
+  { cors: false },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'method-not-allowed' });
@@ -132,6 +243,12 @@ export const claimPairingCode = onRequest(
     const code = ((req.body && req.body.code) || '').toString().trim();
     if (!/^\d{6}$/.test(code)) {
       res.status(400).json({ error: 'invalid-code' });
+      return;
+    }
+    const limit = await consumeClaimAttempt(req);
+    if (!limit.allowed) {
+      res.set('Retry-After', limit.retryAfterSeconds.toString());
+      res.status(429).json({ error: 'too-many-requests' });
       return;
     }
     const ref = admin.firestore().doc(`pairing_codes/${code}`);
@@ -156,7 +273,7 @@ export const claimPairingCode = onRequest(
       res.status(404).json({ error: result.reason });
       return;
     }
-    logger.info('pairing code claimed', { uid: result.uid, code });
+    logger.info('pairing code claimed', { uid: result.uid });
     res.status(200).json({
       uid: result.uid,
       custom_token: result.customToken,

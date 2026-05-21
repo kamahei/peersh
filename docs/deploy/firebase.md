@@ -25,8 +25,8 @@ The PSK + SQLite path remains supported for self-hosters with a single VPS — p
   - `app/lib/services/pairing_service.dart` — calls the `mintPairingCode` Cloud Function with the user's Firebase ID token.
   - `app/lib/firebase_options.dart`, `app/firebase.json`, `app/android/app/google-services.json` — **stubs** committed; operators run `flutterfire configure` locally (or use `scripts/build-apk-distrib.{sh,cmd}` which swaps in `local/*.real` at build time and restores the stubs after).
 - **Cloud Functions** (committed in `firebase/functions/src/index.ts`):
-  - `mintPairingCode` — HTTPS, ID-token-authenticated. Mints a Custom Token for the calling uid, stores it under `pairing_codes/{code}` with a 5-min TTL, and returns the 6-digit code to the mobile app.
-  - `claimPairingCode` — HTTPS, unauthenticated. Takes a code, returns the cached Custom Token, deletes the doc.
+  - `mintPairingCode` — HTTPS, ID-token-authenticated. Mints a Custom Token for the calling uid, stores it under `pairing_codes/{code}` with a 5-min TTL, and returns a CSPRNG-generated 6-digit code to the mobile app. Active codes are never overwritten on collision.
+  - `claimPairingCode` — HTTPS, unauthenticated but rate-limited and not browser-CORS-enabled. Takes a code, returns the cached Custom Token, deletes the doc.
   - `budgetGuard` — Pub/Sub subscriber that flips `ops/budget-state.triggered` when a Cloud Billing alert fires; retained for a future server-side wake-throttling path.
   - `onSessionCreated` — present but **dead code** (no client writes `users/{uid}/sessions/{sid}` after v2-A; wake events flow via RTDB instead).
 - **peershd side** (committed):
@@ -335,7 +335,7 @@ peershd \
   -display-name "<your-host-name>"
 ```
 
-On success peershd writes the refresh token to `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt` (override with `-firebase-token-file`) and logs `registered with signaling server (firebase mode)` plus `device_id=<id>`. The 6-digit code is consumed on first claim and cannot be reused.
+On success peershd writes the refresh token to `%LOCALAPPDATA%\peersh\firebase-refresh-token.txt` (override with `-firebase-token-file`) and logs `registered with signaling server (firebase mode)` plus `device_id=<id>`. The 6-digit code is consumed on first claim and cannot be reused. Repeated failed claim attempts return HTTP 429 with `Retry-After`.
 
 ### 3. Subsequent runs
 

@@ -42,6 +42,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // pairing_claim_rate_limits/* stores hashed caller buckets for
+    // claimPairingCode brute-force throttling. Admin-only.
+    match /pairing_claim_rate_limits/{bucket} {
+      allow read, write: if false;
+    }
+
     // Catch-all: deny everything else.
     match /{document=**} {
       allow read, write: if false;

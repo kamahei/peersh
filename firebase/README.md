@@ -14,7 +14,7 @@ firebase/
 ├── database.rules.json      # Realtime Database per-user isolation (v2-A wake events)
 ├── .firebaserc.example      # copy to .firebaserc and set your project id
 └── functions/               # TypeScript Cloud Functions
-    ├── src/index.ts         # mintPairingCode / claimPairingCode / budgetGuard
+    ├── src/index.ts         # mintPairingCode / rate-limited claimPairingCode / budgetGuard
     ├── package.json         # (onSessionCreated dead code retained for v2-D)
     ├── tsconfig.json
     └── .eslintrc.cjs
