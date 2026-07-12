@@ -72,6 +72,18 @@ gcloud builds submit \
 # like PEERSH_SIGNALING_BOOTSTRAP_PSK and PEERSH_SIGNALING_DISCOVERY_WS_URL
 # across redeploys. --set-env-vars would wipe them on every deploy.
 echo ">> deploying to Cloud Run service $SERVICE"
+# IMPORTANT — single instance only: the room registry (server/room) keeps live
+# WebSocket connections in an in-memory map[user][device]->Conn with NO cross-
+# instance forwarding. A host and a client that land on different instances
+# never see each other, so Connect fails with `target_unknown`. max-instances=1
+# forces every WS onto one instance so rendezvous always works. Signaling is
+# lightweight (setup only — terminal data flows peer-to-peer over QUIC, never
+# through this server), so one instance serves many hosts/clients. concurrency
+# is raised because each long-lived WebSocket holds a request slot for its whole
+# lifetime; bump it further if you expect many simultaneous connections.
+# min-instances=0 scales to zero when idle (no always-on cost); the wake→connect
+# retry/backoff on the client tolerates the cold-start latency. Set it to 1 to
+# keep the instance warm if you prefer lower wake latency at a small cost.
 gcloud run deploy "$SERVICE" \
   --image="$IMAGE" \
   --region="$REGION" \
@@ -81,8 +93,8 @@ gcloud run deploy "$SERVICE" \
   --memory=512Mi \
   --cpu=1 \
   --min-instances=0 \
-  --max-instances=2 \
-  --concurrency=80 \
+  --max-instances=1 \
+  --concurrency=250 \
   --timeout=3600 \
   --update-env-vars=PEERSH_SIGNALING_LOG_LEVEL=info \
   --project="$PROJECT_ID"
