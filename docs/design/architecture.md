@@ -9,7 +9,7 @@ This file describes the technical shape of peersh: components, transport, NAT tr
        ↓ Auth (Firebase / PSK / None)
 [Signaling Server: Go binary, deployable anywhere]
        ↓ endpoint exchange (signaling WS opens only briefly per session in Firebase mode)
-[Windows Service: Go + PowerShell host]
+[Host (Windows/macOS): Go + PowerShell / login-shell]
        ↑ Firebase mode: Realtime Database SSE wake-listener (out of band, no Cloud Run cost)
        ↑↓ UDP Hole Punching → QUIC P2P (mTLS)
 [Mobile App]
@@ -35,7 +35,7 @@ The mobile track is implemented as:
 - `app/` — Flutter project (`flutter create app --org dev.peersh`). Riverpod + flutter_secure_storage + http + xterm + firebase plugins are pinned in `pubspec.yaml`.
 - **MethodChannel `dev.peersh/bridge`** carries control-plane calls (session lifecycle, PTY lifecycle, file API, foreground-service start/stop).
 - **EventChannel `dev.peersh/session/events`** carries per-session and per-PTY events tagged with `sessionId` / `ptyId`.
-- Native bridges: `app/android/.../MainActivity.kt` (Kotlin) keeps the session and PTY maps; `PeershForegroundService.kt` holds the OS off the app process while connected. `app/ios/Runner/AppDelegate.swift` is code-complete pending an iOS build pipeline.
+- Native bridges: `app/android/.../MainActivity.kt` (Kotlin) keeps the session and PTY maps; `PeershForegroundService.kt` holds the OS off the app process while connected. The iOS bridge is the shared Swift file `app/shared/apple/PeershBridge.swift`, wired into `app/ios/Runner/AppDelegate.swift` — the same MethodChannel/EventChannel surface, ported from the Kotlin reference.
 - Dart UI: `ServersScreen` → optional `DevicePickerSheet` (Firebase entries) → `TerminalTabsScreen` (multi-tab xterm with reattach + special-keys bar) → `FileBrowserScreen` / `TextViewerScreen`. Auto-reconnect with exponential backoff sits in `TerminalTabsScreen`; "Session resumed" banner fades after 4 s on a successful reconnect.
 - The AAR / xcframework are not committed; each developer or CI rebuilds them via the build script.
 
@@ -62,10 +62,10 @@ Operators populate `[discovery]` in `signaling.toml` (see `server/deploy/signali
 - Uses WebSocket for the client-server signaling channel. In Firebase mode the WS is short-lived (opened in response to a Realtime Database wake event, closed after the session is established); idle close defaults to 60 s. In PSK mode the host holds it open continuously.
 - Stateless across restarts to the extent possible: durable state lives in the configured store.
 
-### Windows host (`peershd`)
+### Host (`peershd` — Windows / macOS)
 
-- Single Go binary, runnable as a console app or a Windows Service / scheduled logon task (`peershd -install` / `-install-logon-task`).
-- Owns: device keypair generation and persistence, signaling registration, NAT-punched UDP socket, QUIC server, ConPTY-backed PowerShell host, session manager (idle timeout, ring buffer, reattach), Realtime Database wake listener (Firebase mode — replaces the persistent signaling WebSocket; works for both pair-code and service-account credentials via the SSE REST API and Firebase ID tokens), self-update subcommand.
+- Single Go binary running on Windows or macOS (the whole `windows/` module compiles for both; only the PTY backend and shell resolver are platform-tagged). Runs as a console app or an auto-start service: a Windows Service / logon task (`peershd -install` / `-install-logon-task`) or a macOS per-user LaunchAgent (`peershd -install`; see `scripts/install-peershd-macos.sh`).
+- Owns: device keypair generation and persistence, signaling registration, NAT-punched UDP socket, QUIC server, a real PTY host (ConPTY + PowerShell on Windows, `forkpty` + the user's login shell — zsh/bash — on macOS), session manager (idle timeout, ring buffer, reattach), Realtime Database wake listener (Firebase mode — replaces the persistent signaling WebSocket; works for both pair-code and service-account credentials via the SSE REST API and Firebase ID tokens), self-update subcommand. The legacy one-shot `exec.v1` PowerShell path is Windows-only; interactive PTY streams work on both.
 
 ### CLI client (`peersh-cli`)
 
@@ -192,10 +192,10 @@ peersh/
 │       ├── memory/
 │       ├── sqlite/
 │       └── firestore/
-├── windows/                     # Windows-side binary
+├── windows/                     # host binary (Windows + macOS; dir name is historical)
 │   ├── cmd/peershd/             # peershd entry point + service / update
-│   ├── pwsh/                    # PowerShell session host
-│   ├── pty/                     # ConPTY wrapper
+│   ├── pwsh/                    # legacy PowerShell exec host (Windows-only)
+│   ├── pty/                     # PTY backend: ConPTY (Windows) / forkpty (macOS)
 │   ├── ptyhost/                 # PTY persistence + ring buffer
 │   ├── firebase/                # Browser sign-in / pairing / refresh-token
 │   └── installer/               # WiX MSI definition

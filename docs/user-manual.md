@@ -84,7 +84,7 @@ The leftmost button on the special-keys bar opens a multiline text input bottom 
 
 ### File browser
 
-The app bar's folder icon opens a file browser scoped to the active tab's PowerShell session. Navigate with the standard tap / back / "up" controls.
+The app bar's folder icon opens a file browser scoped to the active tab's shell session (PowerShell on a Windows host, your login shell on a Mac). Navigate with the standard tap / back / "up" controls.
 
 ### Text viewer
 
