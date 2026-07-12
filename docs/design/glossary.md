@@ -22,6 +22,7 @@ Terms used across the peersh documentation and code. Stays alphabetical so it's 
 - **`gomobile bind`.** Tool that compiles a Go package into an Android `.aar` and an iOS `.xcframework` callable from native (and via plugins, from Flutter).
 - **Hole punching.** UDP technique where two peers behind NATs simultaneously send packets to each other's reflexive addresses, which causes their NATs to install symmetric mappings allowing two-way traffic. peersh's only NAT-traversal mechanism.
 - **`InsecureSkipVerify`.** Go TLS flag that disables peer certificate verification on the client. peersh uses it against self-signed dev certs, gated behind the grep-able `DevSelfSignedOnly` constant.
+- **Login shell.** The macOS host's interactive shell — the user's `$SHELL` (typically `zsh` or `bash`) — spawned under `forkpty`. The macOS analogue of `pwsh` on a Windows host.
 - **Method Channel.** Flutter mechanism for synchronous-style calls from Dart into native code. Used alongside EventChannel for Dart ↔ Go interop.
 - **mTLS.** Mutual TLS. Both peers present certificates and authenticate each other. peersh uses keypair-derived device identities as the mTLS credential.
 - **`net.PacketConn`.** Go's interface for connectionless packet I/O (UDP). The QUIC wrapper in `core/transport/` accepts an externally-supplied `net.PacketConn` so the punched UDP socket can be reused.
@@ -29,13 +30,13 @@ Terms used across the peersh documentation and code. Stays alphabetical so it's 
 - **OSC 9;9.** xterm-style operating-system command emitted by the prompt wrapper to report the current working directory. peersh consumes it to label tabs and back the file browser's "current dir" view.
 - **Pairing flow.** Firebase-mode bootstrap path: mobile app calls `mintPairingCode` (returns a CSPRNG-generated 6-digit code + caches a Custom Token under `pairing_codes/{code}`), peershd calls rate-limited `claimPairingCode` to consume it, exchanges the Custom Token for a Firebase Refresh Token, persists. See `docs/deploy/firebase.md`.
 - **`peersh-cli`.** Go CLI client. Useful for testing a `peershd` host without the mobile app.
-- **`peershd`.** The Go binary that runs on the Windows host and provides the PowerShell session backend.
+- **`peershd`.** The Go binary that runs on a Windows or macOS host and provides the shell session backend (PowerShell on Windows, the login shell on macOS).
 - **`peersh-signaling`.** The Go binary that runs the signaling server. Single binary, deployable as raw process or Docker container.
 - **`pion/stun`.** Go library used by `core/punching/` to discover reflexive addresses from STUN servers.
 - **`protocol_version`.** A `uint32` field on every `ClientHello` and `ServerHello`. Bumping it is the only mechanism for breaking protocol changes.
 - **PSK.** Pre-shared key. The `psk` `auth.Provider` uses HMAC-SHA256 with operator-issued secrets to authenticate clients. Recommended for personal and small-group self-hosting.
-- **PTY.** Pseudo-terminal. peersh uses ConPTY on Windows; the mobile side renders with `xterm.dart`.
-- **`pwsh`.** PowerShell 7 (and later) executable. Preferred PowerShell host. Falls back to `powershell.exe` (Windows PowerShell 5.1) when `pwsh` is not on PATH.
+- **PTY.** Pseudo-terminal. peersh uses ConPTY on Windows, forkpty on macOS; the mobile side renders with `xterm.dart`.
+- **`pwsh`.** PowerShell 7 (and later) executable. The Windows host's shell — the preferred PowerShell host, falling back to `powershell.exe` (Windows PowerShell 5.1) when `pwsh` is not on PATH. A macOS host uses the login shell instead (see **Login shell**).
 - **QUIC.** UDP-based transport protocol with mandatory TLS 1.3. peersh uses `github.com/quic-go/quic-go` for both server and client.
 - **Realtime Database (RTDB).** Firebase's JSON tree database. v2-A uses it for wake events (`users/{uid}/wake_requests/`) and host presence (`users/{uid}/devices/{deviceId}/last_seen_at`); the host's SSE listener on this subtree replaces a persistent signaling WebSocket and is the cost-discipline exception called out in `AGENTS.md`.
 - **Reflexive address.** A peer's apparent address as seen from the public internet, after NAT translation. Discovered via STUN.

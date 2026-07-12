@@ -14,7 +14,7 @@ Android Keystore via `flutter_secure_storage`. None of that data
 leaves the device. There are no analytics, crash-reporter, or ad
 SDKs in the build.
 
-PowerShell commands and output that flow during a session are
+Shell commands and output that flow during a session are
 transmitted **end-to-end encrypted between the user's phone and the
 user's own PC over QUIC + TLS 1.3**. Google Play's Data Safety
 guidelines define "collection" as data sent off the user's device to

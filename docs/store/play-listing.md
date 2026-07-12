@@ -22,7 +22,7 @@ Open your home PowerShell from your phone — peer-to-peer, no relay.
 ## Full description
 
 ```
-peersh runs PowerShell on your home Windows PC from your phone — directly,
+peersh runs shell commands on your home Windows PC or Mac from your phone — directly,
 peer-to-peer over QUIC, with no third-party relay server in the data path.
 A small signaling server only helps the two endpoints find each other; it
 never sees your commands or their output.
@@ -85,7 +85,7 @@ Replace each release. Max 500 chars per locale.
 For Japanese (`ja-JP`):
 
 ```
-peersh は、自宅 Windows PC の PowerShell を、リレー経由ではなく
+peersh は、自宅の Windows PC または Mac のシェルを、リレー経由ではなく
 P2P で直接スマホから操作できるオープンソース (Apache 2.0) ツール
 です。signaling サーバはコネクションのセットアップにだけ使い、
 コマンド本文は QUIC で暗号化されて 1:1 で流れます。

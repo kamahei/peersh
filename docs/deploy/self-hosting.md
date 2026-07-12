@@ -6,7 +6,7 @@ This guide covers the **target-agnostic operational knowledge**: TLS, PSK lifecy
 - [`render-com.md`](render-com.md) — Render.com Blueprint (zero config, $7/mo Starter for persistence)
 - [`firebase.md`](firebase.md) — Firebase mode (Firestore + Cloud Functions, Google sign-in)
 
-The signaling server is **only used for connection setup** — pairing devices and exchanging endpoint candidates. Actual PowerShell sessions flow peer-to-peer over QUIC and never touch the server. See `../design/architecture.md` for the full data-flow.
+The signaling server is **only used for connection setup** — pairing devices and exchanging endpoint candidates. Actual shell sessions flow peer-to-peer over QUIC and never touch the server. See `../design/architecture.md` for the full data-flow.
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ Save the `secret` line — it is the only time the raw PSK is displayed. Distrib
 Once the user has the PSK, point peershd and peersh-cli at the signaling server:
 
 ```sh
-# On the Windows host:
+# On the host (Windows or macOS):
 echo 7a3f5e9c… > alice.psk
 peershd -signaling ws://signaling.example.com:8443/ws \
         -user alice -psk-file alice.psk \
@@ -56,6 +56,8 @@ peersh-cli -signaling ws://signaling.example.com:8443/ws \
 ```
 
 `peershd` logs its `device_id` at startup (`device_id=LG3N25YMXIBFTDQA` style); pass that to `peersh-cli -target`.
+
+> A macOS host runs `peershd` the same way (it spawns your login shell instead of PowerShell). For login auto-start via a LaunchAgent, see [`macos-host.md`](macos-host.md).
 
 ## Quick start (binary, no Docker)
 
@@ -180,6 +182,8 @@ peershd -uninstall-logon-task
 ```
 
 Service mode runs `peershd` as the Windows SYSTEM account; the spawned PowerShell session inherits that context. Logon-task mode runs `peershd` as the user who logged in, and the PowerShell session inherits that user — typically the right choice for personal desktops where `peershd` should "follow the user". Pick whichever matches your security model.
+
+> On macOS the equivalent auto-start is a per-user LaunchAgent, installed via `peershd -install` (or `scripts/install-peershd-macos.sh`). See [`macos-host.md`](macos-host.md).
 
 ## PSK lifecycle commands
 

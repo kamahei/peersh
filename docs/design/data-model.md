@@ -8,7 +8,7 @@ The schema is intentionally minimal. Fields are added as they are needed, not pr
 
 ### Device
 
-Represents a physical device participating in peersh: a Windows host running `peershd`, or a mobile device running the app.
+Represents a physical device participating in peersh: a Windows or macOS host running `peershd`, or a mobile device running the app.
 
 - **Identifier.** `device_id`, derived deterministically from the device's public key:
   ```
@@ -54,7 +54,7 @@ Represents an account that owns devices.
 
 ### Pairing
 
-Represents the act of associating a mobile device with a Windows host under the same user.
+Represents the act of associating a mobile device with a host (Windows or macOS) under the same user.
 
 - **Identifier.** `(user_id, mobile_device_id, host_device_id)` triple.
 - **Fields.**
@@ -73,7 +73,7 @@ Represents the act of associating a mobile device with a Windows host under the 
 
 ### Session
 
-Represents an active or recently-active connection between a paired mobile device and a Windows host.
+Represents an active or recently-active connection between a paired mobile device and a host (Windows or macOS).
 
 - **Identifier.** `session_id` (server-assigned, opaque, presented by the client on reconnect to request reattach).
 - **Fields.**

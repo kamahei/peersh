@@ -32,7 +32,7 @@ Render is the **simplest first-time hosting option**: connect a GitHub repo, hit
 
    The shell prints the secret once. Copy it; it cannot be re-displayed.
 
-5. **On your Windows host**:
+5. **On your host (Windows or macOS)**:
 
    ```sh
    echo <secret-hex> > alice.psk

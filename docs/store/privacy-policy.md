@@ -8,14 +8,14 @@ how it is stored. It applies to:
 - The peersh Android app published on Google Play under the package
   `dev.peersh.app`.
 - The `peersh-cli` and `peershd` companion binaries you run on your
-  Windows host.
+  host (Windows or Mac).
 - The `peersh-signaling` server (whether you run your own or use a
   hosted instance).
 
 ## Plain-language summary
 
-peersh is a tool that runs PowerShell on your home Windows PC from
-your phone. The shell traffic flows **directly between your phone and
+peersh is a tool that runs commands on your home Windows PC or Mac
+from your phone. The shell traffic flows **directly between your phone and
 your PC** over a peer-to-peer QUIC + TLS 1.3 connection. A small
 signaling server is only used for connection setup and never sees the
 commands or their output.
@@ -39,9 +39,9 @@ Crashlytics, AdMob, or any other third-party telemetry SDK.
 
 ### The connection (your phone ↔ your PC)
 
-While a session is open, your phone and your Windows host exchange:
+While a session is open, your phone and your host (Windows or Mac) exchange:
 
-- The PowerShell **commands you type** and the **output the host
+- The **commands you type** and the **output the host
   emits**.
 - Terminal resize events.
 - The session's current working directory (so the file browser can
@@ -69,11 +69,12 @@ If you self-host, you control the retention policy on your own logs.
 Operators of public-facing instances should set their own retention
 policy (the project recommends ≤ 30 days for abuse-investigation).
 
-### The Windows host (`peershd`)
+### The host — Windows or Mac (`peershd`)
 
 `peershd` is the binary you run on your home PC. It:
 
-- Spawns a PowerShell child process under a pseudo-console (ConPTY).
+- Spawns a shell child process under a pseudo-console — PowerShell
+  via ConPTY on Windows, your login shell via forkpty on a Mac.
 - Forwards keystrokes and PTY output to / from the connected client.
 - Tracks the shell's current working directory by parsing OSC 9;9
   prompt sequences.

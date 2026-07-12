@@ -19,6 +19,7 @@ docs/
 1. Top-level [`README.md`](../README.md) — what the project is, fastest quick-start.
 2. [`build.md`](build.md) — build everything from source.
 3. [`deploy/README.md`](deploy/README.md) — pick the signaling deployment that fits.
+   - Running a Mac host? [`deploy/macos-host.md`](deploy/macos-host.md) covers LaunchAgent auto-start.
 4. [`user-manual.md`](user-manual.md) — using the mobile app day-to-day.
 5. [`backup.md`](backup.md) — what to back up so you can rebuild on a fresh machine.
 
