@@ -5,7 +5,7 @@ peersh has three buildable components:
 | Component | Where | Output |
 |---|---|---|
 | `peersh-signaling` (signaling server) | `server/` Go module | `peersh-signaling` binary or Docker image |
-| `peershd` + `peersh-cli` (Windows host + CLI) | `windows/cmd/peershd`, `cli/cmd/peersh-cli` | Windows .exe binaries |
+| `peershd` + `peersh-cli` (host + CLI) | `windows/cmd/peershd`, `cli/cmd/peersh-cli` | Windows `.exe` / macOS Mach-O binaries |
 | Mobile app | `app/` (Flutter) | Android `.apk` (iOS build needs macOS) |
 
 The mobile app additionally depends on a regenerated `mobile-core` AAR / xcframework produced by `scripts/build-mobile-core.{sh,cmd}` (gomobile bind).
@@ -43,7 +43,9 @@ go test ./core/... ./server/...
 
 Cross-phase invariant tests live under `core/` (transport contract, signaling protocol round-trips, auth providers, store implementations).
 
-## peershd + peersh-cli (Windows)
+## peershd + peersh-cli (Windows + macOS host)
+
+`peershd` is a host on both Windows and macOS — the whole `windows/` module compiles for both, and `core/` is fully portable. Only the PTY backend and shell resolver differ: ConPTY + PowerShell on Windows, `forkpty` (`github.com/creack/pty`) + your login shell on macOS. The Windows build steps below are followed by a [macOS host build](#macos-host-build) subsection.
 
 ### Plain build (PSK only — no Firebase embedding)
 
@@ -91,11 +93,42 @@ Both install flows:
 
 Uninstall removes the task / service and stops any running peershd from the install directory; pass `/remove-files` (or `--remove-files`) to delete the install directory too.
 
+### macOS host build
+
+On macOS `peershd` spawns your **login shell** (zsh / bash / sh, resolved from `$SHELL`) under a `forkpty` PTY instead of PowerShell under ConPTY. The interactive PTY path — the real terminal — works fully; the legacy one-shot `exec.v1` (PowerShell) path is **Windows-only**, so a client that requests it against a Mac gets a clean "not available" response.
+
+Plain build (no Firebase embedding), from a Mac or any host with Go:
+
+```sh
+GOOS=darwin GOARCH=arm64 go build -o local/peershd ./windows/cmd/peershd
+```
+
+Distribution build with embedded Firebase / OAuth defaults (reads `local/peershd-build.env`, the same file the Windows `build-peershd-distrib.sh` uses):
+
+```sh
+cp scripts/peershd-build.env.example local/peershd-build.env
+$EDITOR local/peershd-build.env                  # paste your Firebase / OAuth values
+bash scripts/build-peershd-macos.sh              # → local/peershd (Mach-O)
+bash scripts/build-peershd-macos.sh universal    # arm64 + amd64 fat binary
+```
+
+#### Auto-start at login (LaunchAgent)
+
+`scripts/install-peershd-macos.sh` builds peershd, installs it to `~/.local/bin/peershd`, bootstraps Firebase auth once (browser sign-in, or set `PEERSH_PAIR_CODE` to use the mobile app's pair code instead), and registers a **per-user LaunchAgent** at `~/Library/LaunchAgents/peershd.plist` (`RunAtLoad` + `KeepAlive`) via kardianos/service. It runs as the logged-in user — not root — so it inherits your shell, env, and keychain (the macOS analogue of the Windows logon task). Manage it with:
+
+```sh
+peershd -install | -uninstall | -start | -stop | -service-status
+```
+
+Remove everything with `bash scripts/uninstall-peershd-macos.sh`. Logs go to `~/peershd.out.log` / `~/peershd.err.log`. Full walkthrough in [`deploy/macos-host.md`](deploy/macos-host.md).
+
 ### Run the tests
 
 ```sh
 go test ./core/... ./windows/...
 ```
+
+The `windows/` module builds and tests on both Windows and macOS; the PTY backend lives behind build-tagged files (`pty_windows.go`, `pty_darwin.go`, `pty_other.go`).
 
 ## Mobile app — Android
 
@@ -179,17 +212,25 @@ After dropping `key.properties` and `release.keystore` into `app/android/`, `flu
 
 ## Mobile app — iOS
 
-iOS builds need **macOS** (Xcode + CocoaPods). Same gomobile workflow, swap the target:
+iOS builds need **macOS** with Xcode. The native MethodChannel / EventChannel bridge to mobile-core is now implemented — the shared Swift file `app/shared/apple/PeershBridge.swift`, wired into the iOS Runner — so the iOS client is functional, not the old `IOS_BIND_PENDING` stub. Same gomobile workflow, swap the target:
 
 ```sh
-bash scripts/build-mobile-core.sh ios
+bash scripts/build-mobile-core.sh apple    # aliases: ios, macos
 cd app
 flutter pub get
-cd ios && pod install --repo-update && cd ..
-flutter build ios --debug --no-codesign
+flutter build ios --simulator --debug      # simulator build
 ```
 
-Code-signing for distribution requires an Apple Developer account, which is out of scope for the OSS source. The unsigned `.app` bundle works on a developer-mode device.
+`build-mobile-core.sh apple` produces `app/shared/apple/Frameworks/peersh.xcframework` carrying both the **iphoneos** and **iphonesimulator** slices, embedded by the iOS Runner. (This replaces the old `app/ios/Frameworks/` output path; macOS is a peersh *host*, not a Flutter client, so there is no macOS client slice and no `app/macos/`.) The Firebase iOS SDK is pulled in via **Swift Package Manager** automatically — recent Flutter needs no manual `pod install`.
+
+iOS Firebase config (`GoogleService-Info.plist`, the `firebase_options.dart` iOS entry, and the `GIDClientID` + reversed-client URL scheme in `Info.plist`) comes from `flutterfire configure --platforms=android,ios` (or the Firebase console):
+
+```sh
+cd app
+flutterfire configure --project=<your-project-id> --platforms=android,ios
+```
+
+Code-signing for distribution requires an Apple Developer account, which is out of scope for the OSS source; a simulator or developer-mode device build needs none.
 
 ## CI (GitHub Actions)
 

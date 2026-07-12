@@ -1,6 +1,6 @@
 # peersh
 
-Run PowerShell on your home Windows PC from your phone, peer-to-peer, without a VPN and without a relay server.
+Run PowerShell on your home Windows PC — or your login shell on a Mac — from your phone, peer-to-peer, without a VPN and without a relay server.
 
 > **Status:** OSS — self-hosted by design. There is no official hosted instance. Bring your own signaling server (or Firebase project) and your own peershd binary. See [Quick start](#quick-start).
 >
@@ -8,7 +8,7 @@ Run PowerShell on your home Windows PC from your phone, peer-to-peer, without a 
 
 ## What it is
 
-`peersh` is a tool for executing PowerShell commands on a home Windows PC from a mobile device (Android / iOS) over the public internet. The data path is **direct peer-to-peer** over QUIC with mTLS — your commands and their output never travel through a third-party server. A small signaling server is used **only for connection setup**: it helps the two endpoints find each other, then steps out of the way.
+`peersh` is a tool for driving a home computer's shell from a mobile device (Android / iOS) over the public internet. The host can be a **Windows PC** (running PowerShell) or a **Mac** (running your login shell — zsh / bash). The data path is **direct peer-to-peer** over QUIC with mTLS — your commands and their output never travel through a third-party server. A small signaling server is used **only for connection setup**: it helps the two endpoints find each other, then steps out of the way.
 
 The project is open source under **Apache License 2.0**.
 
@@ -47,6 +47,8 @@ peersh> Get-Process | Select-Object -First 5 | Out-String
 
 For a LAN direct test, start `peershd` with `-listen :7777 -insecure-direct` and pass the host's LAN address to `peersh-cli`. Do not expose direct mode to untrusted networks; signaling mode is the normal remote path.
 
+> **On macOS** the host builds the same way — `bash scripts/build-peershd-macos.sh` (or `GOOS=darwin GOARCH=arm64 go build -o local/peershd ./windows/cmd/peershd`) — then run `./local/peershd`. It spawns your login shell (zsh / bash) instead of PowerShell. See [`docs/deploy/macos-host.md`](docs/deploy/macos-host.md).
+
 ### Self-hosted PSK signaling + mobile app
 
 1. **Run the signaling server** somewhere reachable from the public internet. Single-binary self-host: see [`docs/deploy/self-hosting.md`](docs/deploy/self-hosting.md). Render / Fly / Cloud Run templates ship under `server/deploy/`.
@@ -63,6 +65,7 @@ For the Google-sign-in flow with multi-PC picker etc., follow [`docs/deploy/fire
 - **Backend (host, signaling, mobile network layer):** Go.
 - **Mobile UI:** Flutter (Dart). The Go network layer is shared across all clients via `gomobile bind` (`.aar` for Android, `.xcframework` for iOS), called from Dart through Method Channel / EventChannel.
 - **Transport:** QUIC over UDP via `github.com/quic-go/quic-go`. TLS 1.3 mandatory.
+- **Terminal backend:** a real PTY on the host — ConPTY on Windows, forkpty on macOS (`github.com/creack/pty`) — so the interactive session behaves like a native terminal.
 - **NAT traversal:** UDP hole punching with `pion/stun`. **No relay/TURN.** When traversal cannot succeed (e.g. CGNAT on both sides), peersh fails with an actionable error rather than relaying.
 - **Wire format:** Protobuf (`google.golang.org/protobuf`).
 - **Pluggable auth:** `none` / `psk` / `firebase` behind `auth.Provider` (in `core/auth/`).
@@ -74,13 +77,13 @@ For the Google-sign-in flow with multi-PC picker etc., follow [`docs/deploy/fire
 Top-level: [`docs/`](docs/). Quick links:
 
 - **For users:** [`docs/build.md`](docs/build.md) (build everything from source), [`docs/user-manual.md`](docs/user-manual.md) (mobile app), [`docs/backup.md`](docs/backup.md) (backing up local secrets).
-- **For operators:** [`docs/deploy/`](docs/deploy/) — Cloud Run, Render, generic self-hosting, Firebase mode.
+- **For operators:** [`docs/deploy/`](docs/deploy/) — Cloud Run, Render, generic self-hosting, Firebase mode, [macOS host](docs/deploy/macos-host.md).
 - **For contributors:** [`docs/design/`](docs/design/) — project overview, architecture, data model, glossary. Plus [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Environment
 
 - **Dev machine.** Windows / macOS / Linux. Go 1.22+, Flutter (latest stable), JDK 17 for Android, Xcode for iOS.
-- **Target host.** Windows 10 / 11. PowerShell 7 (`pwsh`) preferred; falls back to `powershell.exe` if `pwsh` is not on PATH.
+- **Target host.** **Windows 10 / 11** — PowerShell 7 (`pwsh`) preferred; falls back to `powershell.exe` if `pwsh` is not on PATH. **Or macOS** — spawns your login shell (zsh / bash, resolved from `$SHELL`); PowerShell is not required.
 
 ## License
 

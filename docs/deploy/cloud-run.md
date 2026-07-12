@@ -46,6 +46,8 @@ Cloud Run is the **pay-per-use** option. The free tier (2 M requests / month, 36
    - deploys to Cloud Run as `peersh-signaling`,
    - prints the assigned `https://...run.app` URL plus the next-step commands.
 
+   > **Important — run a single instance.** The signaling server's room registry (`server/room`) keeps live WebSocket connections in an **in-memory** `map[user][device] → Conn` with **no cross-instance forwarding**. If Cloud Run scales to more than one instance, a host and a client that land on different instances never rendezvous and `Connect` fails with **`target_unknown`**. The service **must** therefore run single-instance: `--min-instances=0 --max-instances=1 --concurrency=250` (concurrency is raised because each long-lived WebSocket holds a request slot for its lifetime). `server/deploy/cloud-run/deploy.sh` already sets this — do not remove `--max-instances=1`. Signaling is lightweight (it only brokers connection setup; terminal data flows peer-to-peer over QUIC and never touches the server), so one instance serves many hosts / clients. True multi-instance scale would require cross-instance forwarding (e.g. Redis pub/sub), which is not implemented. This applies to **both Windows and macOS hosts** — they share the signaling path.
+
 5. **Generate a PSK locally** (any 32-byte hex value works):
 
    ```sh

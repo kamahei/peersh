@@ -32,3 +32,10 @@ Pick the target that fits your situation and budget. The same Docker image (`ser
 - Verification + Troubleshooting
 
 Read it after picking a target above.
+
+## Running a host
+
+The guides above deploy the **signaling** server. The **host** (`peershd`) runs on your own computer and connects out to that signaling server:
+
+- **Windows** — the "Windows host service / logon task" section of [`self-hosting.md`](self-hosting.md).
+- **macOS** — [`macos-host.md`](macos-host.md): build, login-shell behavior, and the per-user LaunchAgent that starts the host at login.
