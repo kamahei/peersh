@@ -25,6 +25,9 @@ dev-key.pem
 # Mobile build artifacts (rebuilt from mobile-core/ via scripts/build-mobile-core.sh)
 app/android/app/libs/peersh.aar
 app/android/app/libs/peersh-sources.jar
+# Apple: one xcframework carries the iOS + macOS slices, embedded by both Runners.
+app/shared/apple/Frameworks/peersh.xcframework/
+# Legacy iOS-only location (pre-macOS); kept ignored for older checkouts.
 app/ios/Frameworks/peersh.xcframework/
 
 # Flutter build outputs (auto-managed; the project keeps its own .gitignore as well)
