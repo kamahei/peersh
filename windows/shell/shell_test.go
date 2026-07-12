@@ -2,6 +2,7 @@ package shell_test
 
 import (
 	"encoding/base64"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -10,12 +11,35 @@ import (
 )
 
 func TestResolveUnknownNameRejected(t *testing.T) {
-	if _, err := shell.Resolve("bash"); err == nil {
-		t.Fatal("Resolve(bash): want error, got nil")
+	// A name that is in neither the Windows nor the POSIX allow-list.
+	if _, err := shell.Resolve("notashell"); err == nil {
+		t.Fatal("Resolve(notashell): want error, got nil")
+	}
+}
+
+// TestResolvePosixShells covers the macOS/Linux resolver: "auto" yields a
+// login shell and zsh/bash/sh are accepted (each an interactive shell).
+func TestResolvePosixShells(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shells are non-Windows")
+	}
+	r, err := shell.Resolve("auto")
+	if err != nil {
+		t.Fatalf("Resolve(auto): %v", err)
+	}
+	if r.Path == "" || len(r.Args) == 0 {
+		t.Fatalf("Resolve(auto): empty resolution: %+v", r)
+	}
+	// sh is present on every POSIX host.
+	if _, err := shell.Resolve("sh"); err != nil {
+		t.Fatalf("Resolve(sh): %v", err)
 	}
 }
 
 func TestPowerShellArgsContainEncodedCommand(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("\"auto\" resolves to PowerShell only on Windows")
+	}
 	r, err := shell.Resolve("auto")
 	if err != nil {
 		t.Skipf("no PowerShell on this host: %v", err)

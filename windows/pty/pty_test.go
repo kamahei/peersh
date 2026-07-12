@@ -8,15 +8,50 @@ import (
 	"github.com/peersh/peersh/windows/pty"
 )
 
-// TestSpawnUnsupportedNonWindows ensures the non-Windows stub fails fast
-// rather than silently succeeding. On Windows this test is a no-op.
-func TestSpawnUnsupportedNonWindows(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows uses the real ConPTY backing")
+// TestSpawnUnsupportedStub ensures the fallback stub (platforms without a
+// real backing — i.e. not Windows/ConPTY and not darwin/forkpty) fails fast
+// rather than silently succeeding.
+func TestSpawnUnsupportedStub(t *testing.T) {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		t.Skip("Windows uses ConPTY and macOS uses forkpty; the stub applies elsewhere")
 	}
 	_, err := pty.Spawn("/bin/true", nil, 80, 24)
 	if !errors.Is(err, pty.ErrUnsupported) {
-		t.Fatalf("non-Windows Spawn: want ErrUnsupported, got %v", err)
+		t.Fatalf("stub Spawn: want ErrUnsupported, got %v", err)
+	}
+}
+
+// TestSpawnDarwin exercises the real forkpty backing on macOS end-to-end: run
+// a command that prints a known string and exits, read it back through the
+// pty master.
+func TestSpawnDarwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("forkpty backend is darwin-only in this module")
+	}
+	const want = "PEERSH_PTY_OK"
+	p, err := pty.Spawn("/bin/echo", []string{want}, 80, 24)
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	var got []byte
+	buf := make([]byte, 4096)
+	for {
+		n, rerr := p.Read(buf)
+		if n > 0 {
+			got = append(got, buf[:n]...)
+			if containsBytes(got, want) {
+				break
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	if !containsBytes(got, want) {
+		t.Fatalf("expected %q in PTY output, got %q", want, string(got))
+	}
+	if err := p.Close(); err != nil {
+		t.Logf("close: %v", err)
 	}
 }
 
