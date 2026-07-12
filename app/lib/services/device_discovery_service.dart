@@ -26,6 +26,7 @@ class DiscoveredDevice {
     required this.displayName,
     this.kind = 'host',
     this.lastSeenUnixMs = 0,
+    this.platform = '',
   });
 
   /// 16-char base32 device id derived from the host's public key.
@@ -42,6 +43,11 @@ class DiscoveredDevice {
   /// Wall-clock time of the host's most recent register against the
   /// signaling server. 0 when unknown.
   final int lastSeenUnixMs;
+
+  /// Host OS tag written by peershd: "mac" | "windows" | "linux". Empty when
+  /// the host predates platform reporting; the picker then shows a generic
+  /// icon.
+  final String platform;
 }
 
 /// Pluggable device-discovery backend.
@@ -87,6 +93,7 @@ class FirebaseDeviceDiscoveryService implements DeviceDiscoveryService {
       String? displayName;
       String kind = 'host';
       int lastSeen = 0;
+      String platform = '';
       if (value is Map) {
         final dn = value['display_name'];
         if (dn is String && dn.trim().isNotEmpty) displayName = dn;
@@ -94,6 +101,8 @@ class FirebaseDeviceDiscoveryService implements DeviceDiscoveryService {
         if (ls is int) lastSeen = ls;
         final k = value['kind'];
         if (k is String && k.trim().isNotEmpty) kind = k;
+        final pf = value['platform'];
+        if (pf is String && pf.trim().isNotEmpty) platform = pf;
       } else if (value is int) {
         // Host wrote only last_seen_at as a leaf int.
         lastSeen = value;
@@ -107,6 +116,7 @@ class FirebaseDeviceDiscoveryService implements DeviceDiscoveryService {
         displayName: displayName ?? key,
         kind: kind,
         lastSeenUnixMs: lastSeen,
+        platform: platform,
       ));
     });
     out.sort((a, b) => b.lastSeenUnixMs.compareTo(a.lastSeenUnixMs));

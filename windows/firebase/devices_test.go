@@ -22,33 +22,55 @@ func TestWakeRequestPath(t *testing.T) {
 }
 
 func TestRegisterDevice_WritesServerTimestamp(t *testing.T) {
-	var gotPath, gotBody string
-	var gotMethod string
+	type req struct{ method, path, body string }
+	var reqs []req
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path + "?" + r.URL.RawQuery
 		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
+		reqs = append(reqs, req{r.Method, r.URL.Path + "?" + r.URL.RawQuery, string(body)})
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
 	c := &Client{baseURL: srv.URL, http: srv.Client()}
 	src := &fakeTokenSource{uid: "alice", token: "tok"}
-	if err := RegisterDevice(context.Background(), c, src, "alice", "dev-1"); err != nil {
+	if err := RegisterDevice(context.Background(), c, src, "alice", "dev-1", "MacBook", "mac"); err != nil {
 		t.Fatal(err)
 	}
-	if gotMethod != http.MethodPut {
-		t.Errorf("method = %q; want PUT", gotMethod)
+
+	// last_seen_at must be a PUT of the server-timestamp sentinel with auth.
+	var sawTimestamp bool
+	for _, rq := range reqs {
+		if strings.HasPrefix(rq.path, "/users/alice/devices/dev-1/last_seen_at.json?") {
+			sawTimestamp = true
+			if rq.method != http.MethodPut {
+				t.Errorf("last_seen_at method = %q; want PUT", rq.method)
+			}
+			if !strings.Contains(rq.path, "auth=tok") {
+				t.Errorf("missing auth: %q", rq.path)
+			}
+			if !strings.Contains(rq.body, `".sv":"timestamp"`) {
+				t.Errorf("body missing server-timestamp sentinel: %q", rq.body)
+			}
+		}
 	}
-	if !strings.HasPrefix(gotPath, "/users/alice/devices/dev-1/last_seen_at.json?") {
-		t.Errorf("path = %q", gotPath)
+	if !sawTimestamp {
+		t.Errorf("no last_seen_at write among %d requests", len(reqs))
 	}
-	if !strings.Contains(gotPath, "auth=tok") {
-		t.Errorf("missing auth: %q", gotPath)
+
+	// Discovery metadata the client picker reads: kind/platform/display_name.
+	gotKind, gotPlatform, gotName := "", "", ""
+	for _, rq := range reqs {
+		switch {
+		case strings.HasPrefix(rq.path, "/users/alice/devices/dev-1/kind.json?"):
+			gotKind = rq.body
+		case strings.HasPrefix(rq.path, "/users/alice/devices/dev-1/platform.json?"):
+			gotPlatform = rq.body
+		case strings.HasPrefix(rq.path, "/users/alice/devices/dev-1/display_name.json?"):
+			gotName = rq.body
+		}
 	}
-	if !strings.Contains(gotBody, `".sv":"timestamp"`) {
-		t.Errorf("body did not include server-timestamp sentinel: %q", gotBody)
+	if gotKind != `"host"` || gotPlatform != `"mac"` || gotName != `"MacBook"` {
+		t.Errorf("discovery metadata = kind:%s platform:%s name:%s", gotKind, gotPlatform, gotName)
 	}
 }
 

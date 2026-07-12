@@ -31,19 +31,39 @@ func wakeRequestPath(uid, requestID string) string {
 	return "/users/" + uid + "/wake_requests/" + requestID
 }
 
-// RegisterDevice upserts /users/{uid}/devices/{deviceID} with
-// last_seen_at = ServerTimestamp. The signaling server's Register
-// handler still owns the kind / display_name / public_key fields via
-// its own Firestore writes; this helper exists so wake-mode hosts
-// (which keep their signaling WS closed most of the time) can keep
-// their presence timestamp fresh independently.
-func RegisterDevice(ctx context.Context, client *Client, src TokenSource, uid, deviceID string) error {
+// RegisterDevice upserts /users/{uid}/devices/{deviceID} with the presence +
+// discovery metadata the iOS/Android client picker reads directly from RTDB:
+//   - last_seen_at: ServerTimestamp (freshness; refreshed by Heartbeat)
+//   - kind:         "host" (the picker filters to kind=='host'; absent was
+//                   already treated as host, so this just makes it explicit)
+//   - display_name: labels the row (else the picker falls back to the raw
+//                   device_id)
+//   - platform:     "mac" | "windows" | "linux" — drives the per-OS icon
+//
+// The metadata is (re)written on every start so a host that changes hostname
+// or moves between OSes self-heals. Heartbeat only refreshes last_seen_at, so
+// it never clobbers these fields.
+func RegisterDevice(ctx context.Context, client *Client, src TokenSource, uid, deviceID, displayName, platform string) error {
 	idToken, err := src.Token(ctx)
 	if err != nil {
 		return fmt.Errorf("rtdb: RegisterDevice token: %w", err)
 	}
-	if err := client.Set(ctx, devicePath(uid, deviceID)+"/last_seen_at", ServerTimestamp, idToken); err != nil {
+	p := devicePath(uid, deviceID)
+	if err := client.Set(ctx, p+"/last_seen_at", ServerTimestamp, idToken); err != nil {
 		return fmt.Errorf("rtdb: RegisterDevice: %w", err)
+	}
+	if err := client.Set(ctx, p+"/kind", "host", idToken); err != nil {
+		return fmt.Errorf("rtdb: RegisterDevice kind: %w", err)
+	}
+	if platform != "" {
+		if err := client.Set(ctx, p+"/platform", platform, idToken); err != nil {
+			return fmt.Errorf("rtdb: RegisterDevice platform: %w", err)
+		}
+	}
+	if displayName != "" {
+		if err := client.Set(ctx, p+"/display_name", displayName, idToken); err != nil {
+			return fmt.Errorf("rtdb: RegisterDevice display_name: %w", err)
+		}
 	}
 	return nil
 }
@@ -103,7 +123,7 @@ type Runtime struct {
 // produce empty "/users//..." paths that fail RTDB rules with 401.
 //
 // metrics is optional; pass nil to disable observation.
-func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSource, deviceID string, metrics *Metrics) (*Runtime, error) {
+func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSource, deviceID, displayName, platform string, metrics *Metrics) (*Runtime, error) {
 	if _, err := src.Token(ctx); err != nil {
 		return nil, fmt.Errorf("firebase: mint id token: %w", err)
 	}
@@ -115,7 +135,7 @@ func StartWakeRuntime(ctx context.Context, projectID, region string, src TokenSo
 	if err != nil {
 		return nil, err
 	}
-	if err := RegisterDevice(ctx, client, src, uid, deviceID); err != nil {
+	if err := RegisterDevice(ctx, client, src, uid, deviceID, displayName, platform); err != nil {
 		metrics.ObserveHeartbeat(false)
 		return nil, err
 	}

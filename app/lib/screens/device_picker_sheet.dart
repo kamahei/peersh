@@ -124,7 +124,7 @@ class _DevicePickerSheetState extends State<_DevicePickerSheet> {
                           d.deviceId == widget.server.targetDeviceId;
                       return ListTile(
                         leading: Icon(
-                          Icons.computer,
+                          _platformIcon(d.platform),
                           color: isCurrent
                               ? Theme.of(context).colorScheme.primary
                               : null,
@@ -149,6 +149,20 @@ class _DevicePickerSheetState extends State<_DevicePickerSheet> {
         ),
       ),
     );
+  }
+
+  /// Per-OS icon from the host's reported platform tag; generic when unknown.
+  IconData _platformIcon(String platform) {
+    switch (platform) {
+      case 'mac':
+        return Icons.laptop_mac;
+      case 'windows':
+        return Icons.desktop_windows;
+      case 'linux':
+        return Icons.dvr;
+      default:
+        return Icons.computer;
+    }
   }
 
   String _subtitle(DiscoveredDevice d) {

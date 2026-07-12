@@ -420,7 +420,7 @@ func run(serviceCtx context.Context, opts runOpts) error {
 				slog.Info("firebase login complete; exiting (firebase-login-only set)", "uid", src.UID())
 				return nil
 			}
-			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, deviceID, fbMetrics)
+			rt, err := fbpeershd.StartWakeRuntime(ctx, opts.firebaseProjectID, opts.firebaseRtdbRegion, src, deviceID, displayName, hostPlatform(), fbMetrics)
 			if err != nil {
 				return fmt.Errorf("start wake runtime: %w", err)
 			}
@@ -609,6 +609,19 @@ const (
 	wakeDrainTTL = 5 * time.Second
 	heartbeatEvery = 5 * time.Minute
 )
+
+// hostPlatform is the short platform tag written to the RTDB device record so
+// the client picker can show a per-OS icon (mac / windows / linux).
+func hostPlatform() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "mac"
+	case "windows":
+		return "windows"
+	default:
+		return runtime.GOOS
+	}
+}
 
 // runHeartbeat refreshes users/{uid}/devices/{deviceId}.last_seen_at on
 // a fixed interval so mobile clients can decide the host is reachable
