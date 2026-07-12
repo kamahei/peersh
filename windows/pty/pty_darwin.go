@@ -22,12 +22,15 @@ type unixPTY struct {
 	cmd    *exec.Cmd
 }
 
-func spawn(executable string, args []string, cols, rows uint16) (PTY, error) {
+func spawn(executable string, args, env []string, cols, rows uint16) (PTY, error) {
 	cmd := exec.Command(executable, args...)
 	// A pseudo-terminal without TERM makes line-editing shells and full-
 	// screen programs misbehave; peershd may be launched by launchd with a
 	// minimal environment, so set a sane default while preserving the rest.
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// Caller-supplied extras (e.g. ZDOTDIR for the zsh OSC 9;9 cwd hook) win
+	// over the inherited values since they are appended last.
+	cmd.Env = append(cmd.Env, env...)
 	master, err := cpty.StartWithSize(cmd, &cpty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, fmt.Errorf("pty: start %q: %w", executable, err)

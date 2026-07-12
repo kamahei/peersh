@@ -101,6 +101,7 @@ func Open(command string, args []string, cols, rows uint16) (*Session, error) {
 
 	exe := command
 	finalArgs := args
+	var finalEnv []string
 	if command == "" || command == "auto" || command == "pwsh" || command == "powershell" || command == "cmd" || command == "zsh" || command == "bash" || command == "sh" {
 		r, err := shell.Resolve(command)
 		if err != nil {
@@ -108,6 +109,7 @@ func Open(command string, args []string, cols, rows uint16) (*Session, error) {
 		}
 		exe = r.Path
 		finalArgs = r.Args
+		finalEnv = r.Env
 		if len(args) > 0 {
 			// Caller supplied extra args: append AFTER the wrapper args so
 			// (e.g.) -File somescript.ps1 still composes with our prompt
@@ -117,7 +119,7 @@ func Open(command string, args []string, cols, rows uint16) (*Session, error) {
 		}
 	}
 
-	p, err := pty.Spawn(exe, finalArgs, cols, rows)
+	p, err := pty.Spawn(exe, finalArgs, finalEnv, cols, rows)
 	if err != nil {
 		return nil, fmt.Errorf("ptyhost: spawn %q: %w", exe, err)
 	}

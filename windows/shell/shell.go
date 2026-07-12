@@ -31,14 +31,20 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"unicode/utf16"
 )
 
 // Resolved is the output of Resolve: an absolute path plus the args vector
-// to start the shell with the OSC 9;9 prompt wrapper installed.
+// (and, on POSIX, env entries) to start the shell with the OSC 9;9 prompt
+// wrapper installed.
 type Resolved struct {
 	Path string
 	Args []string
+	// Env is extra "KEY=VALUE" entries the child shell needs — on macOS/Linux
+	// this carries ZDOTDIR pointing at the generated zsh rc that installs the
+	// OSC 9;9 cwd hook. Empty on Windows (the wrapper rides the command line).
+	Env []string
 }
 
 // Resolve maps a logical shell name to its absolute path and wrapped args.
@@ -72,7 +78,7 @@ func Resolve(name string) (Resolved, error) {
 			return Resolved{}, fmt.Errorf("shell: %q requires a POSIX host", name)
 		}
 		if p, err := exec.LookPath(name); err == nil {
-			return Resolved{Path: p, Args: posixArgs(p)}, nil
+			return posixResolved(p), nil
 		}
 		return Resolved{}, fmt.Errorf("shell: %s not found on PATH", name)
 
@@ -117,33 +123,92 @@ func Resolve(name string) (Resolved, error) {
 func posixLoginShell() (Resolved, error) {
 	if sh := os.Getenv("SHELL"); sh != "" {
 		if p, err := exec.LookPath(sh); err == nil {
-			return Resolved{Path: p, Args: posixArgs(p)}, nil
+			return posixResolved(p), nil
 		}
 	}
 	for _, name := range []string{"zsh", "bash", "sh"} {
 		if p, err := exec.LookPath(name); err == nil {
-			return Resolved{Path: p, Args: posixArgs(p)}, nil
+			return posixResolved(p), nil
 		}
 	}
 	return Resolved{}, errors.New("shell: no POSIX shell (zsh/bash/sh) found on PATH")
 }
 
-// posixArgs returns the argument vector for an interactive POSIX shell.
-// zsh/bash are started as login + interactive (-l -i); a bare sh gets -i.
+// posixResolved builds the Resolved for an interactive POSIX shell, injecting
+// the OSC 9;9 cwd-tracking prompt hook where the shell supports it:
 //
-// NOTE: unlike the PowerShell/cmd wrappers this does not yet inject the OSC 9;9
-// cwd-tracking prompt hook (that needs a per-shell rc: zsh precmd via ZDOTDIR,
-// bash PROMPT_COMMAND via --rcfile), so host-side cwd tracking / the session
-// file browser are inert on POSIX hosts for now. Interactive terminal I/O is
-// unaffected.
-func posixArgs(path string) []string {
+//   - zsh:  a generated ZDOTDIR whose .zshrc sources the user's ~/.zshrc and
+//           adds a precmd hook (started login + interactive).
+//   - bash: a generated --rcfile that sources the user's rc and appends the
+//           hook to PROMPT_COMMAND (started interactive).
+//   - sh / others: no hook (sh has no reliable prompt hook); the interactive
+//           terminal still works, but host-side cwd tracking / the session
+//           file browser stay inert for that shell.
+//
+// If the hook files can't be generated the shell still starts, just without
+// the hook — the terminal never depends on it.
+func posixResolved(path string) Resolved {
 	switch filepath.Base(path) {
-	case "zsh", "bash":
-		return []string{"-l", "-i"}
-	default:
-		return []string{"-i"}
+	case "zsh":
+		if dir, err := oscHookZDOTDIR(); err == nil {
+			return Resolved{Path: path, Args: []string{"-l", "-i"}, Env: []string{"ZDOTDIR=" + dir}}
+		}
+		return Resolved{Path: path, Args: []string{"-l", "-i"}}
+	case "bash":
+		if rc, err := oscHookBashrc(); err == nil {
+			return Resolved{Path: path, Args: []string{"--rcfile", rc, "-i"}}
+		}
+		return Resolved{Path: path, Args: []string{"-l", "-i"}}
+	default: // sh, dash, ...
+		return Resolved{Path: path, Args: []string{"-i"}}
 	}
 }
+
+// The OSC 9;9 emitter, printed by every prompt so windows/session.CWDTracker
+// can parse the shell's cwd out of the output stream. `\e` (ESC) and `\a`
+// (BEL) are understood by both bash's and zsh's printf builtins.
+const oscHookEmitter = `_peersh_osc99() { printf '\e]9;9;%s\a' "$PWD"; }`
+
+var (
+	oscHookOnce   sync.Once
+	oscHookDir    string // generated ZDOTDIR for zsh
+	oscHookBashRC string // generated --rcfile for bash
+	oscHookErr    error
+)
+
+func oscHookInit() {
+	dir, err := os.MkdirTemp("", "peersh-shell-")
+	if err != nil {
+		oscHookErr = err
+		return
+	}
+	// zsh: mirror the three user rc files so the user's environment/config is
+	// preserved, and add the precmd hook in .zshrc.
+	files := map[string]string{
+		".zshenv":   `[[ -f "${HOME}/.zshenv" ]] && source "${HOME}/.zshenv"` + "\n",
+		".zprofile": `[[ -f "${HOME}/.zprofile" ]] && source "${HOME}/.zprofile"` + "\n",
+		".zshrc": `[[ -f "${HOME}/.zshrc" ]] && source "${HOME}/.zshrc"` + "\n" +
+			oscHookEmitter + "\n" +
+			`autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook precmd _peersh_osc99 || precmd_functions+=(_peersh_osc99)` + "\n",
+		// bash: source the user's login + interactive rc, then chain the hook
+		// onto PROMPT_COMMAND (idempotently).
+		"bashrc": `[[ -f "${HOME}/.bash_profile" ]] && source "${HOME}/.bash_profile"` + "\n" +
+			`[[ -f "${HOME}/.bashrc" ]] && source "${HOME}/.bashrc"` + "\n" +
+			oscHookEmitter + "\n" +
+			`case ";${PROMPT_COMMAND};" in *";_peersh_osc99;"*) ;; *) PROMPT_COMMAND="_peersh_osc99${PROMPT_COMMAND:+;${PROMPT_COMMAND}}";; esac` + "\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			oscHookErr = err
+			return
+		}
+	}
+	oscHookDir = dir
+	oscHookBashRC = filepath.Join(dir, "bashrc")
+}
+
+func oscHookZDOTDIR() (string, error) { oscHookOnce.Do(oscHookInit); return oscHookDir, oscHookErr }
+func oscHookBashrc() (string, error)  { oscHookOnce.Do(oscHookInit); return oscHookBashRC, oscHookErr }
 
 // PowerShellWrapperScript returns the raw PowerShell source that, once
 // executed, redefines `prompt` to emit OSC 9;9 followed by the user's

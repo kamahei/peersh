@@ -21,7 +21,10 @@ type winPTY struct {
 	cp *wcp.ConPty
 }
 
-func spawn(executable string, args []string, cols, rows uint16) (PTY, error) {
+func spawn(executable string, args, env []string, cols, rows uint16) (PTY, error) {
+	// env is unused on Windows: PowerShell/cmd inherit the process environment
+	// and receive the OSC 9;9 wrapper via -EncodedCommand / PROMPT, not env.
+	_ = env
 	cmdline := buildCmdline(executable, args)
 	cp, err := wcp.Start(cmdline, wcp.ConPtyDimensions(int(cols), int(rows)))
 	if err != nil {

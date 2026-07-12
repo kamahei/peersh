@@ -15,7 +15,7 @@ func TestSpawnUnsupportedStub(t *testing.T) {
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		t.Skip("Windows uses ConPTY and macOS uses forkpty; the stub applies elsewhere")
 	}
-	_, err := pty.Spawn("/bin/true", nil, 80, 24)
+	_, err := pty.Spawn("/bin/true", nil, nil, 80, 24)
 	if !errors.Is(err, pty.ErrUnsupported) {
 		t.Fatalf("stub Spawn: want ErrUnsupported, got %v", err)
 	}
@@ -29,7 +29,7 @@ func TestSpawnDarwin(t *testing.T) {
 		t.Skip("forkpty backend is darwin-only in this module")
 	}
 	const want = "PEERSH_PTY_OK"
-	p, err := pty.Spawn("/bin/echo", []string{want}, 80, 24)
+	p, err := pty.Spawn("/bin/echo", []string{want}, nil, 80, 24)
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
@@ -66,10 +66,10 @@ func TestSpawnPwsh(t *testing.T) {
 	const want = "PEERSH_PTY_OK"
 	args := []string{"-NoLogo", "-NoProfile", "-Command", "Write-Output " + want + "; exit 0"}
 
-	p, err := pty.Spawn("pwsh.exe", args, 80, 24)
+	p, err := pty.Spawn("pwsh.exe", args, nil, 80, 24)
 	if err != nil {
 		// Fall back to the legacy powershell.exe if pwsh isn't installed.
-		p, err = pty.Spawn("powershell.exe", args, 80, 24)
+		p, err = pty.Spawn("powershell.exe", args, nil, 80, 24)
 		if err != nil {
 			t.Skipf("no PowerShell on PATH: %v", err)
 		}

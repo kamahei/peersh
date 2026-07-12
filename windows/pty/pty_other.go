@@ -2,6 +2,6 @@
 
 package pty
 
-func spawn(_ string, _ []string, _, _ uint16) (PTY, error) {
+func spawn(_ string, _, _ []string, _, _ uint16) (PTY, error) {
 	return nil, ErrUnsupported
 }

@@ -36,8 +36,14 @@ type PTY interface {
 // Spawn creates a pseudo-console of the given size, starts the executable
 // with args, and returns a PTY bound to that process.
 //
+// env is a list of "KEY=VALUE" entries appended to the child's environment
+// (on top of the inherited process environment) — used e.g. to point a zsh at
+// a ZDOTDIR that installs the OSC 9;9 cwd-tracking hook. Ignored on Windows,
+// where shells inherit the process environment and the hook is delivered via
+// the command line instead. nil for a plain (unwrapped) command.
+//
 // The caller MUST Close the PTY when finished, which terminates the child
 // process and releases the pseudo-console handles.
-func Spawn(executable string, args []string, cols, rows uint16) (PTY, error) {
-	return spawn(executable, args, cols, rows)
+func Spawn(executable string, args, env []string, cols, rows uint16) (PTY, error) {
+	return spawn(executable, args, env, cols, rows)
 }
