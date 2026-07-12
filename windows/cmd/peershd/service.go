@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,12 +18,25 @@ import (
 // serviceConfig is the canonical kardianos/service config used by both
 // install/uninstall and the runtime SCM dispatch.
 func serviceConfig(args []string) *service.Config {
-	return &service.Config{
+	cfg := &service.Config{
 		Name:        "peershd",
 		DisplayName: "peersh host",
-		Description: "peersh — Windows PowerShell host for the peersh peer-to-peer remote-shell tool.",
+		Description: "peersh — remote-shell host daemon for the peersh peer-to-peer remote-shell tool.",
 		Arguments:   args,
 	}
+	if runtime.GOOS == "darwin" {
+		// Install as a per-user LaunchAgent (~/Library/LaunchAgents), not a
+		// root LaunchDaemon: peershd spawns the user's login shell and needs
+		// their environment / keychain, and a LaunchAgent starts at login —
+		// the macOS analogue of the Windows logon task. RunAtLoad + KeepAlive
+		// start it at login and restart it on crash.
+		cfg.Option = service.KeyValue{
+			"UserService": true,
+			"RunAtLoad":   true,
+			"KeepAlive":   true,
+		}
+	}
+	return cfg
 }
 
 // program implements service.Interface. It defers to runApp() (the
