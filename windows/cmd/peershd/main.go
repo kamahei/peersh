@@ -876,7 +876,11 @@ func serveConn(ctx context.Context, conn *transport.Conn, mgr *pwsh.SessionManag
 		return
 	}
 	defer mgr.Detach(sessionID)
-	log.Info("handshake complete", "session", sessionID, "pwsh", host.Path())
+	pwshPath := ""
+	if host != nil {
+		pwshPath = host.Path()
+	}
+	log.Info("handshake complete", "session", sessionID, "pwsh", pwshPath)
 
 	// PTY ownership is keyed off the host's authenticated user_id (PSK
 	// -user flag, or the Firebase UID in firebase mode). Every device
@@ -1081,9 +1085,22 @@ func doHandshake(ctx context.Context, ctrl *transport.Stream, mgr *pwsh.SessionM
 			hello.GetProtocolVersion(), protocolVersion)
 	}
 	idleSec := hello.GetIdleTimeoutSec()
-	id, host, reattached, err := mgr.AttachOrCreate(ctx, hello.GetSessionId(), idleSec)
-	if err != nil {
-		return "", nil, 0, fmt.Errorf("AttachOrCreate: %w", err)
+	// The legacy exec.v1 path needs a PowerShell host. On a POSIX host
+	// (e.g. macOS) without PowerShell, skip it: interactive PTY streams
+	// don't use it, and the handshake must still complete so the client can
+	// open a shell. serveExecStream reports the absence to any client that
+	// still tries exec.v1.
+	var (
+		id         string
+		host       *pwsh.Host
+		reattached bool
+	)
+	if pwsh.Available() {
+		var err error
+		id, host, reattached, err = mgr.AttachOrCreate(ctx, hello.GetSessionId(), idleSec)
+		if err != nil {
+			return "", nil, 0, fmt.Errorf("AttachOrCreate: %w", err)
+		}
 	}
 	if err := wire.Write(ctrl, &v1.ServerHello{
 		ProtocolVersion: protocolVersion,
@@ -1101,6 +1118,17 @@ func serveExecStream(ctx context.Context, host *pwsh.Host, stream *transport.Str
 	cmd := req.GetCommand()
 	clog := log.With("stream", stream.StreamID(), "cmd_len", len(cmd))
 	clog.Info("exec received")
+
+	// No PowerShell host on this platform (e.g. macOS): the legacy exec.v1
+	// path is unavailable. Signal completion so the client isn't left
+	// hanging; interactive work should use the PTY path instead.
+	if host == nil {
+		clog.Warn("exec.v1 requested but no PowerShell host is available on this platform")
+		if err := wire.Write(stream, &v1.ExecResponse{Done: true}); err != nil {
+			clog.Warn("write ExecResponse done", "err", err)
+		}
+		return
+	}
 
 	out, err := host.Exec(ctx, cmd)
 	if err != nil {

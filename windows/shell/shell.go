@@ -49,19 +49,32 @@ type Resolved struct {
 func Resolve(name string) (Resolved, error) {
 	switch name {
 	case "", "auto":
+		// On macOS/Linux the default is the user's POSIX login shell
+		// (zsh/bash/sh) — matching a locally-opened Terminal — not
+		// PowerShell, even when pwsh happens to be installed.
+		if runtime.GOOS != "windows" {
+			return posixLoginShell()
+		}
 		if p, err := exec.LookPath("pwsh"); err == nil {
 			return Resolved{Path: p, Args: powerShellArgs()}, nil
 		}
 		if p, err := exec.LookPath("powershell"); err == nil {
 			return Resolved{Path: p, Args: powerShellArgs()}, nil
 		}
-		if runtime.GOOS == "windows" {
-			candidate := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-			if _, err := os.Stat(candidate); err == nil {
-				return Resolved{Path: candidate, Args: powerShellArgs()}, nil
-			}
+		candidate := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+		if _, err := os.Stat(candidate); err == nil {
+			return Resolved{Path: candidate, Args: powerShellArgs()}, nil
 		}
 		return Resolved{}, errors.New("shell: no PowerShell binary on PATH")
+
+	case "zsh", "bash", "sh":
+		if runtime.GOOS == "windows" {
+			return Resolved{}, fmt.Errorf("shell: %q requires a POSIX host", name)
+		}
+		if p, err := exec.LookPath(name); err == nil {
+			return Resolved{Path: p, Args: posixArgs(p)}, nil
+		}
+		return Resolved{}, fmt.Errorf("shell: %s not found on PATH", name)
 
 	case "pwsh":
 		if p, err := exec.LookPath("pwsh"); err == nil {
@@ -92,7 +105,43 @@ func Resolve(name string) (Resolved, error) {
 		return Resolved{}, errors.New("shell: cmd.exe not found at expected location")
 
 	default:
-		return Resolved{}, fmt.Errorf("shell: unknown shell %q (allowed: pwsh, powershell, cmd, auto)", name)
+		return Resolved{}, fmt.Errorf("shell: unknown shell %q (allowed: pwsh, powershell, cmd, zsh, bash, sh, auto)", name)
+	}
+}
+
+// posixLoginShell resolves the host's default interactive shell on macOS/Linux:
+// the user's $SHELL if set, else zsh, bash, or sh. Started as a login +
+// interactive shell so the user's profile (PATH from /etc/zprofile +
+// ~/.zprofile, aliases from ~/.zshrc, ...) loads, matching a locally-opened
+// Terminal.
+func posixLoginShell() (Resolved, error) {
+	if sh := os.Getenv("SHELL"); sh != "" {
+		if p, err := exec.LookPath(sh); err == nil {
+			return Resolved{Path: p, Args: posixArgs(p)}, nil
+		}
+	}
+	for _, name := range []string{"zsh", "bash", "sh"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return Resolved{Path: p, Args: posixArgs(p)}, nil
+		}
+	}
+	return Resolved{}, errors.New("shell: no POSIX shell (zsh/bash/sh) found on PATH")
+}
+
+// posixArgs returns the argument vector for an interactive POSIX shell.
+// zsh/bash are started as login + interactive (-l -i); a bare sh gets -i.
+//
+// NOTE: unlike the PowerShell/cmd wrappers this does not yet inject the OSC 9;9
+// cwd-tracking prompt hook (that needs a per-shell rc: zsh precmd via ZDOTDIR,
+// bash PROMPT_COMMAND via --rcfile), so host-side cwd tracking / the session
+// file browser are inert on POSIX hosts for now. Interactive terminal I/O is
+// unaffected.
+func posixArgs(path string) []string {
+	switch filepath.Base(path) {
+	case "zsh", "bash":
+		return []string{"-l", "-i"}
+	default:
+		return []string{"-i"}
 	}
 }
 

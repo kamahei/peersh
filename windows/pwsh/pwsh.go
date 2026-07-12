@@ -79,6 +79,20 @@ type Host struct {
 	wg        sync.WaitGroup
 }
 
+// Available reports whether a PowerShell binary that Start can launch
+// (`pwsh.exe` or `powershell.exe`) is present on PATH. The legacy exec.v1
+// path requires one; on a POSIX host (e.g. macOS) without PowerShell this
+// returns false, and peershd serves interactive PTY streams only.
+func Available() bool {
+	if _, err := exec.LookPath("pwsh.exe"); err == nil {
+		return true
+	}
+	if _, err := exec.LookPath("powershell.exe"); err == nil {
+		return true
+	}
+	return false
+}
+
 // Start launches a PowerShell host process. It first looks for `pwsh.exe`
 // (PowerShell 7) on PATH; if absent, it falls back to `powershell.exe`.
 func Start(ctx context.Context) (*Host, error) {

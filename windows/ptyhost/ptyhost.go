@@ -101,7 +101,7 @@ func Open(command string, args []string, cols, rows uint16) (*Session, error) {
 
 	exe := command
 	finalArgs := args
-	if command == "" || command == "auto" || command == "pwsh" || command == "powershell" || command == "cmd" {
+	if command == "" || command == "auto" || command == "pwsh" || command == "powershell" || command == "cmd" || command == "zsh" || command == "bash" || command == "sh" {
 		r, err := shell.Resolve(command)
 		if err != nil {
 			return nil, fmt.Errorf("ptyhost: resolve shell: %w", err)
