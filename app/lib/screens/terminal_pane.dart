@@ -353,7 +353,17 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   Future<void> _handleOutput(String text) async {
     final id = widget.tab.ptyId;
     if (id == null) return;
-    final bytes = Uint8List.fromList(utf8.encode(text));
+    // xterm.dart's soft-keyboard path sends Return as a raw LF ("\n"): the
+    // TerminalView's onAction only emits keyInput(enter) (which would be CR)
+    // for TextInputAction.done, but CustomTextEdit defaults to
+    // TextInputAction.newline, so Return instead inserts a "\n" that flows
+    // through textInput as a literal LF. zsh/forkpty accepts LF as accept-line,
+    // but Windows ConPTY's PSReadLine treats a bare LF as an in-buffer newline
+    // and never submits the command (the cursor just drops a line). Normalize
+    // any LF to CR — matching terminalInputFromEditorText — so Enter executes
+    // against every host.
+    final normalized = text.replaceAll('\r\n', '\r').replaceAll('\n', '\r');
+    final bytes = Uint8List.fromList(utf8.encode(normalized));
     try {
       await ref.read(bridgeProvider).ptyInput(ptyId: id, data: bytes);
     } catch (_) {
@@ -469,6 +479,11 @@ class _WrapBody extends StatelessWidget {
       tab.terminal,
       controller: tab.controller,
       autofocus: true,
+      // iOS soft keyboards don't report a delete when the hidden input field
+      // is already empty, so Backspace is silently dropped. deleteDetection
+      // seeds placeholder chars the OS can delete, making Backspace fire
+      // keyInput(backspace) reliably (needed for Windows PSReadLine editing).
+      deleteDetection: true,
       textStyle: TerminalStyle(fontSize: fontSize),
       backgroundOpacity: 1.0,
       padding: const EdgeInsets.all(4),
@@ -510,6 +525,8 @@ class _ScrollBody extends StatelessWidget {
               controller: tab.controller,
               autoResize: false,
               autofocus: true,
+              // See _WrapBody: makes iOS Backspace reliable.
+              deleteDetection: true,
               textStyle: TerminalStyle(fontSize: fontSize),
               backgroundOpacity: 1.0,
               padding: const EdgeInsets.all(4),
