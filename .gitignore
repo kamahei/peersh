@@ -55,3 +55,6 @@ firebase/.firebaserc
 app/android/key.properties
 app/android/*.keystore
 app/android/*.jks
+
+# firebase CLI debug logs
+firebase-debug.log

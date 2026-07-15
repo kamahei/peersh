@@ -7,6 +7,7 @@ import '../state/persisted_bg_keepalive.dart';
 import '../state/persisted_idle_timeout.dart';
 import '../state/settings.dart';
 import 'pair_pc_screen.dart';
+import 'signin_screen.dart';
 
 /// Choices the user picks between for "Keep shells alive for". Aligned
 /// with peershd's pwsh.MinIdleTimeout (1 min) and MaxIdleTimeout (7 d)
@@ -75,6 +76,7 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settingsAsync = ref.watch(settingsProvider);
+    final fbUser = ref.watch(authStateProvider).asData?.value;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: settingsAsync.when(
@@ -217,6 +219,24 @@ class SettingsScreen extends ConsumerWidget {
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const PairPcScreen()),
                 ),
+              ),
+            if (flavor.kFirebaseInitialized && fbUser != null)
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: const Text('Sign out'),
+                subtitle: Text('Signed in as ${fbUser.email ?? fbUser.uid}. '
+                    'Sign out to switch Google accounts.'),
+                onTap: () async {
+                  await ref.read(firebaseAuthServiceProvider).signOut();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                            'Signed out. Open a Firebase server to sign in with another account.'),
+                      ),
+                    );
+                  }
+                },
               ),
             ListTile(
               leading: const Icon(Icons.bug_report_outlined),
